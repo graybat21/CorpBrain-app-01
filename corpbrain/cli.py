@@ -9,12 +9,20 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 from pathlib import Path
 
 from corpbrain import core
+from corpbrain.core.errors import PreconditionError
+from corpbrain.core.report import build_detail_lines, build_summary_lines
 
 #: `--model`을 대신 지정할 수 있는 환경변수 (스펙 §4.1).
 MODEL_ENV_VAR = "CORPBRAIN_MODEL"
+
+#: 종료 코드 (스펙 §3-5, §5 — 부분 실패는 0, 선행 조건 실패는 비-0).
+EXIT_OK = 0
+EXIT_PRECONDITION_FAILED = 1
+EXIT_LIMIT_EXCEEDED = 3
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -105,12 +113,26 @@ def _resolve_model(flag_value: str | None) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """콘솔 엔트리 포인트. 종료 코드를 정수로 반환한다."""
+    """콘솔 엔트리 포인트. 진행 로그·종료 요약을 stderr로 내고 종료 코드를 반환한다."""
     parser = build_parser()
     args = parser.parse_args(argv)
     config = build_config(args)
 
-    core.run_scan(config)
+    _log(f"스캔 시작: {config.folder} → {config.out_dir} (모델 {config.model})")
+    try:
+        result = core.run_scan(config)
+    except PreconditionError as exc:
+        _log(f"선행 조건 실패: {exc}")
+        return EXIT_PRECONDITION_FAILED
 
-    # FR-016에서 채움: 종료 리포트(처리/스킵/출력 경로) 출력과 종료 코드 매핑.
-    return 0
+    for line in build_detail_lines(result):
+        _log(line)
+    for line in build_summary_lines(result):
+        _log(line)
+
+    return EXIT_LIMIT_EXCEEDED if result.limit_exceeded else EXIT_OK
+
+
+def _log(message: str) -> None:
+    """진행 로그·요약은 stdout이 아니라 stderr로 낸다 (스펙 §4.1)."""
+    print(message, file=sys.stderr)
