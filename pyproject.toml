@@ -27,3 +27,5 @@ packages = ["corpbrain"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
+# 여러 디렉터리에 같은 파일명(test_pipeline.py 등)이 있어도 충돌하지 않게 한다.
+addopts = "--import-mode=importlib"
