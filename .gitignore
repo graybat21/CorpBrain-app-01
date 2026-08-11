@@ -1,0 +1,25 @@
+# Claude Code conversation exports (never publish transcripts)
+*local-command-caveat*.txt
+2026-*-local-command-caveat*.txt
+
+# Local / private Claude Code config
+CLAUDE.local.md
+.claude/settings.local.json
+
+# CorpBrain generated output
+corpbrain_wiki/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+
+# OS
+.DS_Store
