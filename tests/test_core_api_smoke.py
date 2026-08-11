@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import subprocess
 import sys
 from pathlib import Path
 
@@ -10,9 +11,21 @@ from corpbrain import core
 
 
 def test_core_public_api_is_importable_without_cli() -> None:
-    """코어 import 경로가 `corpbrain.cli`를 끌어들이지 않는다."""
+    """코어 import 경로가 `corpbrain.cli`를 끌어들이지 않는다.
+
+    pytest는 수집 단계에서 CLI 테스트 모듈까지 import 하므로, 이 성질은 현재 프로세스의
+    `sys.modules`가 아니라 별도 인터프리터에서 확인해야 한다.
+    """
     assert callable(core.run_scan)
-    assert "corpbrain.cli" not in sys.modules
+
+    probe = subprocess.run(
+        [sys.executable, "-c", "import sys, corpbrain.core; assert 'corpbrain.cli' not in sys.modules"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert probe.returncode == 0, probe.stderr
 
 
 def test_run_scan_takes_pure_config_value() -> None:

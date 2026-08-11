@@ -40,7 +40,7 @@ class GeneratedWiki:
 
 
 @dataclass(frozen=True)
-class DocumentSummary:
+class SummaryResult:
     """LLM이 반환한 고정 필드 요약 (스펙 §4.3)."""
 
     title: str
