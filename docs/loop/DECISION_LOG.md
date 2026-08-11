@@ -22,3 +22,8 @@ MINOR: 10
 - [MINOR] D-007 | FR-003 | agent:worker-gateway | 2026-08-12T04:28:00+09:00 | AC 시나리오 2(관문 우회 방지)를 `tests/test_gateway.py`의 AST 정적 검사 테스트로 강제한다. `corpbrain` 패키지 내 gateway.py 외 모든 모듈에서 socket·ssl·http·urllib.request·urllib.error·requests·httpx·urllib3·aiohttp 계열 import를 금지하고, 순수 문자열 처리인 `urllib.parse`는 허용 | 근거: FR-003 AC 시나리오 2가 "정적 분석으로 확인"을 요구하나 수단은 미지정. 후속 FR(특히 FR-009 ollama)이 관문을 우회하면 회귀가 조용히 통과하므로 테스트로 고정했고, `urljoin` 같은 비-네트워크 유틸까지 막으면 과도해 예외로 뒀다.
 - [MINOR] D-006 | FR-004 | agent:worker-scanner | 2026-08-12T04:28:00+09:00 | 재귀 순회를 `os.walk` + 디렉터리·파일명 이름 오름차순 정렬로 고정해 실행마다 순서가 같게 함 | 근거: 스펙 §4.2는 "재귀 순회"만 정하고 순서를 정하지 않는데, FR-005의 상한(50) 컷 지점과 스킵 리포트 순서가 실행마다 달라지면 재현 불가·테스트 불안정이 되므로 결정적 순서를 채택.
 - [MINOR] D-007 | FR-004 | agent:worker-scanner | 2026-08-12T04:28:10+09:00 | 절대경로화를 `root.resolve()`로 하고 반환 경로는 모두 그 아래에서 조립(= 심볼릭 링크까지 정규화된 절대경로) | 근거: 오케스트레이터가 "절대경로 반환"만 고정했고 `absolute()`/`resolve()` 선택은 미지정. 스펙 §4.4 front-matter `source_path`가 정본 절대경로를 요구하고 상대 root 인자도 허용해야 하므로 정규화를 선택. 대신 FR-012 미러링은 `path.relative_to(root.resolve())`로 계산해야 한다.
+
+STOP REASON: MINOR_BUDGET
+완료: W1(FR-001), W2(FR-002), W3(FR-003·004·006·007·014) + FR-008(W4 일부) — 이슈 #1·2·3·4·6·7·8·14
+미착수: FR-005, FR-009~013, FR-015~020
+NEXT: W4/FR-005 (스캔 가드레일 — 상한 50 중단·긴경로>260·권한거부 스킵), 이어서 FR-009(Ollama 클라이언트)
