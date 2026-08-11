@@ -12,10 +12,11 @@ CLI(`corpbrain.cli`)와 후속 UI 어댑터는 모두 이 패키지의 공개 AP
 - `gateway`    유일한 외부 네트워크 호출 관문                 (FR-003)
 - `scanner`    재귀 스캔·포맷 필터·가드레일                   (FR-004, FR-005)
 - `extract`    포맷별 텍스트 추출과 길이 제한                 (FR-006, FR-007, FR-008)
-- `ollama`     Ollama 탐지·요약 요청 (관문 경유)             (FR-009)
-- `summarize`  요약 프롬프트와 고정 필드 JSON 파싱            (FR-010)
+- `llm.ollama_client`  Ollama 탐지 (관문 경유)                (FR-009)
+- `llm.summarize`      요약 프롬프트와 고정 필드 JSON 파싱     (FR-010)
 - `render`     JSON→마크다운 결정적 렌더                      (FR-011)
-- `output`     출력 경로 미러링·재실행 정책                    (FR-012, FR-013)
+- `output`     출력 경로 미러링·기록                           (FR-012)
+- `rerun`      증분 재실행 정책(mtime 비교·--force)            (FR-013)
 - `report`     종료 리포트 구성                               (FR-016)
 """
 

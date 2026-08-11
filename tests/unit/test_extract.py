@@ -13,6 +13,9 @@ from corpbrain.core.models import SkipReason
 
 MAX_CHARS = 12000
 
+#: 완료의 정의(스펙 §3)가 요구하는 픽스처 코퍼스 — 통합테스트(FR-018)도 같은 폴더를 쓴다.
+FIXTURE_CORPUS = Path(__file__).resolve().parents[1] / "fixtures" / "sample_corpus"
+
 
 def _write_docx(path: Path, paragraphs: list[str]) -> None:
     document = Document()
@@ -185,3 +188,38 @@ def test_normal_document_passes_through_with_text(tmp_path: Path) -> None:
 
     assert prepared.skipped is None
     assert prepared.text == "정상 문서 본문"
+
+
+# --- FR-017: 커밋된 픽스처 코퍼스 기반 검증 -------------------------------------
+
+
+def test_fixture_txt_and_md_extract_plain_text() -> None:
+    assert "샘플 텍스트 문서입니다." in extract_text(FIXTURE_CORPUS / "normal.txt", MAX_CHARS)
+    assert "# 마크다운 제목" in extract_text(FIXTURE_CORPUS / "guide.md", MAX_CHARS)
+
+
+def test_fixture_docx_extracts_paragraphs_in_order() -> None:
+    extracted = extract_text(FIXTURE_CORPUS / "sub" / "report.docx", MAX_CHARS)
+
+    assert extracted.splitlines()[0] == "분기 실적 보고"
+    assert "신규 고객이 늘었다." in extracted
+
+
+def test_fixture_oversized_document_is_truncated_to_max_chars() -> None:
+    prepared = prepare_summary_input(FIXTURE_CORPUS / "oversized.txt", MAX_CHARS)
+
+    assert prepared.skipped is None
+    assert prepared.text is not None
+    assert len(prepared.text) == MAX_CHARS
+
+
+def test_fixture_empty_document_is_skipped() -> None:
+    prepared = prepare_summary_input(FIXTURE_CORPUS / "empty.txt", MAX_CHARS)
+
+    assert prepared.skipped is not None
+    assert prepared.skipped.reason == SkipReason.EMPTY_DOCUMENT
+
+
+def test_fixture_unsupported_extension_is_rejected() -> None:
+    with pytest.raises(ExtractionError):
+        extract_text(FIXTURE_CORPUS / "photo.jpg", MAX_CHARS)

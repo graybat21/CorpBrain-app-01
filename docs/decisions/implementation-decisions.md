@@ -21,7 +21,7 @@
 
 1. **코어 공개 표면** — `run_scan(config: ScanConfig) -> ScanResult` 단일 진입점. 코어는
    `config` / `models` / `errors` / `pipeline` + 기능 모듈(`gateway`·`scanner`·`extract`·
-   `ollama`·`summarize`·`render`·`output`·`report`)로 분할한다.
+   `llm.ollama_client`·`llm.summarize`·`render`·`output`·`rerun`·`report`)로 분할한다.
    *근거:* 스펙 §4.5가 "CLI 없이 코어만으로 end-to-end 실행"을 요구하고, FR-002가 진입점 정의를
    지시하되 이름·시그니처는 미지정. 모듈 배치를 먼저 고정해 병렬 구현 시 파일 충돌을 없앴다.
 
