@@ -9,6 +9,10 @@ CLAUDE.local.md
 # CorpBrain generated output
 corpbrain_wiki/
 
+# Local smoke / scratch outputs (e.g. corpbrain scan > stdout.txt / 2> progress.log)
+*.log
+stdout.txt
+
 # Python
 __pycache__/
 *.py[cod]
