@@ -98,9 +98,11 @@ def request_json(
         with urllib.request.urlopen(request, timeout=timeout) as response:
             raw = response.read()
     except urllib.error.HTTPError as exc:
-        raise GatewayError(
-            f"외부 호출이 HTTP {exc.code}로 실패했습니다: {url}", url=url
-        ) from exc
+        detail = _read_error_body(exc)
+        message = f"외부 호출이 HTTP {exc.code}로 실패했습니다: {url}"
+        if detail:
+            message = f"{message} — {detail}"
+        raise GatewayError(message, url=url) from exc
     except urllib.error.URLError as exc:
         raise GatewayError(
             f"외부 호출에 연결하지 못했습니다: {url} ({exc.reason})", url=url
@@ -116,3 +118,25 @@ def request_json(
         raise GatewayError(
             f"응답을 JSON으로 파싱하지 못했습니다: {url} ({exc})", url=url
         ) from exc
+
+
+def _read_error_body(exc: urllib.error.HTTPError, *, limit: int = 500) -> str:
+    """HTTP 오류 응답 본문에서 서버 메시지를 뽑는다 (진단용, 최대 limit자).
+
+    Ollama처럼 `{"error": "..."}` 형태면 그 값만, 아니면 원문 앞부분을 돌려준다.
+    본문을 읽을 수 없으면(예: fp 없음) 빈 문자열을 돌려준다 — 진단이 실패를 가리지 않게 한다.
+    """
+    try:
+        raw = exc.read()
+    except Exception:  # noqa: BLE001 - 본문을 못 읽어도 상태코드 메시지는 그대로 나가야 한다
+        return ""
+    if not raw:
+        return ""
+    text = raw.decode("utf-8", "replace").strip()
+    try:
+        parsed = json.loads(text)
+    except ValueError:
+        parsed = None
+    if isinstance(parsed, dict) and isinstance(parsed.get("error"), str):
+        text = parsed["error"]
+    return " ".join(text.split())[:limit]

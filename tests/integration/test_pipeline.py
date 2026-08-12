@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 
 from corpbrain import cli
-from corpbrain.core import gateway, run_scan
+from corpbrain.core import _progress, gateway, run_scan
 from corpbrain.core.config import ScanConfig
 from corpbrain.core.render import FRONT_MATTER_KEYS, SECTION_HEADERS
 
@@ -187,3 +187,81 @@ def test_broken_json_skips_only_that_file(
     generated = {wiki.source_path.name for wiki in result.generated}
     assert "normal.txt" in generated
     assert not (out_dir / "guide.md.md").exists()
+
+
+def test_progress_events_emitted_in_order(
+    corpus: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """스펙 완료의 정의 1: on_event로 이벤트가 순서대로 방출된다 (코어 API 직접 호출)."""
+    _ok_gateway(monkeypatch)
+    events: list[Any] = []
+
+    run_scan(_config(corpus, tmp_path / "wiki"), on_event=events.append)
+
+    kinds = [event.kind for event in events]
+    assert kinds[0] == _progress.EventKind.RUN_STARTED
+    assert kinds[-1] == _progress.EventKind.RUN_FINISHED
+    assert kinds.count(_progress.EventKind.MODEL_LOADING) == 1
+    assert kinds.count(_progress.EventKind.MODEL_READY) == 1
+    assert kinds.index(_progress.EventKind.MODEL_LOADING) < kinds.index(
+        _progress.EventKind.MODEL_READY
+    )
+
+    starts = [e for e in events if e.kind == _progress.EventKind.FILE_STARTED]
+    assert [e.index for e in starts] == list(range(1, len(starts) + 1))
+    assert {e.total for e in starts} == {len(starts)}
+
+    outcomes = [
+        e
+        for e in events
+        if e.kind in (_progress.EventKind.FILE_GENERATED, _progress.EventKind.FILE_SKIPPED)
+    ]
+    assert len(outcomes) == len(starts) == starts[0].total
+
+
+def test_on_event_none_keeps_default_behavior(
+    corpus: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """스펙 완료의 정의 6: on_event 없이도 기존 동작이 그대로다 (하위 호환)."""
+    _ok_gateway(monkeypatch)
+    out_dir = tmp_path / "wiki"
+
+    run_scan(_config(corpus, out_dir))
+
+    produced = {p.relative_to(out_dir).as_posix() for p in out_dir.rglob("*.md")}
+    assert produced == EXPECTED_WIKIS
+
+
+def test_sink_exception_is_isolated(
+    corpus: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """스펙 완료의 정의 8: sink 예외는 격리되어 스캔이 정상 완료된다."""
+    _ok_gateway(monkeypatch)
+    out_dir = tmp_path / "wiki"
+
+    def _boom(event: Any) -> None:
+        raise RuntimeError("sink broke")
+
+    result = run_scan(_config(corpus, out_dir), on_event=_boom)
+
+    produced = {p.relative_to(out_dir).as_posix() for p in out_dir.rglob("*.md")}
+    assert produced == EXPECTED_WIKIS
+    assert result.generated
+
+
+def test_cli_emits_live_progress_to_stderr_only(
+    corpus: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """스펙 완료의 정의 5: 라이브 라인은 stderr로만 나가고 stdout은 빈다."""
+    _ok_gateway(monkeypatch)
+
+    code = cli.main(["scan", str(corpus), "--out", str(tmp_path / "wiki")])
+
+    captured = capsys.readouterr()
+    assert code == cli.EXIT_OK
+    assert captured.out == ""
+    assert "summarize" in captured.err or "extract" in captured.err
+    assert "loading=" in captured.err

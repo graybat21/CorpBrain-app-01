@@ -3,6 +3,10 @@
 인자 파싱·로그 출력·종료 코드 매핑만 담당하고, 비즈니스 로직은 코어에 둔다 (스펙 §4.5).
 플래그와 기본값은 스펙 §4.1 CLI 계약을 그대로 따르며, 기본값 자체는 코어
 (`corpbrain.core.config`)가 소유한다 — CLI는 하드코딩하지 않는다.
+
+진행상태는 코어가 방출하는 이벤트를 stderr 라이브 라인으로 렌더한다
+(스펙 `corpbrain-run-status-observability.md`). 계약(`reduce`/`render_status_line`)은
+코어 내부 모듈이며 어댑터가 여기서 구독한다.
 """
 
 from __future__ import annotations
@@ -11,8 +15,15 @@ import argparse
 import os
 import sys
 from pathlib import Path
+from typing import TextIO
 
 from corpbrain import core
+from corpbrain.core._progress import (
+    ProgressEvent,
+    StatusSnapshot,
+    reduce,
+    render_status_line,
+)
 from corpbrain.core.errors import PreconditionError
 from corpbrain.core.report import build_detail_lines, build_summary_lines
 
@@ -23,6 +34,34 @@ MODEL_ENV_VAR = "CORPBRAIN_MODEL"
 EXIT_OK = 0
 EXIT_PRECONDITION_FAILED = 1
 EXIT_LIMIT_EXCEEDED = 3
+
+
+class _StderrProgress:
+    """진행 이벤트를 stderr 라이브 라인으로 렌더하는 sink (스펙 §4.3).
+
+    TTY면 `\\r`로 한 줄을 제자리 갱신하고, 비-TTY(파이프·리다이렉트)면 이벤트별 개행으로
+    폴백한다. 소켓을 열지 않으므로 보안 불변식(localhost 외 연결 없음)에 영향이 없다.
+    """
+
+    def __init__(self, stream: TextIO) -> None:
+        self._stream = stream
+        self._snapshot: StatusSnapshot | None = None
+        self._tty = stream.isatty()
+
+    def __call__(self, event: ProgressEvent) -> None:
+        self._snapshot = reduce(self._snapshot, event)
+        line = render_status_line(self._snapshot)
+        if self._tty:
+            self._stream.write("\r\033[K" + line)
+        else:
+            self._stream.write(line + "\n")
+        self._stream.flush()
+
+    def finish(self) -> None:
+        """라이브 라인을 마무리한다(TTY 제자리 갱신 뒤 개행)."""
+        if self._tty and self._snapshot is not None:
+            self._stream.write("\n")
+            self._stream.flush()
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -119,11 +158,14 @@ def main(argv: list[str] | None = None) -> int:
     config = build_config(args)
 
     _log(f"스캔 시작: {config.folder} → {config.out_dir} (모델 {config.model})")
+    progress = _StderrProgress(sys.stderr)
     try:
-        result = core.run_scan(config)
+        result = core.run_scan(config, on_event=progress)
     except PreconditionError as exc:
         _log(f"선행 조건 실패: {exc}")
         return EXIT_PRECONDITION_FAILED
+    finally:
+        progress.finish()
 
     for line in build_detail_lines(result):
         _log(line)

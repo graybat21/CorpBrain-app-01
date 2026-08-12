@@ -12,7 +12,7 @@ from corpbrain.core.models import GeneratedWiki, ScanResult, SkippedFile, SkipRe
 
 
 def _install_result(monkeypatch: pytest.MonkeyPatch, result: ScanResult) -> None:
-    monkeypatch.setattr(cli.core, "run_scan", lambda config: result)
+    monkeypatch.setattr(cli.core, "run_scan", lambda config, **_: result)
 
 
 def test_partial_failure_exits_zero(
@@ -42,7 +42,7 @@ def test_partial_failure_exits_zero(
 def test_precondition_failure_exits_nonzero(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
 ) -> None:
-    def _raise(config: Any) -> ScanResult:
+    def _raise(config: Any, **_: Any) -> ScanResult:
         raise cli.PreconditionError("Ollama를 찾지 못했습니다")
 
     monkeypatch.setattr(cli.core, "run_scan", _raise)

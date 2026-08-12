@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import ast
+import io
 import json
 import urllib.error
 import urllib.request
@@ -115,6 +116,44 @@ def test_http_error_is_wrapped(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert excinfo.value.url == OLLAMA_URL
     assert excinfo.value.__cause__ is error
+
+
+def test_http_error_json_body_is_surfaced(monkeypatch: pytest.MonkeyPatch) -> None:
+    """서버가 `{"error": ...}` 본문을 주면 그 메시지가 GatewayError에 실려 나온다 (진단)."""
+    body = io.BytesIO(b'{"error": "CUDA error: the provided PTX was compiled with an unsupported toolchain."}')
+    error = urllib.error.HTTPError(OLLAMA_URL, 500, "Server Error", {}, body)  # type: ignore[arg-type]
+    _stub_urlopen(monkeypatch, error=error)
+
+    with pytest.raises(gateway.GatewayError) as excinfo:
+        gateway.request_json(OLLAMA_URL)
+
+    message = str(excinfo.value)
+    assert "500" in message
+    assert "unsupported toolchain" in message
+
+
+def test_http_error_plaintext_body_is_surfaced(monkeypatch: pytest.MonkeyPatch) -> None:
+    """JSON이 아닌 오류 본문도 앞부분이 메시지에 실린다."""
+    error = urllib.error.HTTPError(
+        OLLAMA_URL, 502, "Bad Gateway", {}, io.BytesIO(b"upstream boom")  # type: ignore[arg-type]
+    )
+    _stub_urlopen(monkeypatch, error=error)
+
+    with pytest.raises(gateway.GatewayError) as excinfo:
+        gateway.request_json(OLLAMA_URL)
+
+    assert "upstream boom" in str(excinfo.value)
+
+
+def test_http_error_without_body_still_wraps(monkeypatch: pytest.MonkeyPatch) -> None:
+    """본문이 없어도(fp=None) 상태코드 메시지로 감싸 올린다 (진단이 실패를 숨기지 않는다)."""
+    error = urllib.error.HTTPError(OLLAMA_URL, 500, "Server Error", {}, None)  # type: ignore[arg-type]
+    _stub_urlopen(monkeypatch, error=error)
+
+    with pytest.raises(gateway.GatewayError) as excinfo:
+        gateway.request_json(OLLAMA_URL)
+
+    assert "500" in str(excinfo.value)
 
 
 def test_connection_failure_is_wrapped(monkeypatch: pytest.MonkeyPatch) -> None:
