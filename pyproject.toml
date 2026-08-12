@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "corpbrain"
+version = "0.1.0"
+description = "100% 로컬 구동형 AI 지식 관리 — 로컬 스캔→요약→마크다운 위키 (MVP 첫 슬라이스)"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "python-docx>=1.1",  # FR-007 .docx 텍스트 추출 (이슈 명세에 명시된 의존성)
+]
+
+[project.scripts]
+corpbrain = "corpbrain.cli:main"
+
+# 개발 의존성은 PEP 735 그룹으로 선언한다 (uv가 기본 동기화 → `uv run pytest` / `uv run ruff` 가 그대로 동작).
+[dependency-groups]
+dev = [
+  "pytest>=8",
+  "ruff>=0.6",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["corpbrain"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+# 여러 디렉터리에 같은 파일명(test_pipeline.py 등)이 있어도 충돌하지 않게 한다.
+addopts = "--import-mode=importlib"
