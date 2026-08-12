@@ -109,7 +109,7 @@ def test_main_dispatches_config_to_core(monkeypatch: pytest.MonkeyPatch) -> None
     """`main`은 만들어진 `ScanConfig`를 코어 진입점에 넘기고 성공 시 0을 반환한다."""
     received: list[core.ScanConfig] = []
 
-    def fake_run_scan(config: core.ScanConfig) -> core.ScanResult:
+    def fake_run_scan(config: core.ScanConfig, **_: object) -> core.ScanResult:
         received.append(config)
         return core.ScanResult(out_dir=config.out_dir)
 
