@@ -35,12 +35,16 @@ from corpbrain.core.config import (
 from corpbrain.core.errors import CorpBrainError, PreconditionError
 from corpbrain.core.models import (
     GeneratedWiki,
+    HardwareInfo,
+    PlanEntry,
+    ScanPlan,
     ScanResult,
     SkippedFile,
     SkipReason,
     SummaryResult,
 )
 from corpbrain.core.pipeline import run_scan
+from corpbrain.core.plan import plan_scan
 
 __all__ = [
     "DEFAULT_MAX_CHARS",
@@ -52,11 +56,15 @@ __all__ = [
     "SUPPORTED_EXTENSIONS",
     "CorpBrainError",
     "GeneratedWiki",
+    "HardwareInfo",
+    "PlanEntry",
     "PreconditionError",
     "ScanConfig",
+    "ScanPlan",
     "ScanResult",
     "SkipReason",
     "SkippedFile",
     "SummaryResult",
+    "plan_scan",
     "run_scan",
 ]

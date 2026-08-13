@@ -1,7 +1,9 @@
-"""텍스트 추출 — 지원 포맷 3종의 확장자 디스패치 (스펙 §4.2).
+"""텍스트 추출 — 지원 포맷의 확장자 디스패치 (스펙 §4.2·§4.1).
 
 - `.txt` / `.md`: 원문을 특별 파싱 없이 평문으로 읽는다 (FR-006).
 - `.docx`: 문단 텍스트를 순서대로 이어 붙인다 (FR-007).
+- `.pdf`: 텍스트 레이어를 페이지 순서로 이어 붙인다 — 이미지/OCR·암호화는 다루지 않는다
+  (v0.2 U1, 스펙 §4.1).
 
 공통 규칙: 파일을 통째로 메모리에 올리지 않고 앞부분 `max_chars`까지만 읽는다.
 개별 파일의 추출 실패는 `ExtractionError`로 올리고, 호출자(FR-008/FR-015)가 스킵으로
@@ -17,12 +19,15 @@ from pathlib import Path
 
 from docx import Document
 from docx.opc.exceptions import PackageNotFoundError
+from pypdf import PdfReader
+from pypdf.errors import PyPdfError
 
 from corpbrain.core.errors import CorpBrainError
 from corpbrain.core.models import SkippedFile, SkipReason
 
 PLAINTEXT_EXTENSIONS: frozenset[str] = frozenset({".txt", ".md"})
 DOCX_EXTENSION = ".docx"
+PDF_EXTENSION = ".pdf"
 
 
 class ExtractionError(CorpBrainError):
@@ -78,6 +83,8 @@ def extract_text(path: Path, max_chars: int) -> str:
         return _extract_plaintext(path, max_chars)
     if suffix == DOCX_EXTENSION:
         return _extract_docx(path, max_chars)
+    if suffix == PDF_EXTENSION:
+        return _extract_pdf(path, max_chars)
     raise ExtractionError(f"지원하지 않는 확장자입니다: {path.suffix}")
 
 
@@ -110,5 +117,40 @@ def _extract_docx(path: Path, max_chars: int) -> str:
                 break
     except (OSError, ValueError, KeyError) as exc:
         raise ExtractionError(f"docx 문단을 읽지 못했습니다: {path}") from exc
+
+    return "\n".join(parts)[:max_chars]
+
+
+def _extract_pdf(path: Path, max_chars: int) -> str:
+    """`.pdf` 텍스트 레이어를 페이지 순서로 잇되 `max_chars`에 도달하면 멈춘다 (스펙 §4.1).
+
+    이미지/OCR은 하지 않는다. 암호화 PDF(`reader.is_encrypted`)와 손상·파싱 실패는
+    `ExtractionError`로 올려 호출자가 `extraction_failed`로 스킵하게 하고(암호화는 detail로
+    사유를 남긴다), 텍스트 레이어가 없으면(스캔 이미지 PDF 등) 빈 문자열을 돌려주어 호출자의
+    빈 문서 검사가 `empty_document`로 처리하게 한다 (스펙 §4.1·§5).
+    """
+    try:
+        reader = PdfReader(str(path))
+        encrypted = reader.is_encrypted
+    except (OSError, PyPdfError, ValueError) as exc:
+        raise ExtractionError(f"pdf를 열지 못했습니다: {path}") from exc
+
+    if encrypted:
+        # 복호화·OCR은 비목표(스펙 §2). 사유를 detail로 남겨 스킵 리포트에 노출한다.
+        raise ExtractionError("암호화된 PDF")
+
+    parts: list[str] = []
+    accumulated = 0
+    try:
+        for page in reader.pages:
+            text = page.extract_text() or ""
+            if not text:
+                continue
+            parts.append(text)
+            accumulated += len(text) + 1
+            if accumulated >= max_chars:
+                break
+    except (PyPdfError, ValueError, KeyError) as exc:
+        raise ExtractionError(f"pdf 텍스트를 읽지 못했습니다: {path}") from exc
 
     return "\n".join(parts)[:max_chars]

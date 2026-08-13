@@ -144,8 +144,8 @@ def test_folder_argument_is_required() -> None:
         cli.build_parser().parse_args(["scan"])
 
 
-@pytest.mark.parametrize("unknown_flag", ["--verbose", "--dry-run", "--out-dir"])
+@pytest.mark.parametrize("unknown_flag", ["--verbose", "--out-dir"])
 def test_flags_outside_spec_are_rejected(unknown_flag: str) -> None:
-    """스펙 §4.1에 없는 플래그는 받지 않는다."""
+    """스펙 §4.1(+v0.2 §4.3)에 없는 플래그는 받지 않는다 (--dry-run은 v0.2에서 추가됨)."""
     with pytest.raises(SystemExit):
         cli.build_parser().parse_args(["scan", "./inbox", unknown_flag])

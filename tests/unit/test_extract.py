@@ -1,4 +1,4 @@
-"""텍스트 추출기 단위테스트 (FR-006 `.txt`/`.md`, FR-007 `.docx`)."""
+"""텍스트 추출기 단위테스트 (FR-006 `.txt`/`.md`, FR-007 `.docx`, v0.2 U1 `.pdf`)."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 from docx import Document
+from pypdf import PdfReader, PdfWriter
 
 from corpbrain.core.extract import ExtractionError, extract_text, prepare_summary_input
 from corpbrain.core.models import SkipReason
@@ -16,12 +17,67 @@ MAX_CHARS = 12000
 #: 완료의 정의(스펙 §3)가 요구하는 픽스처 코퍼스 — 통합테스트(FR-018)도 같은 폴더를 쓴다.
 FIXTURE_CORPUS = Path(__file__).resolve().parents[1] / "fixtures" / "sample_corpus"
 
+#: 권한 거부 재현은 POSIX 권한 비트가 적용되는 비-root 환경에서만 가능하다. `os.geteuid`는
+#: POSIX 전용이므로 단락 평가로 Windows 수집 크래시를 피한다 (test_scanner.py와 동일 관용구).
+needs_posix_permissions = pytest.mark.skipif(
+    os.name != "posix" or os.geteuid() == 0,
+    reason="POSIX 권한 비트가 적용되는 비-root 환경에서만 권한 거부를 재현할 수 있다",
+)
+
 
 def _write_docx(path: Path, paragraphs: list[str]) -> None:
     document = Document()
     for text in paragraphs:
         document.add_paragraph(text)
     document.save(str(path))
+
+
+def _write_text_pdf(path: Path, text: str) -> None:
+    """추출 가능한 텍스트 레이어가 있는 최소 단일 페이지 PDF를 만든다 (외부 의존성 없음).
+
+    한글은 base14 폰트로 추출되지 않으므로 텍스트는 ASCII만 사용한다. 바이트 오프셋을 계산해
+    올바른 xref를 써서 pypdf의 xref 재구성 경고 없이 읽히게 한다.
+    """
+    stream = b"BT /F1 24 Tf 72 700 Td (" + text.encode("ascii") + b") Tj ET"
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        (
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+            b"/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>"
+        ),
+        b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"\nendstream",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
+    out = bytearray(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
+    offsets: list[int] = []
+    for index, body in enumerate(objects, start=1):
+        offsets.append(len(out))
+        out += str(index).encode() + b" 0 obj\n" + body + b"\nendobj\n"
+    xref_pos = len(out)
+    out += b"xref\n0 " + str(len(objects) + 1).encode() + b"\n0000000000 65535 f \n"
+    for offset in offsets:
+        out += f"{offset:010d} 00000 n \n".encode()
+    out += b"trailer\n<< /Size " + str(len(objects) + 1).encode() + b" /Root 1 0 R >>\n"
+    out += b"startxref\n" + str(xref_pos).encode() + b"\n%%EOF\n"
+    path.write_bytes(bytes(out))
+
+
+def _write_encrypted_pdf(path: Path, source_pdf: Path) -> None:
+    """`source_pdf`를 사용자 암호로 암호화해 저장한다 (추출 시 암호화로 스킵되어야 한다)."""
+    writer = PdfWriter()
+    writer.append(PdfReader(str(source_pdf)))
+    writer.encrypt("secret")
+    with path.open("wb") as stream:
+        writer.write(stream)
+
+
+def _write_blank_pdf(path: Path) -> None:
+    """텍스트 레이어가 없는 PDF(스캔 이미지 PDF 근사) — 추출 결과가 빈 문자열이어야 한다."""
+    writer = PdfWriter()
+    writer.add_blank_page(width=200, height=200)
+    with path.open("wb") as stream:
+        writer.write(stream)
 
 
 def test_txt_extraction_returns_plain_text(tmp_path: Path) -> None:
@@ -65,14 +121,14 @@ def test_broken_encoding_does_not_crash(tmp_path: Path) -> None:
 
 
 def test_unsupported_extension_raises_extraction_error(tmp_path: Path) -> None:
-    source = tmp_path / "scan.pdf"
-    source.write_bytes(b"%PDF-1.4")
+    source = tmp_path / "sheet.xlsx"  # xls는 v0.2 비목표 — 여전히 미지원
+    source.write_bytes(b"PK\x03\x04")
 
     with pytest.raises(ExtractionError):
         extract_text(source, MAX_CHARS)
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason="root는 권한 거부를 재현할 수 없다")
+@needs_posix_permissions
 def test_permission_denied_is_reported_as_extraction_error(tmp_path: Path) -> None:
     source = tmp_path / "secret.txt"
     source.write_text("내용", encoding="utf-8")
@@ -116,6 +172,77 @@ def test_empty_docx_yields_empty_string(tmp_path: Path) -> None:
     _write_docx(source, [])
 
     assert extract_text(source, MAX_CHARS) == ""
+
+
+# --- v0.2 U1: .pdf 텍스트 레이어 추출 (스펙 §4.1·§5) -----------------------------
+
+
+def test_pdf_text_layer_is_extracted(tmp_path: Path) -> None:
+    source = tmp_path / "report.pdf"
+    _write_text_pdf(source, "CorpBrain PDF text layer sample.")
+
+    assert "CorpBrain PDF text layer sample." in extract_text(source, MAX_CHARS)
+
+
+def test_pdf_extraction_stops_at_max_chars(tmp_path: Path) -> None:
+    source = tmp_path / "long.pdf"
+    _write_text_pdf(source, "CorpBrain " * 60)  # 추출 결과가 50자보다 충분히 길다
+
+    assert len(extract_text(source, 50)) == 50
+
+
+def test_encrypted_pdf_raises_extraction_error(tmp_path: Path) -> None:
+    plain = tmp_path / "plain.pdf"
+    _write_text_pdf(plain, "secret contents")
+    locked = tmp_path / "locked.pdf"
+    _write_encrypted_pdf(locked, plain)
+
+    with pytest.raises(ExtractionError, match="암호화"):
+        extract_text(locked, MAX_CHARS)
+
+
+def test_encrypted_pdf_is_skipped_as_extraction_failed(tmp_path: Path) -> None:
+    plain = tmp_path / "plain.pdf"
+    _write_text_pdf(plain, "secret contents")
+    locked = tmp_path / "locked.pdf"
+    _write_encrypted_pdf(locked, plain)
+
+    prepared = prepare_summary_input(locked, MAX_CHARS)
+
+    assert prepared.text is None
+    assert prepared.skipped is not None
+    assert prepared.skipped.reason == SkipReason.EXTRACTION_FAILED
+    assert "암호화" in prepared.skipped.detail
+
+
+def test_pdf_without_text_layer_yields_empty_string(tmp_path: Path) -> None:
+    source = tmp_path / "scanned.pdf"
+    _write_blank_pdf(source)
+
+    assert extract_text(source, MAX_CHARS) == ""
+
+
+def test_pdf_without_text_layer_is_skipped_as_empty(tmp_path: Path) -> None:
+    source = tmp_path / "scanned.pdf"
+    _write_blank_pdf(source)
+
+    prepared = prepare_summary_input(source, MAX_CHARS)
+
+    assert prepared.text is None
+    assert prepared.skipped is not None
+    assert prepared.skipped.reason == SkipReason.EMPTY_DOCUMENT
+
+
+def test_corrupted_pdf_is_skipped_as_extraction_failed(tmp_path: Path) -> None:
+    source = tmp_path / "corrupt.pdf"
+    source.write_bytes(b"%PDF-1.4 this is not a real pdf body")
+
+    prepared = prepare_summary_input(source, MAX_CHARS)
+
+    assert prepared.text is None
+    assert prepared.skipped is not None
+    assert prepared.skipped.reason == SkipReason.EXTRACTION_FAILED
+    assert prepared.skipped.detail
 
 
 # --- FR-008: 길이 제한 + 빈문서·추출실패 스킵 판정 -------------------------------
@@ -165,7 +292,7 @@ def test_corrupted_docx_is_skipped_as_extraction_failed(tmp_path: Path) -> None:
     assert prepared.skipped.detail
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason="root는 권한 거부를 재현할 수 없다")
+@needs_posix_permissions
 def test_unreadable_document_is_skipped_as_permission_denied(tmp_path: Path) -> None:
     source = tmp_path / "locked.txt"
     source.write_text("내용", encoding="utf-8")

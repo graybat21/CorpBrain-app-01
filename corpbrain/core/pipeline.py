@@ -32,7 +32,6 @@ from corpbrain.core._progress import (
     Stage,
 )
 from corpbrain.core.config import ScanConfig
-from corpbrain.core.errors import PreconditionError
 from corpbrain.core.extract import prepare_summary_input
 from corpbrain.core.llm.ollama_client import detect
 from corpbrain.core.llm.summarize import LLMParseError, summarize
@@ -40,7 +39,7 @@ from corpbrain.core.models import GeneratedWiki, ScanResult, SkippedFile, SkipRe
 from corpbrain.core.output import output_path_for, write_wiki
 from corpbrain.core.render import render_markdown
 from corpbrain.core.rerun import should_regenerate
-from corpbrain.core.scanner import scan_folder
+from corpbrain.core.scanner import ScanFindings, safe_size, scan_folder, validated_root
 
 #: 진행 이벤트 sink 타입 — 어댑터가 주입한다.
 EventSink = Callable[[ProgressEvent], None]
@@ -64,12 +63,20 @@ def _emit(on_event: EventSink | None, event: ProgressEvent) -> None:
         return
 
 
-def run_scan(config: ScanConfig, *, on_event: EventSink | None = None) -> ScanResult:
+def run_scan(
+    config: ScanConfig,
+    *,
+    on_event: EventSink | None = None,
+    findings: ScanFindings | None = None,
+) -> ScanResult:
     """폴더를 스캔해 문서마다 위키 마크다운 1개를 생성하고 결과를 반환한다.
 
     Args:
         config: 실행 파라미터 (순수 값). 어댑터 타입에 의존하지 않는다.
         on_event: 진행 이벤트 콜백(선택). `None`이면 이벤트를 방출하지 않는다.
+        findings: 이미 계산된 스캔 결과(선택). 주면 재귀 순회를 생략하고 그대로 쓴다 —
+            어댑터가 pre-scan 배너와 본 스캔의 디렉터리 워크를 한 번으로 공유할 때 쓴다.
+            `None`(기본)이면 기존대로 직접 순회한다.
 
     Returns:
         생성·스킵 목록을 담은 `ScanResult`. 개별 파일 실패는 스킵으로 담고 예외로 올리지 않는다.
@@ -77,10 +84,11 @@ def run_scan(config: ScanConfig, *, on_event: EventSink | None = None) -> ScanRe
     Raises:
         PreconditionError: 입력 폴더 없음/접근 불가, Ollama 미탐지 등 선행 조건 실패.
     """
-    root = _validated_root(config.folder)
+    root = validated_root(config.folder)
     detect(config.ollama_url)
 
-    findings = scan_folder(root, max_files=config.max_files)
+    if findings is None:
+        findings = scan_folder(root, max_files=config.max_files)
     result = ScanResult(
         out_dir=config.out_dir,
         skipped=list(findings.skipped),
@@ -122,7 +130,7 @@ def _process_one(
     path_str = str(source_path)
 
     _emit(on_event, FileStarted(at=time.monotonic(), index=index, total=total,
-                                path=path_str, bytes=_size_of(source_path)))
+                                path=path_str, bytes=safe_size(source_path)))
 
     if not should_regenerate(source_path, out_path, config.force):
         result.skipped.append(SkippedFile(path=source_path, reason=SkipReason.UP_TO_DATE))
@@ -169,7 +177,7 @@ def _process_one(
         summary,
         source_path=path_str,
         model=config.model,
-        source_bytes=_size_of(source_path),
+        source_bytes=safe_size(source_path),
         generated_at=datetime.now().astimezone().isoformat(),
     )
 
@@ -192,22 +200,3 @@ def _process_one(
     result.generated.append(GeneratedWiki(source_path=source_path, output_path=out_path))
     _emit(on_event, FileGenerated(at=time.monotonic(), index=index, total=total,
                                   path=path_str, output_path=str(out_path), latency=latency))
-
-
-def _size_of(source_path: Path) -> int:
-    """파일 바이트 크기 — 접근 실패 시 0."""
-    try:
-        return source_path.stat().st_size
-    except OSError:
-        return 0
-
-
-def _validated_root(folder: Path) -> Path:
-    """입력 폴더가 실제로 접근 가능한 디렉터리인지 확인하고 정규화한다."""
-    try:
-        root = folder.resolve()
-        if not root.is_dir():
-            raise PreconditionError(f"입력 폴더가 없거나 디렉터리가 아닙니다: {folder}")
-    except OSError as exc:
-        raise PreconditionError(f"입력 폴더에 접근할 수 없습니다: {folder} ({exc})") from exc
-    return root

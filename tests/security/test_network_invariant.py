@@ -18,6 +18,7 @@ from corpbrain.core import gateway
 from corpbrain.core.config import ScanConfig
 from corpbrain.core.llm.ollama_client import OllamaNotAvailableError, detect
 from corpbrain.core.pipeline import run_scan
+from corpbrain.core.plan import plan_scan
 
 FIXTURE_CORPUS = Path(__file__).resolve().parents[1] / "fixtures" / "sample_corpus"
 LOCALHOST_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
@@ -112,3 +113,21 @@ def test_watcher_flags_a_gateway_bypass(watch_sockets: SocketWatcher) -> None:
         socket.create_connection(("example.com", 443))
 
     assert watch_sockets.offenders(LOCALHOST_HOSTS) == [("example.com", 443)]
+
+
+def test_plan_scan_opens_no_sockets_and_bypasses_gateway(
+    watch_sockets: SocketWatcher, tmp_path: Path
+) -> None:
+    """v0.2 완료의 정의 3: plan은 localhost 포함 어떤 소켓도 열지 않고 관문도 거치지 않는다.
+
+    하드웨어 감지는 로컬 nvidia-smi subprocess만 쓰므로(소켓 아님) 이 실행에서 소켓 연결이
+    전혀 없어야 하고, `gateway.requested_urls()`도 비어 있어야 한다.
+    """
+    gateway.reset_requested_urls()
+    (tmp_path / "note.txt").write_text("본문", encoding="utf-8")
+    (tmp_path / "report.pdf").write_bytes(b"%PDF-1.4 stub")
+
+    plan_scan(ScanConfig(folder=tmp_path))
+
+    assert watch_sockets.addresses == []  # localhost 포함 0건
+    assert gateway.requested_urls() == ()

@@ -22,7 +22,7 @@ def test_partial_failure_exits_zero(
         out_dir=tmp_path / "wiki",
         generated=[GeneratedWiki(source_path=tmp_path / "a.txt", output_path=tmp_path / "wiki" / "a.txt.md")],
         skipped=[
-            SkippedFile(path=tmp_path / "b.pdf", reason=SkipReason.UNSUPPORTED_EXTENSION),
+            SkippedFile(path=tmp_path / "b.jpg", reason=SkipReason.UNSUPPORTED_EXTENSION),
             SkippedFile(path=tmp_path / "c.txt", reason=SkipReason.SUMMARY_FAILED, detail="깨진 JSON"),
         ],
     )

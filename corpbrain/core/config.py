@@ -15,8 +15,8 @@ DEFAULT_MAX_FILES = 50
 DEFAULT_MAX_CHARS = 12000
 DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
 
-#: 지원 포맷 3종 (스펙 §4.2). 그 외 확장자는 스킵한다.
-SUPPORTED_EXTENSIONS: frozenset[str] = frozenset({".docx", ".txt", ".md"})
+#: 지원 포맷 4종 (스펙 §4.2 + v0.2 §4.1 `.pdf`). 그 외 확장자는 스킵한다.
+SUPPORTED_EXTENSIONS: frozenset[str] = frozenset({".docx", ".txt", ".md", ".pdf"})
 
 #: 경로 길이 상한 (스펙 §5) — 초과 시 스킵한다.
 MAX_PATH_LENGTH = 260
