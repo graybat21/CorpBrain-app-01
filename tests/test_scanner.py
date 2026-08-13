@@ -35,7 +35,7 @@ def _make_fixture(root: Path) -> None:
     root/
       Notes.MD          지원 (대문자 확장자)
       a.txt             지원
-      b.pdf             미지원 (비목표 포맷)
+      b.xlsx            미지원 (비목표 포맷 — xls는 v0.2 비목표)
       sub/c.docx        지원 (하위폴더)
       sub/d.jpg         미지원
       sub/deep/e.md     지원 (2단계 하위폴더)
@@ -45,7 +45,7 @@ def _make_fixture(root: Path) -> None:
     (root / "empty_dir").mkdir()
     (root / "Notes.MD").write_text("notes", encoding="utf-8")
     (root / "a.txt").write_text("a", encoding="utf-8")
-    (root / "b.pdf").write_bytes(b"%PDF-1.4")
+    (root / "b.xlsx").write_bytes(b"PK\x03\x04")
     (root / "sub" / "c.docx").write_bytes(b"PK\x03\x04")
     (root / "sub" / "d.jpg").write_bytes(b"\xff\xd8\xff")
     (root / "sub" / "deep" / "e.md").write_text("# e", encoding="utf-8")
@@ -112,7 +112,7 @@ def test_iter_files_yields_every_file_in_deterministic_order(tmp_path: Path) -> 
     assert list(iter_files(tmp_path)) == [
         root / "Notes.MD",
         root / "a.txt",
-        root / "b.pdf",
+        root / "b.xlsx",
         root / "sub" / "c.docx",
         root / "sub" / "d.jpg",
         root / "sub" / "deep" / "e.md",
@@ -137,7 +137,7 @@ def test_scan_folder_classifies_unsupported_extensions_as_skipped(
 
     root = tmp_path.resolve()
     assert [(item.path, item.reason) for item in findings.skipped] == [
-        (root / "b.pdf", SkipReason.UNSUPPORTED_EXTENSION),
+        (root / "b.xlsx", SkipReason.UNSUPPORTED_EXTENSION),
         (root / "sub" / "d.jpg", SkipReason.UNSUPPORTED_EXTENSION),
     ]
     assert all(item.reason == "unsupported_extension" for item in findings.skipped)
@@ -161,23 +161,32 @@ def test_scan_folder_skips_files_without_extension(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     "name",
-    ["doc.docx", "doc.DOCX", "note.txt", "note.Txt", "wiki.md", "wiki.MD"],
+    [
+        "doc.docx",
+        "doc.DOCX",
+        "note.txt",
+        "note.Txt",
+        "wiki.md",
+        "wiki.MD",
+        "report.pdf",
+        "report.PDF",
+    ],
 )
 def test_is_supported_ignores_extension_case(name: str) -> None:
     assert is_supported(Path(name)) is True
 
 
 @pytest.mark.parametrize(
-    "name", ["scan.pdf", "old.doc", "photo.JPG", "README", "a.mdx"]
+    "name", ["sheet.xlsx", "old.doc", "photo.JPG", "README", "a.mdx"]
 )
 def test_is_supported_rejects_unsupported_extensions(name: str) -> None:
     assert is_supported(Path(name)) is False
 
 
 def test_supported_extensions_is_the_shared_core_constant() -> None:
-    """확장자 집합을 새로 만들지 않고 코어 설정(스펙 §4.2)을 re-export 한다."""
+    """확장자 집합을 새로 만들지 않고 코어 설정(스펙 §4.2·§4.1)을 re-export 한다."""
     assert SUPPORTED_EXTENSIONS is config.SUPPORTED_EXTENSIONS
-    assert SUPPORTED_EXTENSIONS == {".docx", ".txt", ".md"}
+    assert SUPPORTED_EXTENSIONS == {".docx", ".txt", ".md", ".pdf"}
 
 
 # --- 경로만 다룬다 --------------------------------------------------------------
@@ -280,7 +289,7 @@ def test_scan_folder_without_max_files_applies_no_limit(tmp_path: Path) -> None:
 def test_scan_folder_limit_counts_only_processing_targets(tmp_path: Path) -> None:
     """스킵되는 파일은 상한 계산에 들어가지 않는다 (처리 대상 수 기준)."""
     _make_files(tmp_path, 3, suffix=".txt")
-    _make_files(tmp_path, 5, suffix=".pdf")
+    _make_files(tmp_path, 5, suffix=".jpg")
 
     findings = scan_folder(tmp_path, max_files=3)
 
@@ -341,8 +350,8 @@ def test_long_path_check_precedes_extension_check(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """긴 경로면 확장자와 무관하게 `path_too_long`으로 분류한다(미지원 확장자보다 우선)."""
-    target = tmp_path / "over.pdf"
-    target.write_bytes(b"%PDF-1.4")
+    target = tmp_path / "over.jpg"
+    target.write_bytes(b"\xff\xd8\xff")
     monkeypatch.setattr(scanner, "MAX_PATH_LENGTH", len(str(target.resolve())) - 1)
 
     findings = scan_folder(tmp_path)
@@ -389,8 +398,8 @@ def test_unsupported_extension_check_precedes_permission_probe(
     tmp_path: Path,
 ) -> None:
     """미지원 확장자는 애초에 처리 대상이 아니므로 권한 프로브 전에 분류한다."""
-    secret = tmp_path / "secret.pdf"
-    secret.write_bytes(b"%PDF-1.4")
+    secret = tmp_path / "secret.jpg"
+    secret.write_bytes(b"\xff\xd8\xff")
 
     with _denied(secret):
         findings = scan_folder(tmp_path)
@@ -433,7 +442,7 @@ def test_scan_folder_mixes_every_skip_reason_and_still_processes_the_rest(
 ) -> None:
     """긴 경로·권한 거부·미지원이 섞여 있어도 각 사유로 스킵되고 정상 파일은 처리된다."""
     (tmp_path / "good.md").write_text("keep", encoding="utf-8")
-    (tmp_path / "report.pdf").write_bytes(b"%PDF-1.4")
+    (tmp_path / "report.jpg").write_bytes(b"\xff\xd8\xff")
     secret = tmp_path / "secret.txt"
     secret.write_text("classified", encoding="utf-8")
     long_path = _make_file_of_path_length(tmp_path, MAX_PATH_LENGTH + 1)
@@ -446,7 +455,7 @@ def test_scan_folder_mixes_every_skip_reason_and_still_processes_the_rest(
     assert findings.targets == [root / "good.md"]
     assert {item.path: item.reason for item in findings.skipped} == {
         long_path: SkipReason.PATH_TOO_LONG,
-        root / "report.pdf": SkipReason.UNSUPPORTED_EXTENSION,
+        root / "report.jpg": SkipReason.UNSUPPORTED_EXTENSION,
         root / "secret.txt": SkipReason.PERMISSION_DENIED,
     }
     assert findings.discovered_count == 1

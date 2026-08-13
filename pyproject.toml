@@ -9,6 +9,7 @@ description = "100% 로컬 구동형 AI 지식 관리 — 로컬 스캔→요약
 requires-python = ">=3.12,<3.13"
 dependencies = [
   "python-docx>=1.1",  # FR-007 .docx 텍스트 추출 (이슈 명세에 명시된 의존성)
+  "pypdf>=4",  # v0.2 U1 .pdf 텍스트 레이어 추출 (스펙 §4.1)
 ]
 
 [project.scripts]
