@@ -24,7 +24,9 @@ from __future__ import annotations
 
 from corpbrain.core.config import (
     DEFAULT_MAX_CHARS,
+    DEFAULT_MAX_FILE_SIZE,
     DEFAULT_MAX_FILES,
+    DEFAULT_MAX_TOTAL_TOKENS,
     DEFAULT_MODEL,
     DEFAULT_OLLAMA_URL,
     DEFAULT_OUT_DIR,
@@ -32,8 +34,15 @@ from corpbrain.core.config import (
     SUPPORTED_EXTENSIONS,
     ScanConfig,
 )
-from corpbrain.core.errors import CorpBrainError, PreconditionError
+from corpbrain.core.environment import DoctorReport, diagnose
+from corpbrain.core.errors import (
+    CorpBrainError,
+    GpuGateError,
+    PreconditionError,
+    TokenBudgetExceededError,
+)
 from corpbrain.core.models import (
+    GateVerdict,
     GeneratedWiki,
     HardwareInfo,
     PlanEntry,
@@ -49,13 +58,18 @@ from corpbrain.core.plan import plan_scan
 __all__ = [
     "DEFAULT_MAX_CHARS",
     "DEFAULT_MAX_FILES",
+    "DEFAULT_MAX_FILE_SIZE",
+    "DEFAULT_MAX_TOTAL_TOKENS",
     "DEFAULT_MODEL",
     "DEFAULT_OLLAMA_URL",
     "DEFAULT_OUT_DIR",
     "MAX_PATH_LENGTH",
     "SUPPORTED_EXTENSIONS",
     "CorpBrainError",
+    "DoctorReport",
+    "GateVerdict",
     "GeneratedWiki",
+    "GpuGateError",
     "HardwareInfo",
     "PlanEntry",
     "PreconditionError",
@@ -65,6 +79,8 @@ __all__ = [
     "SkipReason",
     "SkippedFile",
     "SummaryResult",
+    "TokenBudgetExceededError",
+    "diagnose",
     "plan_scan",
     "run_scan",
 ]

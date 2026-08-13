@@ -13,10 +13,13 @@ from typing import Any
 import pytest
 
 from corpbrain.core import gateway, pipeline, scanner
-from corpbrain.core.config import ScanConfig
+from corpbrain.core.config import DEFAULT_MODEL, ScanConfig
 from corpbrain.core.errors import PreconditionError
 from corpbrain.core.models import SkipReason
 from corpbrain.core.pipeline import run_scan
+
+#: 대상 모델이 설치된 정상 `/api/tags` 응답 (v0.3 모델 선점검 통과용).
+TAGS_RESPONSE = {"models": [{"name": DEFAULT_MODEL}]}
 
 SUMMARY_JSON = {
     "title": "문서 제목",
@@ -46,7 +49,7 @@ def stub_ollama(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     def _request_json(url: str, *, method: str = "GET", payload: Any = None, **_: Any) -> Any:
         urls.append(url)
         if url.endswith("/api/tags"):
-            return {"models": []}
+            return TAGS_RESPONSE
         if url.endswith("/api/generate"):
             return {"response": json.dumps(SUMMARY_JSON, ensure_ascii=False)}
         raise AssertionError(f"예상치 못한 호출 대상: {url}")
@@ -56,6 +59,8 @@ def stub_ollama(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 
 
 def _config(root: Path, out_dir: Path, **overrides: Any) -> ScanConfig:
+    # 처리 경로 검증이 목적이므로 자원 게이트는 기본 우회한다(v0.3 GPU 무조건 차단은 별도 테스트).
+    overrides.setdefault("force_gates", True)
     return ScanConfig(folder=root, out_dir=out_dir, **overrides)
 
 
@@ -118,7 +123,7 @@ def test_single_llm_failure_does_not_fail_the_run(
 ) -> None:
     def _request_json(url: str, *, method: str = "GET", payload: Any = None, **_: Any) -> Any:
         if url.endswith("/api/tags"):
-            return {"models": []}
+            return TAGS_RESPONSE
         if "하위 문서" in payload["prompt"]:
             return {"response": "JSON이 아닌 응답"}
         return {"response": json.dumps(SUMMARY_JSON, ensure_ascii=False)}

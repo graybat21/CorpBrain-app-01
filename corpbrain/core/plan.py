@@ -16,7 +16,7 @@ import subprocess
 from pathlib import Path
 
 from corpbrain.core.config import ScanConfig
-from corpbrain.core.models import HardwareInfo, PlanEntry, ScanPlan
+from corpbrain.core.models import GateVerdict, HardwareInfo, PlanEntry, ScanPlan
 from corpbrain.core.scanner import ScanFindings, safe_size, scan_folder, validated_root
 
 __all__ = ["detect_hardware", "plan_scan"]
@@ -83,14 +83,27 @@ def plan_scan(config: ScanConfig, *, findings: ScanFindings | None = None) -> Sc
             )
         )
 
-    total_est_tokens = sum(entry.est_tokens for entry in entries)
+    # 토큰 예산은 실제로 요약될 파일만 합산한다 — 곧 스킵될 대용량 파일이 예산을 헛되이
+    # 초과시키지 않게 함이다 (v0.3 스펙 §4.4). 대용량 파일은 표시용으로 별도 집계한다.
+    oversized_count = sum(1 for entry in entries if entry.size_bytes > config.max_file_size)
+    total_est_tokens = sum(
+        entry.est_tokens for entry in entries if entry.size_bytes <= config.max_file_size
+    )
     rate = GPU_RATE if hardware.gpu else CPU_RATE
+    gate = GateVerdict(
+        gpu_ok=hardware.gpu,
+        tokens_ok=total_est_tokens <= config.max_total_tokens,
+        oversized_count=oversized_count,
+        max_file_size=config.max_file_size,
+        max_total_tokens=config.max_total_tokens,
+    )
     return ScanPlan(
         entries=entries,
         file_count=len(entries),
         total_est_tokens=total_est_tokens,
         est_seconds=round(total_est_tokens / rate),
         hardware=hardware,
+        gate=gate,
     )
 
 

@@ -15,10 +15,13 @@ import pytest
 
 from corpbrain import cli
 from corpbrain.core import _progress, gateway, run_scan
-from corpbrain.core.config import ScanConfig
+from corpbrain.core.config import DEFAULT_MODEL, ScanConfig
 from corpbrain.core.render import FRONT_MATTER_KEYS, SECTION_HEADERS
 
 FIXTURE_CORPUS = Path(__file__).resolve().parents[1] / "fixtures" / "sample_corpus"
+
+#: 구동 중이며 대상 모델이 설치된 Ollama의 `/api/tags` 정상 응답 (v0.3 모델 선점검 통과용).
+TAGS_RESPONSE = {"models": [{"name": DEFAULT_MODEL}]}
 
 SUMMARY_JSON = {
     "title": "통합 테스트 제목",
@@ -49,13 +52,15 @@ def corpus(tmp_path: Path) -> Path:
 def _ok_gateway(monkeypatch: pytest.MonkeyPatch) -> None:
     def _request_json(url: str, *, method: str = "GET", payload: Any = None, **_: Any) -> Any:
         if url.endswith("/api/tags"):
-            return {"models": []}
+            return TAGS_RESPONSE
         return {"response": json.dumps(SUMMARY_JSON, ensure_ascii=False)}
 
     monkeypatch.setattr(gateway, "request_json", _request_json)
 
 
 def _config(corpus: Path, out_dir: Path, **overrides: Any) -> ScanConfig:
+    # 처리 경로 검증이 목적이므로 자원 게이트는 기본 우회한다(v0.3 GPU 무조건 차단은 별도 테스트).
+    overrides.setdefault("force_gates", True)
     return ScanConfig(folder=corpus, out_dir=out_dir, **overrides)
 
 
@@ -144,7 +149,7 @@ def test_partial_failure_exits_zero_via_cli(
     _ok_gateway(monkeypatch)
     out_dir = tmp_path / "wiki"
 
-    code = cli.main(["scan", str(corpus), "--out", str(out_dir)])
+    code = cli.main(["scan", str(corpus), "--out", str(out_dir), "--force-gates"])
 
     assert code == cli.EXIT_OK
 
@@ -172,7 +177,7 @@ def test_broken_json_skips_only_that_file(
 
     def _request_json(url: str, *, method: str = "GET", payload: Any = None, **_: Any) -> Any:
         if url.endswith("/api/tags"):
-            return {"models": []}
+            return TAGS_RESPONSE
         if payload is not None and "마크다운 제목" in payload["prompt"]:
             return {"response": "이건 JSON이 아님"}
         return {"response": json.dumps(SUMMARY_JSON, ensure_ascii=False)}
@@ -258,7 +263,7 @@ def test_cli_emits_live_progress_to_stderr_only(
     """스펙 완료의 정의 5: 라이브 라인은 stderr로만 나가고 stdout은 빈다."""
     _ok_gateway(monkeypatch)
 
-    code = cli.main(["scan", str(corpus), "--out", str(tmp_path / "wiki")])
+    code = cli.main(["scan", str(corpus), "--out", str(tmp_path / "wiki"), "--force-gates"])
 
     captured = capsys.readouterr()
     assert code == cli.EXIT_OK
