@@ -10,3 +10,7 @@
 ## 엔트리 (append only)
 - [MINOR] D-001 | U3 | agent:orchestrator | 2026-08-13T00:00:00+09:00 | nvidia-smi HW 감지는 `nvidia-smi --query-gpu=name --format=csv,noheader`로 이름 1줄을 얻고 타임아웃 2.0초로 호출(부재/실패/타임아웃=CPU) | 근거: 스펙 §4.2는 "짧은 타임아웃"으로만 명시해 구체 쿼리 플래그·타임아웃 값을 확정해야 함
 - [MINOR] D-002 | U5 | agent:orchestrator | 2026-08-13T00:00:00+09:00 | CLI main 시작에서 sys.stdout/stderr를 UTF-8로 reconfigure (재구성 불가 스트림은 건너뜀) | 근거: 스펙 §4.3 출력 언어 한국어 + 리포트 문구 "…외 M건"(U+2026)·"—"가 Windows cp949 콘솔에서 UnicodeEncodeError 크래시하므로 UTF-8 강제 필요
+
+STOP REASON: ALL_UNITS_DONE
+완료 단위: U2(값타입) · U1(PDF 추출) · U3(plan_scan) · U4(리포트·배너) · U5(CLI plan/dry-run/배너) · U6(PDF 통합·plan 소켓)
+NEXT: (없음 — v0.2 완료; 후속은 v0.3 로드맵)
