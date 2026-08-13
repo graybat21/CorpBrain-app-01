@@ -11,3 +11,7 @@ CORE: 0
 MINOR: 0
 
 ## 엔트리 (append only)
+
+STOP REASON: RELEASE_READY
+완료: spec-check 9/9 · ruff clean · pytest 275 passed · 버전 0.3.0 · 실모델 스모크 위키 1개 생성 · PR #27 ready(36ebdfb).
+NEXT(사용자 확인, 루프 밖): main merge → git tag v0.3.0 → GitHub Release(노트 BREAKING 명시).
