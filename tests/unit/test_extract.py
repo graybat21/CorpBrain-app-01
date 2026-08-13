@@ -16,6 +16,13 @@ MAX_CHARS = 12000
 #: 완료의 정의(스펙 §3)가 요구하는 픽스처 코퍼스 — 통합테스트(FR-018)도 같은 폴더를 쓴다.
 FIXTURE_CORPUS = Path(__file__).resolve().parents[1] / "fixtures" / "sample_corpus"
 
+#: 권한 거부 재현은 POSIX 권한 비트가 적용되는 비-root 환경에서만 가능하다. `os.geteuid`는
+#: POSIX 전용이므로 단락 평가로 Windows 수집 크래시를 피한다 (test_scanner.py와 동일 관용구).
+needs_posix_permissions = pytest.mark.skipif(
+    os.name != "posix" or os.geteuid() == 0,
+    reason="POSIX 권한 비트가 적용되는 비-root 환경에서만 권한 거부를 재현할 수 있다",
+)
+
 
 def _write_docx(path: Path, paragraphs: list[str]) -> None:
     document = Document()
@@ -72,7 +79,7 @@ def test_unsupported_extension_raises_extraction_error(tmp_path: Path) -> None:
         extract_text(source, MAX_CHARS)
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason="root는 권한 거부를 재현할 수 없다")
+@needs_posix_permissions
 def test_permission_denied_is_reported_as_extraction_error(tmp_path: Path) -> None:
     source = tmp_path / "secret.txt"
     source.write_text("내용", encoding="utf-8")
@@ -165,7 +172,7 @@ def test_corrupted_docx_is_skipped_as_extraction_failed(tmp_path: Path) -> None:
     assert prepared.skipped.detail
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason="root는 권한 거부를 재현할 수 없다")
+@needs_posix_permissions
 def test_unreadable_document_is_skipped_as_permission_denied(tmp_path: Path) -> None:
     source = tmp_path / "locked.txt"
     source.write_text("내용", encoding="utf-8")

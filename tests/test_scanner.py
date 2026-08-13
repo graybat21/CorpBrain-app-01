@@ -11,7 +11,7 @@ from stat import S_IMODE
 
 import pytest
 
-from corpbrain.core import config
+from corpbrain.core import config, scanner
 from corpbrain.core.models import SkipReason
 from corpbrain.core.scanner import (
     MAX_PATH_LENGTH,
@@ -316,36 +316,53 @@ def test_scan_folder_limit_is_not_raised_as_exception(tmp_path: Path) -> None:
 # --- Scenario 2: 긴 경로 / 권한 거부 / 미지원은 스킵+로그로 계속 처리 --------------
 
 
-def test_scan_folder_classifies_long_paths_as_skipped(tmp_path: Path) -> None:
-    """경로 길이 >260자는 사유 `path_too_long`으로 스킵한다."""
-    long_path = _make_file_of_path_length(tmp_path, MAX_PATH_LENGTH + 1)
+def test_scan_folder_classifies_long_paths_as_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """경로 길이가 상한을 넘으면 사유 `path_too_long`으로 스킵한다.
+
+    실제 >260자 경로는 Windows 기본 MAX_PATH에서 생성할 수 없으므로, 상한을 대상 파일
+    경로 길이보다 한 글자 낮춰 '초과' 상황을 결정적·크로스플랫폼으로 재현한다.
+    (상한값 260 자체는 test_max_path_length_is_the_shared_core_constant가 검증한다.)
+    """
+    target = tmp_path / "over.md"
+    target.write_text("edge", encoding="utf-8")
+    monkeypatch.setattr(scanner, "MAX_PATH_LENGTH", len(str(target.resolve())) - 1)
 
     findings = scan_folder(tmp_path)
 
     assert findings.targets == []
     assert [(item.path, item.reason) for item in findings.skipped] == [
-        (long_path, SkipReason.PATH_TOO_LONG)
+        (target.resolve(), SkipReason.PATH_TOO_LONG)
     ]
 
 
-def test_long_path_check_precedes_extension_check(tmp_path: Path) -> None:
-    """긴 경로면 확장자와 무관하게 `path_too_long`으로 분류한다."""
-    long_path = _make_file_of_path_length(tmp_path, MAX_PATH_LENGTH + 1, suffix=".pdf")
+def test_long_path_check_precedes_extension_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """긴 경로면 확장자와 무관하게 `path_too_long`으로 분류한다(미지원 확장자보다 우선)."""
+    target = tmp_path / "over.pdf"
+    target.write_bytes(b"%PDF-1.4")
+    monkeypatch.setattr(scanner, "MAX_PATH_LENGTH", len(str(target.resolve())) - 1)
 
     findings = scan_folder(tmp_path)
 
     assert [(item.path, item.reason) for item in findings.skipped] == [
-        (long_path, SkipReason.PATH_TOO_LONG)
+        (target.resolve(), SkipReason.PATH_TOO_LONG)
     ]
 
 
-def test_scan_folder_accepts_paths_at_the_length_boundary(tmp_path: Path) -> None:
-    """정확히 260자인 경로는 상한 이내이므로 처리 대상이다."""
-    boundary = _make_file_of_path_length(tmp_path, MAX_PATH_LENGTH)
+def test_scan_folder_accepts_paths_at_the_length_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """경로 길이가 정확히 상한과 같으면 초과가 아니므로 처리 대상이다."""
+    target = tmp_path / "boundary.md"
+    target.write_text("edge", encoding="utf-8")
+    monkeypatch.setattr(scanner, "MAX_PATH_LENGTH", len(str(target.resolve())))
 
     findings = scan_folder(tmp_path)
 
-    assert findings.targets == [boundary]
+    assert findings.targets == [target.resolve()]
     assert findings.skipped == []
 
 
