@@ -61,3 +61,46 @@ class ScanResult:
     limit_exceeded: bool = False
     #: 상한 판정에 사용된 발견 파일 수.
     discovered_count: int = 0
+
+
+@dataclass(frozen=True)
+class PlanEntry:
+    """pre-scan 계량의 파일 1건 (스펙 §4.2).
+
+    파일 **내용을 읽지 않고** 경로·확장자·크기(stat)만으로 산출한다.
+    """
+
+    path: Path
+    ext: str
+    size_bytes: int
+    #: `size_bytes`와 확장자만으로 결정적으로 근사한 예상 토큰 수.
+    est_tokens: int
+    #: 경로·이름·확장자·트리 깊이만으로 매긴 0~100 결정적 중요도 점수.
+    importance: int
+
+
+@dataclass(frozen=True)
+class HardwareInfo:
+    """예상 처리율 판정에 쓰는 감지 하드웨어 (스펙 §4.2).
+
+    NVIDIA GPU 감지 성공 시 `gpu=True`와 이름 라벨, 그 외에는 `gpu=False`·`"CPU"`.
+    """
+
+    gpu: bool
+    label: str
+
+
+@dataclass(frozen=True)
+class ScanPlan:
+    """pre-scan 계량 결과 (순수 값) — LLM·네트워크 없이 산출한다 (스펙 §4.2).
+
+    본격 스캔 전에 폴더를 값싸게 훑어 "무엇이 중요하고 얼마나 걸릴지"를 먼저 보여 준다.
+    """
+
+    #: 파일별 계량. 중요도 정렬은 리포트 렌더러가 담당하고 여기서는 발견 순서를 유지한다.
+    entries: list[PlanEntry]
+    file_count: int
+    total_est_tokens: int
+    #: `total_est_tokens ÷ 감지 하드웨어 정적 처리율`의 근사 예상 소요초.
+    est_seconds: int
+    hardware: HardwareInfo

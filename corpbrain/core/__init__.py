@@ -35,6 +35,9 @@ from corpbrain.core.config import (
 from corpbrain.core.errors import CorpBrainError, PreconditionError
 from corpbrain.core.models import (
     GeneratedWiki,
+    HardwareInfo,
+    PlanEntry,
+    ScanPlan,
     ScanResult,
     SkippedFile,
     SkipReason,
@@ -52,8 +55,11 @@ __all__ = [
     "SUPPORTED_EXTENSIONS",
     "CorpBrainError",
     "GeneratedWiki",
+    "HardwareInfo",
+    "PlanEntry",
     "PreconditionError",
     "ScanConfig",
+    "ScanPlan",
     "ScanResult",
     "SkipReason",
     "SkippedFile",
