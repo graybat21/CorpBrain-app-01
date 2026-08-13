@@ -44,6 +44,7 @@ from corpbrain.core.models import (
     SummaryResult,
 )
 from corpbrain.core.pipeline import run_scan
+from corpbrain.core.plan import plan_scan
 
 __all__ = [
     "DEFAULT_MAX_CHARS",
@@ -64,5 +65,6 @@ __all__ = [
     "SkipReason",
     "SkippedFile",
     "SummaryResult",
+    "plan_scan",
     "run_scan",
 ]
