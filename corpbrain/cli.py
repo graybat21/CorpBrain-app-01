@@ -24,22 +24,25 @@ from corpbrain.core._progress import (
     reduce,
     render_status_line,
 )
-from corpbrain.core.errors import PreconditionError
+from corpbrain.core.errors import PreconditionError, TokenBudgetExceededError
 from corpbrain.core.report import (
     build_detail_lines,
+    build_doctor_lines,
     build_plan_report_lines,
     build_scan_banner_lines,
     build_summary_lines,
 )
 from corpbrain.core.scanner import (
     ScanFindings,
-    enforce_limit,
     scan_folder,
     validated_root,
 )
 
 #: `--model`을 대신 지정할 수 있는 환경변수 (스펙 §4.1).
 MODEL_ENV_VAR = "CORPBRAIN_MODEL"
+
+#: `--max-file-size`는 MB 단위 입력이며 코어는 바이트로 저장한다 (v0.3 스펙 §4.1·§4.4).
+BYTES_PER_MB = 1_000_000
 
 #: 종료 코드 (스펙 §3-5, §5 — 부분 실패는 0, 선행 조건 실패는 비-0).
 EXIT_OK = 0
@@ -144,6 +147,34 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="문서를 처리하지 않고 plan과 동일한 pre-scan 리포트만 stdout으로 낸다 (위키 0개).",
     )
+    scan.add_argument(
+        "--force-gates",
+        dest="force_gates",
+        action="store_true",
+        help="차단 게이트(GPU·토큰)를 무시하고 강행한다 (file_too_large 스킵에는 영향 없음).",
+    )
+    scan.add_argument(
+        "--max-file-size",
+        dest="max_file_size_mb",
+        type=int,
+        default=core.DEFAULT_MAX_FILE_SIZE // BYTES_PER_MB,
+        metavar="MB",
+        help=(
+            f"개별 파일 크기 상한(MB); 초과 파일은 file_too_large로 스킵한다 "
+            f"(기본 {core.DEFAULT_MAX_FILE_SIZE // BYTES_PER_MB})."
+        ),
+    )
+    scan.add_argument(
+        "--max-total-tokens",
+        dest="max_total_tokens",
+        type=int,
+        default=core.DEFAULT_MAX_TOTAL_TOKENS,
+        metavar="N",
+        help=(
+            f"스캔 전체 예상 토큰 예산; 초과 시 차단한다 "
+            f"(기본 {core.DEFAULT_MAX_TOTAL_TOKENS})."
+        ),
+    )
 
     plan = subparsers.add_parser(
         "plan",
@@ -166,6 +197,50 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="N",
         help=f"예상 토큰 추정의 문서당 상한 글자 수 (기본 {core.DEFAULT_MAX_CHARS}).",
     )
+    plan.add_argument(
+        "--max-file-size",
+        dest="max_file_size_mb",
+        type=int,
+        default=core.DEFAULT_MAX_FILE_SIZE // BYTES_PER_MB,
+        metavar="MB",
+        help=(
+            f"게이트 판정 표시용 개별 파일 크기 상한(MB) "
+            f"(기본 {core.DEFAULT_MAX_FILE_SIZE // BYTES_PER_MB}). plan은 차단하지 않는다."
+        ),
+    )
+    plan.add_argument(
+        "--max-total-tokens",
+        dest="max_total_tokens",
+        type=int,
+        default=core.DEFAULT_MAX_TOTAL_TOKENS,
+        metavar="N",
+        help=(
+            f"게이트 판정 표시용 토큰 예산 (기본 {core.DEFAULT_MAX_TOTAL_TOKENS}). "
+            f"plan은 차단하지 않는다."
+        ),
+    )
+
+    doctor = subparsers.add_parser(
+        "doctor",
+        help="환경 준비 상태(Ollama 설치/구동/모델·GPU·게이트 임계)를 점검한다.",
+    )
+    doctor.add_argument(
+        "--model",
+        dest="model",
+        default=None,
+        metavar="NAME",
+        help=(
+            f"점검할 대상 모델 (기본 {core.DEFAULT_MODEL}). "
+            f"환경변수 {MODEL_ENV_VAR}로도 지정할 수 있다."
+        ),
+    )
+    doctor.add_argument(
+        "--ollama-url",
+        dest="ollama_url",
+        default=core.DEFAULT_OLLAMA_URL,
+        metavar="URL",
+        help=f"로컬 Ollama 주소 (기본 {core.DEFAULT_OLLAMA_URL}).",
+    )
     return parser
 
 
@@ -179,6 +254,9 @@ def build_config(args: argparse.Namespace) -> core.ScanConfig:
         max_chars=args.max_chars,
         ollama_url=args.ollama_url,
         force=args.force,
+        max_file_size=args.max_file_size_mb * BYTES_PER_MB,
+        max_total_tokens=args.max_total_tokens,
+        force_gates=args.force_gates,
     )
 
 
@@ -197,6 +275,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "plan":
         return _run_plan(args)
+    if args.command == "doctor":
+        return _run_doctor(args)
     return _run_scan(args)
 
 
@@ -223,11 +303,15 @@ def _run_scan(args: argparse.Namespace) -> int:
         return _emit_plan_report(config)
 
     _log(f"스캔 시작: {config.folder} → {config.out_dir} (모델 {config.model})")
-    findings = _emit_scan_banner(config)
+    banner = _emit_scan_banner(config)
+    findings, plan = banner if banner is not None else (None, None)
 
     progress = _StderrProgress(sys.stderr)
     try:
-        result = core.run_scan(config, on_event=progress, findings=findings)
+        result = core.run_scan(config, on_event=progress, findings=findings, plan=plan)
+    except TokenBudgetExceededError as exc:
+        _log(f"자원 게이트 차단: {exc}")
+        return EXIT_LIMIT_EXCEEDED
     except PreconditionError as exc:
         _log(f"선행 조건 실패: {exc}")
         return EXIT_PRECONDITION_FAILED
@@ -245,9 +329,25 @@ def _run_scan(args: argparse.Namespace) -> int:
 def _run_plan(args: argparse.Namespace) -> int:
     """`plan` — pre-scan 계량 리포트를 stdout으로 낸다 (LLM·네트워크 0, 스펙 §4.3)."""
     config = core.ScanConfig(
-        folder=args.folder, max_files=args.max_files, max_chars=args.max_chars
+        folder=args.folder,
+        max_files=args.max_files,
+        max_chars=args.max_chars,
+        max_file_size=args.max_file_size_mb * BYTES_PER_MB,
+        max_total_tokens=args.max_total_tokens,
     )
     return _emit_plan_report(config)
+
+
+def _run_doctor(args: argparse.Namespace) -> int:
+    """`doctor` — 환경 준비 상태를 stdout 체크리스트로 낸다 (v0.3 스펙 §4.3).
+
+    필수 조건(Ollama 설치·구동·대상 모델)이 미충족이면 비-0(1), 준비되면 0. GPU 없음은
+    경고로 표시하되 종료 코드에 영향을 주지 않는다. 전 항목을 점검(fail-fast 아님)한다.
+    """
+    report = core.diagnose(model=_resolve_model(args.model), ollama_url=args.ollama_url)
+    for line in build_doctor_lines(report):
+        print(line)
+    return EXIT_OK if report.ready else EXIT_PRECONDITION_FAILED
 
 
 def _emit_plan_report(config: core.ScanConfig) -> int:
@@ -262,12 +362,15 @@ def _emit_plan_report(config: core.ScanConfig) -> int:
     return EXIT_OK
 
 
-def _emit_scan_banner(config: core.ScanConfig) -> ScanFindings | None:
-    """scan 시작 배너를 stderr로 내고, run_scan이 재사용할 findings를 돌려준다.
+def _emit_scan_banner(
+    config: core.ScanConfig,
+) -> tuple[ScanFindings, core.ScanPlan] | None:
+    """scan 시작 배너를 stderr로 내고, run_scan이 재사용할 (findings, plan)을 돌려준다.
 
-    디렉터리 워크를 한 번만 하도록, 배너용 pre-scan이 훑은 결과에 `--max` 상한만 적용해
-    돌려준다(본 스캔이 이를 그대로 쓴다). best-effort다 — 선행 조건 실패면 배너를 생략하고
-    `None`을 돌려주며, 그러면 `run_scan`이 직접 순회하며 종료 코드를 권위 있게 판정한다.
+    디렉터리 워크와 하드웨어 감지를 한 번만 하도록, 배너용 pre-scan이 훑은 발견 집합(절단 전)과
+    그 `ScanPlan`을 함께 돌려준다 — `run_scan`이 findings로 상한을 적용하고 plan으로 게이트를
+    판정하므로 `plan_scan`을 두 번 돌리지 않는다. best-effort다 — 선행 조건 실패면 배너를
+    생략하고 `None`을 돌려주며, 그러면 `run_scan`이 직접 순회하며 종료 코드를 권위 있게 판정한다.
     """
     try:
         root = validated_root(config.folder)
@@ -277,7 +380,8 @@ def _emit_scan_banner(config: core.ScanConfig) -> ScanFindings | None:
         return None
     for line in build_scan_banner_lines(plan):
         _log(line)
-    return enforce_limit(findings, config.max_files)
+    # 상한(`--max`) 절단은 run_scan이 게이트 판정 이후에 직접 적용한다 (v0.3 §4.2).
+    return findings, plan
 
 
 def _log(message: str) -> None:

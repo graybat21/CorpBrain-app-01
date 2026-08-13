@@ -20,6 +20,8 @@ class SkipReason(StrEnum):
     PATH_TOO_LONG = "path_too_long"
     SUMMARY_FAILED = "summary_failed"
     UP_TO_DATE = "up_to_date"
+    #: 개별 파일 크기가 `max_file_size`를 초과해 스킵 (v0.3 스펙 §4.2 파일 크기 게이트).
+    FILE_TOO_LARGE = "file_too_large"
 
 
 @dataclass(frozen=True)
@@ -91,6 +93,25 @@ class HardwareInfo:
 
 
 @dataclass(frozen=True)
+class GateVerdict:
+    """자원 게이트 판정 (순수 값) — plan_scan이 로컬로 계산한다 (v0.3 스펙 §4.2·§4.4).
+
+    `plan`/`doctor`는 이 값을 표시하고, `scan`은 이 값으로 차단 여부를 정한다. 임계값을
+    에코해 두어 리포트가 별도 조회 없이 "무엇 대비 초과인지"를 보여줄 수 있다.
+    """
+
+    #: GPU가 감지됐는가 (False면 GPU 게이트가 scan을 차단한다 — `--force-gates`로만 강행).
+    gpu_ok: bool
+    #: `total_est_tokens <= max_total_tokens` 인가 (False면 토큰 게이트가 scan을 차단, exit 3).
+    tokens_ok: bool
+    #: `size_bytes > max_file_size` 로 스킵될 예정인 파일 수(`file_too_large`).
+    oversized_count: int
+    #: 판정에 쓰인 유효 임계값 (에코).
+    max_file_size: int
+    max_total_tokens: int
+
+
+@dataclass(frozen=True)
 class ScanPlan:
     """pre-scan 계량 결과 (순수 값) — LLM·네트워크 없이 산출한다 (스펙 §4.2).
 
@@ -100,7 +121,10 @@ class ScanPlan:
     #: 파일별 계량. 중요도 정렬은 리포트 렌더러가 담당하고 여기서는 발견 순서를 유지한다.
     entries: list[PlanEntry]
     file_count: int
+    #: 요약될 파일(미지원·`file_too_large` 제외)의 예상 토큰 합계 (v0.3 §4.4).
     total_est_tokens: int
     #: `total_est_tokens ÷ 감지 하드웨어 정적 처리율`의 근사 예상 소요초.
     est_seconds: int
     hardware: HardwareInfo
+    #: 자원 게이트 판정 (v0.3). plan_scan이 항상 채운다. 직접 구성 시 생략하면 미평가(None).
+    gate: GateVerdict | None = None

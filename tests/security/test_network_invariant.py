@@ -15,7 +15,7 @@ from urllib.parse import urlsplit
 import pytest
 
 from corpbrain.core import gateway
-from corpbrain.core.config import ScanConfig
+from corpbrain.core.config import DEFAULT_MODEL, ScanConfig
 from corpbrain.core.llm.ollama_client import OllamaNotAvailableError, detect
 from corpbrain.core.pipeline import run_scan
 from corpbrain.core.plan import plan_scan
@@ -74,12 +74,12 @@ def test_pipeline_makes_no_non_localhost_connections(
 
     def _request_json(url: str, *, method: str = "GET", payload: Any = None, **_: Any) -> Any:
         if url.endswith("/api/tags"):
-            return {"models": []}
+            return {"models": [{"name": DEFAULT_MODEL}]}
         return {"response": json.dumps(SUMMARY_JSON, ensure_ascii=False)}
 
     monkeypatch.setattr(gateway, "request_json", _request_json)
 
-    run_scan(ScanConfig(folder=FIXTURE_CORPUS, out_dir=tmp_path / "wiki"))
+    run_scan(ScanConfig(folder=FIXTURE_CORPUS, out_dir=tmp_path / "wiki", force_gates=True))
 
     assert watch_sockets.offenders(LOCALHOST_HOSTS) == []
 

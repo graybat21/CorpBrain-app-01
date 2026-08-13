@@ -31,10 +31,10 @@ def test_core_public_api_is_importable_without_cli() -> None:
 def test_run_scan_takes_pure_config_value() -> None:
     """공개 진입점은 어댑터 타입이 아닌 순수 값(`ScanConfig`)을 받는다."""
     signature = inspect.signature(core.run_scan)
-    assert list(signature.parameters) == ["config", "on_event", "findings"]
+    assert list(signature.parameters) == ["config", "on_event", "findings", "plan"]
     assert signature.parameters["config"].annotation == "ScanConfig"
-    # 관측 콜백과 재사용 findings는 모두 키워드 전용 선택 인자다 — ScanConfig는 순수 값으로 유지한다.
-    for name in ("on_event", "findings"):
+    # 관측 콜백·재사용 findings·재사용 plan은 모두 키워드 전용 선택 인자다 — ScanConfig는 순수 값으로 유지한다.
+    for name in ("on_event", "findings", "plan"):
         assert signature.parameters[name].kind == inspect.Parameter.KEYWORD_ONLY
         assert signature.parameters[name].default is None
 

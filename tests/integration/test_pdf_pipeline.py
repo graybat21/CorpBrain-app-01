@@ -15,8 +15,11 @@ import pytest
 from pypdf import PdfReader, PdfWriter
 
 from corpbrain.core import gateway, run_scan
-from corpbrain.core.config import ScanConfig
+from corpbrain.core.config import DEFAULT_MODEL, ScanConfig
 from corpbrain.core.render import FRONT_MATTER_KEYS, SECTION_HEADERS
+
+#: 대상 모델이 설치된 정상 `/api/tags` 응답 (v0.3 모델 선점검 통과용).
+TAGS_RESPONSE = {"models": [{"name": DEFAULT_MODEL}]}
 
 SUMMARY_JSON = {
     "title": "PDF 통합 제목",
@@ -71,7 +74,7 @@ def _write_blank_pdf(path: Path) -> None:
 def _ok_gateway(monkeypatch: pytest.MonkeyPatch) -> None:
     def _request_json(url: str, *, method: str = "GET", payload: Any = None, **_: Any) -> Any:
         if url.endswith("/api/tags"):
-            return {"models": []}
+            return TAGS_RESPONSE
         return {"response": json.dumps(SUMMARY_JSON, ensure_ascii=False)}
 
     monkeypatch.setattr(gateway, "request_json", _request_json)
@@ -93,7 +96,7 @@ def test_text_pdf_generates_wiki(
     _write_text_pdf(corpus / "report.pdf", "CorpBrain PDF text layer sample.")
     out_dir = tmp_path / "wiki"
 
-    result = run_scan(ScanConfig(folder=corpus, out_dir=out_dir))
+    result = run_scan(ScanConfig(folder=corpus, out_dir=out_dir, force_gates=True))
 
     wiki = out_dir / "report.pdf.md"
     assert wiki.exists()
@@ -115,7 +118,7 @@ def test_encrypted_and_textless_pdf_are_skipped_with_reasons(
     _pdf_corpus(corpus)
     out_dir = tmp_path / "wiki"
 
-    result = run_scan(ScanConfig(folder=corpus, out_dir=out_dir))
+    result = run_scan(ScanConfig(folder=corpus, out_dir=out_dir, force_gates=True))
 
     skipped = {skip.path.name: skip for skip in result.skipped}
     assert skipped["locked.pdf"].reason.value == "extraction_failed"

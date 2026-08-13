@@ -6,7 +6,12 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from corpbrain.core.models import PlanEntry, ScanPlan, ScanResult, SkipReason
+
+if TYPE_CHECKING:
+    from corpbrain.core.environment import DoctorReport
 
 #: plan 리포트가 표시하는 중요도 상위 행 수 (스펙 §4.3, 튜닝 가능).
 PLAN_REPORT_TOP_N = 20
@@ -22,6 +27,7 @@ SKIP_REASON_LABELS: dict[SkipReason, str] = {
     SkipReason.PATH_TOO_LONG: "경로 길이 초과(>260자)",
     SkipReason.SUMMARY_FAILED: "LLM JSON 파싱 실패",
     SkipReason.UP_TO_DATE: "최신 상태(재생성 불필요)",
+    SkipReason.FILE_TOO_LARGE: "파일 크기 초과",
 }
 
 
@@ -106,6 +112,7 @@ def build_plan_report_lines(plan: ScanPlan, max_files: int) -> list[str]:
         f"예상 소요 약 {_format_seconds(plan.est_seconds)}"
     )
     lines.append(f"감지 하드웨어: {plan.hardware.label}")
+    lines += _gate_report_lines(plan)
     if plan.file_count > max_files:
         lines.append(
             f"경고: 발견 {plan.file_count}건이 --max({max_files})를 초과합니다 — "
@@ -114,11 +121,90 @@ def build_plan_report_lines(plan: ScanPlan, max_files: int) -> list[str]:
     return lines
 
 
+def _gate_report_lines(plan: ScanPlan) -> list[str]:
+    """자원 게이트 판정을 사람이 읽는 줄로 렌더한다 (v0.3 스펙 §4.3, 표시만 — 차단 아님)."""
+    gate = plan.gate
+    if gate is None:
+        return []
+    gpu = (
+        "OK (GPU 감지)"
+        if gate.gpu_ok
+        else "차단 (GPU 미탐지 — scan은 --force-gates 필요)"
+    )
+    tokens = (
+        "OK"
+        if gate.tokens_ok
+        else f"차단 (예산 {gate.max_total_tokens:,} 초과 — --force-gates 또는 --max-total-tokens)"
+    )
+    lines = [
+        "게이트:",
+        f"  - GPU: {gpu}",
+        f"  - 토큰: {plan.total_est_tokens:,} / 예산 {gate.max_total_tokens:,} — {tokens}",
+    ]
+    if gate.oversized_count > 0:
+        lines.append(
+            f"  - 대용량 스킵 예정: {gate.oversized_count}건 "
+            f"(>{gate.max_file_size:,} bytes, file_too_large)"
+        )
+    return lines
+
+
 def build_scan_banner_lines(plan: ScanPlan) -> list[str]:
-    """`scan` 시작 시 stderr에 낼 요약 배너 — 예상 파일수·예상시간 + 중요도 TOP 3 (스펙 §4.3)."""
+    """`scan` 시작 시 stderr에 낼 요약 배너 — 예상 파일수·예상시간 + 중요도 TOP 3 + 게이트 (스펙 §4.3)."""
     top = _ranked_entries(plan)[:SCAN_BANNER_TOP_N]
     top_names = ", ".join(entry.path.name for entry in top) if top else "(없음)"
-    return [
+    lines = [
         f"pre-scan: {plan.file_count}개 파일 · 예상 소요 약 {_format_seconds(plan.est_seconds)} (근사)",
         f"중요도 TOP {len(top)}: {top_names}",
     ]
+    gate = plan.gate
+    if gate is not None:
+        gpu = "GPU" if gate.gpu_ok else "CPU(차단)"
+        tok = "OK" if gate.tokens_ok else "예산초과"
+        summary = (
+            f"게이트: {gpu} · 토큰 {plan.total_est_tokens:,}/{gate.max_total_tokens:,} {tok}"
+        )
+        if gate.oversized_count > 0:
+            summary += f" · 대용량 {gate.oversized_count}건"
+        lines.append(summary)
+    return lines
+
+
+def build_doctor_lines(report: DoctorReport) -> list[str]:
+    """`doctor`가 stdout에 낼 한국어 체크리스트 — 실패 항목에 해결 명령을 함께 낸다 (v0.3 §4.3).
+
+    순서 = Ollama 설치 → 구동 → 대상 모델 → GPU → 게이트 임계값(정보) → 종합. GPU 없음은
+    경고일 뿐 종합 판정(`ready`)에 영향을 주지 않는다. 안내 문자열·URL은 평문 출력이다.
+    """
+    lines = ["CorpBrain doctor — 환경 점검"]
+
+    if report.installed:
+        lines.append("  [OK] Ollama 설치됨")
+    else:
+        lines.append("  [실패] Ollama 미설치 — https://ollama.com 에서 설치")
+
+    if report.running:
+        lines.append("  [OK] Ollama 데몬 구동 중")
+    else:
+        lines.append("  [실패] Ollama 데몬 미구동 — `ollama serve` 실행")
+
+    if report.model_present:
+        lines.append(f"  [OK] 모델 설치됨: {report.model}")
+    else:
+        lines.append(f"  [실패] 모델 없음: {report.model} — `ollama pull {report.model}`")
+
+    if report.hardware.gpu:
+        lines.append(f"  [OK] {report.hardware.label}")
+    else:
+        lines.append(f"  [경고] {report.hardware.label} — scan은 GPU 없이 --force-gates 필요")
+
+    lines.append(
+        f"  [정보] 게이트 임계: 파일 {report.max_file_size:,} bytes · "
+        f"총토큰 {report.max_total_tokens:,}"
+    )
+
+    if report.ready:
+        lines.append("준비 완료 — scan을 실행할 수 있습니다.")
+    else:
+        lines.append("준비 미완료 — 위 [실패] 항목을 해결한 뒤 다시 확인하세요.")
+    return lines

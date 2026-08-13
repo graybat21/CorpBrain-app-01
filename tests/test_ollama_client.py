@@ -162,7 +162,12 @@ def test_not_available_error_is_a_precondition_failure() -> None:
 
 
 def test_detect_never_attempts_installation_or_provisioning() -> None:
-    """스펙 §4.3: 탐지만 한다 — 프로세스 실행·설치 경로를 정적으로도 갖지 않는다."""
+    """스펙 §4.3: 탐지만 한다 — 프로세스 실행·설치 경로를 정적으로도 갖지 않는다.
+
+    v0.3에서 모델 부재 시 `ollama pull <model>`을 **안내**(문자열)하지만 직접 실행하지는
+    않는다. 실행 경로(subprocess/shutil/os import)를 정적으로 갖지 않음을 아래 import 검사로
+    보증한다(설치 감지 `shutil.which`는 별도 모듈 core/environment.py가 담당).
+    """
     forbidden = {"subprocess", "shutil", "os", "sys", "venv", "pip"}
     tree = ast.parse(Path(ollama_client.__file__).read_text(encoding="utf-8"))
 
@@ -174,5 +179,3 @@ def test_detect_never_attempts_installation_or_provisioning() -> None:
             imported.add(node.module.split(".")[0])
 
     assert imported & forbidden == set()
-    source = Path(ollama_client.__file__).read_text(encoding="utf-8")
-    assert "ollama pull" not in source
