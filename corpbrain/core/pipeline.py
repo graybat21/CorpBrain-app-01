@@ -82,6 +82,7 @@ def run_scan(
     *,
     on_event: EventSink | None = None,
     findings: ScanFindings | None = None,
+    plan: ScanPlan | None = None,
 ) -> ScanResult:
     """폴더를 스캔해 문서마다 위키 마크다운 1개를 생성하고 결과를 반환한다.
 
@@ -90,7 +91,13 @@ def run_scan(
         on_event: 진행 이벤트 콜백(선택). `None`이면 이벤트를 방출하지 않는다.
         findings: 이미 계산된 스캔 결과(선택). 주면 재귀 순회를 생략하고 그대로 쓴다 —
             어댑터가 pre-scan 배너와 본 스캔의 디렉터리 워크를 한 번으로 공유할 때 쓴다.
-            `None`(기본)이면 기존대로 직접 순회한다.
+            **반드시 상한(`--max`) 절단 이전의 발견 집합이어야 한다** — 자원 게이트를 이 위에서
+            판정하고 절단은 run_scan이 직접 적용하므로, 이미 절단된(`targets=[]`) findings를 주면
+            토큰·대용량 게이트가 빈 집합으로 계산돼 발동하지 않는다. `None`(기본)이면 직접 순회한다.
+        plan: 이미 계산된 `ScanPlan`(선택). 주면 게이트 판정에 재사용해 `plan_scan`(→ 하드웨어
+            감지·stat 패스)을 두 번 돌지 않는다. 위 `findings`·같은 `config`로 계산된 것이어야
+            한다 — findings와 파일 수가 어긋나면(절단·다른 스캔) 신뢰하지 않고 재계산해 오게이팅을
+            막는다. `None`이면 `findings`로 새로 계산한다.
 
     Returns:
         생성·스킵 목록을 담은 `ScanResult`. 개별 파일 실패는 스킵으로 담고 예외로 올리지 않는다.
@@ -105,9 +112,13 @@ def run_scan(
     detect(config.ollama_url, model=config.model)
 
     # 게이트 판정은 상한(`--max`) 절단 이전의 발견 집합으로 계산한다(플랜은 순수·로컬).
+    # 어댑터가 배너용으로 이미 계산한 plan을 넘기면 재사용해 하드웨어 감지·stat 패스를 아끼는다.
     if findings is None:
         findings = scan_folder(root, max_files=None)
-    plan = plan_scan(config, findings=findings)
+    if plan is None or plan.file_count != len(findings.targets):
+        # 넘어온 plan이 이 findings와 불일치(절단·다른 스캔)면 신뢰하지 않고 재계산해
+        # 오게이팅(막아야 할 스캔이 통과하거나 그 반대)을 막는다.
+        plan = plan_scan(config, findings=findings)
     _enforce_gates(config, plan)
 
     findings = enforce_limit(findings, config.max_files)
@@ -234,7 +245,7 @@ def _process_one(
         summary,
         source_path=path_str,
         model=config.model,
-        source_bytes=safe_size(source_path),
+        source_bytes=size_bytes,
         generated_at=datetime.now().astimezone().isoformat(),
     )
 

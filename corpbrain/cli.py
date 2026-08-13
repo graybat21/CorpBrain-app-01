@@ -303,11 +303,12 @@ def _run_scan(args: argparse.Namespace) -> int:
         return _emit_plan_report(config)
 
     _log(f"스캔 시작: {config.folder} → {config.out_dir} (모델 {config.model})")
-    findings = _emit_scan_banner(config)
+    banner = _emit_scan_banner(config)
+    findings, plan = banner if banner is not None else (None, None)
 
     progress = _StderrProgress(sys.stderr)
     try:
-        result = core.run_scan(config, on_event=progress, findings=findings)
+        result = core.run_scan(config, on_event=progress, findings=findings, plan=plan)
     except TokenBudgetExceededError as exc:
         _log(f"자원 게이트 차단: {exc}")
         return EXIT_LIMIT_EXCEEDED
@@ -343,9 +344,7 @@ def _run_doctor(args: argparse.Namespace) -> int:
     필수 조건(Ollama 설치·구동·대상 모델)이 미충족이면 비-0(1), 준비되면 0. GPU 없음은
     경고로 표시하되 종료 코드에 영향을 주지 않는다. 전 항목을 점검(fail-fast 아님)한다.
     """
-    from corpbrain.core.environment import diagnose
-
-    report = diagnose(model=_resolve_model(args.model), ollama_url=args.ollama_url)
+    report = core.diagnose(model=_resolve_model(args.model), ollama_url=args.ollama_url)
     for line in build_doctor_lines(report):
         print(line)
     return EXIT_OK if report.ready else EXIT_PRECONDITION_FAILED
@@ -363,12 +362,15 @@ def _emit_plan_report(config: core.ScanConfig) -> int:
     return EXIT_OK
 
 
-def _emit_scan_banner(config: core.ScanConfig) -> ScanFindings | None:
-    """scan 시작 배너를 stderr로 내고, run_scan이 재사용할 findings를 돌려준다.
+def _emit_scan_banner(
+    config: core.ScanConfig,
+) -> tuple[ScanFindings, core.ScanPlan] | None:
+    """scan 시작 배너를 stderr로 내고, run_scan이 재사용할 (findings, plan)을 돌려준다.
 
-    디렉터리 워크를 한 번만 하도록, 배너용 pre-scan이 훑은 결과에 `--max` 상한만 적용해
-    돌려준다(본 스캔이 이를 그대로 쓴다). best-effort다 — 선행 조건 실패면 배너를 생략하고
-    `None`을 돌려주며, 그러면 `run_scan`이 직접 순회하며 종료 코드를 권위 있게 판정한다.
+    디렉터리 워크와 하드웨어 감지를 한 번만 하도록, 배너용 pre-scan이 훑은 발견 집합(절단 전)과
+    그 `ScanPlan`을 함께 돌려준다 — `run_scan`이 findings로 상한을 적용하고 plan으로 게이트를
+    판정하므로 `plan_scan`을 두 번 돌리지 않는다. best-effort다 — 선행 조건 실패면 배너를
+    생략하고 `None`을 돌려주며, 그러면 `run_scan`이 직접 순회하며 종료 코드를 권위 있게 판정한다.
     """
     try:
         root = validated_root(config.folder)
@@ -379,7 +381,7 @@ def _emit_scan_banner(config: core.ScanConfig) -> ScanFindings | None:
     for line in build_scan_banner_lines(plan):
         _log(line)
     # 상한(`--max`) 절단은 run_scan이 게이트 판정 이후에 직접 적용한다 (v0.3 §4.2).
-    return findings
+    return findings, plan
 
 
 def _log(message: str) -> None:
