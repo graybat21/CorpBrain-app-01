@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from corpbrain.core import gateway
+from corpbrain.core import gateway, pipeline, scanner
 from corpbrain.core.config import ScanConfig
 from corpbrain.core.errors import PreconditionError
 from corpbrain.core.models import SkipReason
@@ -76,6 +76,26 @@ def test_mixed_folder_is_partially_processed(
     assert reasons["photo.jpg"] == SkipReason.UNSUPPORTED_EXTENSION
     assert not (out_dir / "empty.txt.md").exists()
     assert not (out_dir / "photo.jpg.md").exists()
+
+
+def test_run_scan_reuses_given_findings_without_rewalking(
+    corpus: Path, tmp_path: Path, stub_ollama: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """findings를 주면 run_scan은 디렉터리를 다시 순회하지 않고 그대로 쓴다 (배너와 워크 공유).
+
+    어댑터가 pre-scan 배너용으로 한 번 훑은 결과를 그대로 넘겨 이중 워크를 없애는 경로다.
+    """
+    prewalked = scanner.scan_folder(corpus, max_files=50)
+
+    def _no_walk(*args: object, **kwargs: object) -> object:
+        raise AssertionError("findings를 받고도 run_scan이 다시 순회했다")
+
+    monkeypatch.setattr(pipeline, "scan_folder", _no_walk)
+
+    result = run_scan(_config(corpus, tmp_path / "wiki"), findings=prewalked)
+
+    generated = {wiki.source_path.name for wiki in result.generated}
+    assert generated == {"normal.txt", "nested.md"}  # 주입한 findings를 그대로 처리
 
 
 def test_generated_wiki_contains_required_sections(

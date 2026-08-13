@@ -27,15 +27,19 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from corpbrain.core.config import MAX_PATH_LENGTH, SUPPORTED_EXTENSIONS
+from corpbrain.core.errors import PreconditionError
 from corpbrain.core.models import SkippedFile, SkipReason
 
 __all__ = [
     "MAX_PATH_LENGTH",
     "SUPPORTED_EXTENSIONS",
     "ScanFindings",
+    "enforce_limit",
     "is_supported",
     "iter_files",
+    "safe_size",
     "scan_folder",
+    "validated_root",
 ]
 
 #: 디렉터리 자체를 열지 못해 하위를 순회하지 못했음을 스킵 리포트에 남기는 설명.
@@ -135,17 +139,26 @@ def scan_folder(root: Path, max_files: int | None = None) -> ScanFindings:
         else:
             skipped.append(SkippedFile(path=path, reason=reason))
 
-    discovered_count = len(targets)
-    if max_files is not None and discovered_count > max_files:
+    unlimited = ScanFindings(
+        targets=targets, skipped=skipped, discovered_count=len(targets)
+    )
+    return enforce_limit(unlimited, max_files)
+
+
+def enforce_limit(findings: ScanFindings, max_files: int | None) -> ScanFindings:
+    """상한 초과면 처리 대상을 비우고 `limit_exceeded`로 표시한다 (순수 함수, 스펙 §3-4).
+
+    `scan_folder(max_files=None)`로 한 번 훑은 결과를 어댑터가 재사용해 상한만 다르게 적용할
+    수 있도록 분리했다(pre-scan 배너와 본 스캔이 워크를 공유). `max_files`가 `None`이면 그대로.
+    """
+    if max_files is not None and findings.discovered_count > max_files:
         return ScanFindings(
             targets=[],
-            skipped=skipped,
+            skipped=findings.skipped,
             limit_exceeded=True,
-            discovered_count=discovered_count,
+            discovered_count=findings.discovered_count,
         )
-    return ScanFindings(
-        targets=targets, skipped=skipped, discovered_count=discovered_count
-    )
+    return findings
 
 
 def _skip_reason(path: Path) -> SkipReason | None:
@@ -165,3 +178,30 @@ def _is_readable(path: Path) -> bool:
         return os.access(path, os.R_OK)
     except OSError:
         return False
+
+
+def validated_root(folder: Path) -> Path:
+    """입력 폴더가 접근 가능한 디렉터리인지 확인하고 정규화한다 (스펙 §5 선행 조건).
+
+    `scan`(pipeline)과 `plan`이 "유효 입력 폴더" 판정을 한 곳에서 공유하도록 여기 둔다 —
+    두 곳이 서로 다른 규칙으로 드리프트하지 않게 한다.
+    """
+    try:
+        root = folder.resolve()
+        if not root.is_dir():
+            raise PreconditionError(f"입력 폴더가 없거나 디렉터리가 아닙니다: {folder}")
+    except OSError as exc:
+        raise PreconditionError(f"입력 폴더에 접근할 수 없습니다: {folder} ({exc})") from exc
+    return root
+
+
+def safe_size(path: Path) -> int:
+    """파일 바이트 크기 — `os.stat` 실패(삭제·격리·연결 끊김 등) 시 0을 돌려준다.
+
+    `stat`은 실패할 수 있으므로(스캔 통과와 크기 조회 사이의 TOCTOU 포함) 개별 파일의 stat
+    실패가 전체 실행을 중단시키지 않도록 흡수한다(스펙 §5 — 부분 실패는 전체 실패가 아니다).
+    """
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0

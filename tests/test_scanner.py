@@ -12,14 +12,18 @@ from stat import S_IMODE
 import pytest
 
 from corpbrain.core import config, scanner
-from corpbrain.core.models import SkipReason
+from corpbrain.core.errors import PreconditionError
+from corpbrain.core.models import SkippedFile, SkipReason
 from corpbrain.core.scanner import (
     MAX_PATH_LENGTH,
     SUPPORTED_EXTENSIONS,
     ScanFindings,
+    enforce_limit,
     is_supported,
     iter_files,
+    safe_size,
     scan_folder,
+    validated_root,
 )
 
 #: 권한 거부 재현은 POSIX 권한 비트가 실제로 적용될 때만 가능하다 (root는 우회한다).
@@ -465,3 +469,53 @@ def test_max_path_length_is_the_shared_core_constant() -> None:
     """경로 길이 상한도 새로 만들지 않고 코어 설정(스펙 §5)을 그대로 쓴다."""
     assert MAX_PATH_LENGTH is config.MAX_PATH_LENGTH
     assert MAX_PATH_LENGTH == 260
+
+
+# === 공유 선행조건·크기·상한 헬퍼 (scan/plan 공용, 스펙 §5) =======================
+
+
+def test_validated_root_resolves_existing_dir(tmp_path: Path) -> None:
+    assert validated_root(tmp_path) == tmp_path.resolve()
+
+
+def test_validated_root_raises_on_missing_folder(tmp_path: Path) -> None:
+    with pytest.raises(PreconditionError):
+        validated_root(tmp_path / "no_such_dir")
+
+
+def test_validated_root_raises_on_a_file(tmp_path: Path) -> None:
+    target = tmp_path / "a.txt"
+    target.write_text("x", encoding="utf-8")
+    with pytest.raises(PreconditionError):
+        validated_root(target)
+
+
+def test_safe_size_returns_byte_size(tmp_path: Path) -> None:
+    target = tmp_path / "a.txt"
+    target.write_text("hello", encoding="utf-8")
+    assert safe_size(target) == 5
+
+
+def test_safe_size_absorbs_stat_failure_as_zero(tmp_path: Path) -> None:
+    """없는·stat 불가 파일은 예외 대신 0 (개별 실패가 전체를 죽이지 않는다)."""
+    assert safe_size(tmp_path / "missing.txt") == 0
+
+
+def test_enforce_limit_passes_through_within_limit() -> None:
+    findings = ScanFindings(targets=[Path("a.txt")], skipped=[], discovered_count=1)
+    assert enforce_limit(findings, 5) is findings
+    assert enforce_limit(findings, None) is findings
+
+
+def test_enforce_limit_clears_targets_when_exceeded() -> None:
+    skipped = [SkippedFile(path=Path("x.jpg"), reason=SkipReason.UNSUPPORTED_EXTENSION)]
+    findings = ScanFindings(
+        targets=[Path("a.txt"), Path("b.txt")], skipped=skipped, discovered_count=2
+    )
+
+    limited = enforce_limit(findings, 1)
+
+    assert limited.limit_exceeded is True
+    assert limited.targets == []
+    assert limited.discovered_count == 2
+    assert limited.skipped == skipped  # 스킵 리포트는 보존

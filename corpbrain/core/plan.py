@@ -16,9 +16,8 @@ import subprocess
 from pathlib import Path
 
 from corpbrain.core.config import ScanConfig
-from corpbrain.core.errors import PreconditionError
 from corpbrain.core.models import HardwareInfo, PlanEntry, ScanPlan
-from corpbrain.core.scanner import scan_folder
+from corpbrain.core.scanner import ScanFindings, safe_size, scan_folder, validated_root
 
 __all__ = ["detect_hardware", "plan_scan"]
 
@@ -51,23 +50,28 @@ CPU_RATE = 10
 NVIDIA_SMI_TIMEOUT = 2.0
 
 
-def plan_scan(config: ScanConfig) -> ScanPlan:
+def plan_scan(config: ScanConfig, *, findings: ScanFindings | None = None) -> ScanPlan:
     """`config.folder`를 훑어 파일별 계량과 합계를 담은 `ScanPlan`을 돌려준다 (순수 값).
 
     `scan_folder(max_files=None)`로 **전 파일**을 계량한다 — `--max`는 처리 중단이 아니라
     리포트 경고 신호로만 쓰이므로(스펙 §5) 여기서 절단하지 않는다. 파일 콘텐츠는 열지 않고
-    `os.stat` 크기와 경로·확장자만 사용한다.
+    크기(`scanner.safe_size` — stat 실패는 0으로 흡수)와 경로·확장자만 사용한다. 입력 폴더가
+    없거나 접근 불가면 `scan`과 동일하게 `PreconditionError`를 올린다(스펙 §5).
 
-    입력 폴더가 없거나 접근 불가면 `scan`과 동일하게 `PreconditionError`를 올린다(스펙 §5).
+    Args:
+        config: 실행 파라미터. `plan`은 `folder`·`max_chars`만 의미가 있다.
+        findings: 이미 계산된 스캔 결과(선택). 주면 순회를 생략하고 그대로 계량한다 —
+            어댑터가 배너와 본 스캔의 워크를 한 번으로 공유할 때 쓴다. `None`이면 직접 순회한다.
     """
-    root = _validated_root(config.folder)
-    findings = scan_folder(root, max_files=None)
+    root = validated_root(config.folder)
+    if findings is None:
+        findings = scan_folder(root, max_files=None)
     hardware = detect_hardware()
 
     entries: list[PlanEntry] = []
     for path in findings.targets:
         ext = path.suffix.lower()
-        size_bytes = path.stat().st_size
+        size_bytes = safe_size(path)
         rel_path = path.relative_to(root)
         entries.append(
             PlanEntry(
@@ -88,17 +92,6 @@ def plan_scan(config: ScanConfig) -> ScanPlan:
         est_seconds=round(total_est_tokens / rate),
         hardware=hardware,
     )
-
-
-def _validated_root(folder: Path) -> Path:
-    """입력 폴더가 접근 가능한 디렉터리인지 확인하고 정규화한다 (scan과 동일한 선행 조건, 스펙 §5)."""
-    try:
-        root = folder.resolve()
-        if not root.is_dir():
-            raise PreconditionError(f"입력 폴더가 없거나 디렉터리가 아닙니다: {folder}")
-    except OSError as exc:
-        raise PreconditionError(f"입력 폴더에 접근할 수 없습니다: {folder} ({exc})") from exc
-    return root
 
 
 def _importance(rel_path: Path, ext: str) -> int:

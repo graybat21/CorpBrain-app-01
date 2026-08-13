@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from corpbrain.core import plan as plan_mod
+from corpbrain.core import scanner
 from corpbrain.core.config import ScanConfig
 from corpbrain.core.models import HardwareInfo, ScanPlan
 from corpbrain.core.plan import detect_hardware, plan_scan
@@ -185,6 +186,49 @@ def test_plan_scan_never_opens_file_contents(
     plan = plan_scan(_config(tmp_path))
 
     assert plan.file_count == 3
+
+
+def test_plan_scan_absorbs_unstattable_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """스캔 통과 후 stat이 실패(삭제·격리·연결끊김)해도 크래시하지 않고 size 0으로 흡수한다.
+
+    scan_folder가 파일을 통과시킨 뒤 stat 시점에 사라지는 TOCTOU를 흉내낸다 — 개별 파일의
+    stat 실패가 전체 plan을 죽이면 스펙 §5(부분 실패 ≠ 전체 실패)를 어긴다.
+    """
+    (tmp_path / "vanishing.txt").write_text("x", encoding="utf-8")
+    (tmp_path / "stable.txt").write_text("hello", encoding="utf-8")
+    real_stat = Path.stat
+
+    def flaky_stat(self: Path, *args: object, **kwargs: object) -> object:
+        if self.name == "vanishing.txt":
+            raise OSError("stat 실패 (사라진 파일)")
+        return real_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", flaky_stat)
+
+    plan = plan_scan(_config(tmp_path))  # 예외 없이 완료되어야 한다
+
+    sizes = {entry.path.name: entry.size_bytes for entry in plan.entries}
+    assert sizes["vanishing.txt"] == 0
+    assert sizes["stable.txt"] == 5
+
+
+def test_plan_scan_reuses_given_findings_without_walking(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """findings를 주면 plan_scan은 다시 순회하지 않고 그대로 계량한다 (배너와 워크 공유)."""
+    (tmp_path / "a.txt").write_text("x", encoding="utf-8")
+    prewalked = scanner.scan_folder(tmp_path, max_files=None)
+
+    def _no_walk(*args: object, **kwargs: object) -> object:
+        raise AssertionError("findings를 받고도 plan_scan이 순회했다")
+
+    monkeypatch.setattr(plan_mod, "scan_folder", _no_walk)
+
+    plan = plan_scan(_config(tmp_path), findings=prewalked)
+
+    assert plan.file_count == 1
 
 
 # --- 하드웨어 감지 (스펙 §4.2, nvidia-smi subprocess만) --------------------------
