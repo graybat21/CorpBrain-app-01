@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "corpbrain"
-version = "0.2.0"
-description = "100% 로컬 구동형 AI 지식 관리 — 로컬 스캔→요약→마크다운 위키 (v0.2: 입력 확장 PDF·pre-scan 계량)"
+version = "0.3.0"
+description = "100% 로컬 구동형 AI 지식 관리 — 로컬 스캔→요약→마크다운 위키 (v0.3: 자원 게이팅·Ollama doctor)"
 requires-python = ">=3.12,<3.13"
 dependencies = [
   "python-docx>=1.1",  # FR-007 .docx 텍스트 추출 (이슈 명세에 명시된 의존성)
