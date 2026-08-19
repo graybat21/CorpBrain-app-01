@@ -101,6 +101,13 @@ class _InMemoryVectorStore:
             for doc_id, (_vector, metadata) in list(self._data.items())[:top_k]
         ]
 
+    def set_model_name(self, model_name: str) -> None:
+        if self._model_name is None:
+            self._model_name = model_name
+
+    def close(self) -> None:
+        pass
+
 
 def test_alternate_implementation_satisfies_vectorstore_protocol() -> None:
     """대체 구현체가 `VectorStore` 구조적 타입을 만족한다(sqlite3 구현으로 하드코딩되지 않음)."""
@@ -114,6 +121,25 @@ def test_alternate_implementation_satisfies_vectorstore_protocol() -> None:
 
 def test_sqlite_vector_store_also_satisfies_the_protocol(tmp_path: Path) -> None:
     assert isinstance(SqliteVectorStore(index_path_for(tmp_path)), VectorStore)
+
+
+def test_search_excludes_dimension_mismatched_vectors(tmp_path: Path) -> None:
+    """차원이 다른(다른 모델·손상) 벡터는 비교하지 않고 결과에서 제외한다."""
+    store = SqliteVectorStore(index_path_for(tmp_path))
+    store.upsert("same-dim", [1.0, 0.0], {"title": "match"})
+    store.upsert("other-dim", [1.0, 0.0, 0.0], {"title": "mismatch"})
+
+    results = store.search([1.0, 0.0], top_k=5)
+
+    assert [r.doc_id for r in results] == ["same-dim"]
+
+
+def test_search_clamps_negative_top_k_to_zero(tmp_path: Path) -> None:
+    store = SqliteVectorStore(index_path_for(tmp_path))
+    store.upsert("a", [1.0, 0.0], {})
+    store.upsert("b", [0.0, 1.0], {})
+
+    assert store.search([1.0, 0.0], top_k=-1) == []
 
 
 def test_state_persists_across_store_instances(tmp_path: Path) -> None:

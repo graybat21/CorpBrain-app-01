@@ -13,6 +13,7 @@ CLI 없이 `run_scan(config)` 호출만으로 end-to-end 실행된다.
 
 from __future__ import annotations
 
+import sqlite3
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -33,10 +34,18 @@ from corpbrain.core._progress import (
 )
 from corpbrain.core.config import ScanConfig
 from corpbrain.core.embedding_text import parse_wiki_markdown, summary_embedding_text
-from corpbrain.core.errors import GpuGateError, TokenBudgetExceededError
+from corpbrain.core.errors import (
+    GpuGateError,
+    PreconditionError,
+    TokenBudgetExceededError,
+)
 from corpbrain.core.extract import prepare_summary_input
 from corpbrain.core.llm.embed import EmbeddingError, embed
-from corpbrain.core.llm.ollama_client import detect
+from corpbrain.core.llm.ollama_client import (
+    ModelNotAvailableError,
+    list_models,
+    model_present,
+)
 from corpbrain.core.llm.summarize import LLMParseError, summarize
 from corpbrain.core.models import (
     EmbeddingFailure,
@@ -113,9 +122,19 @@ def run_scan(
     # 프리플라이트 (fail-fast, v0.4 스펙 §4.2): 폴더 → Ollama 구동 → 대상 모델 →
     # 임베딩 모델 → GPU → 토큰. 환경(요약·임베딩 가능 여부)을 자원 게이트보다 먼저
     # 확정하고, 첫 위반에서 즉시 예외로 종료한다. ①~④는 --force-gates로 우회 불가.
+    # 모델 목록은 한 번만 조회해 두 모델(요약·임베딩)을 함께 확인한다(왕복 절반으로 줄임).
     root = validated_root(config.folder)
-    detect(config.ollama_url, model=config.model)
-    detect(config.ollama_url, model=config.embed_model)
+    available_models = list_models(config.ollama_url)
+    if not model_present(available_models, config.model):
+        raise ModelNotAvailableError(
+            f"대상 모델을 찾지 못했습니다: {config.model} — "
+            f"먼저 `ollama pull {config.model}` 를 실행하세요."
+        )
+    if not model_present(available_models, config.embed_model):
+        raise ModelNotAvailableError(
+            f"대상 모델을 찾지 못했습니다: {config.embed_model} — "
+            f"먼저 `ollama pull {config.embed_model}` 를 실행하세요."
+        )
 
     # 게이트 판정은 상한(`--max`) 절단 이전의 발견 집합으로 계산한다(플랜은 순수·로컬).
     # 어댑터가 배너용으로 이미 계산한 plan을 넘기면 재사용해 하드웨어 감지·stat 패스를 아끼는다.
@@ -143,9 +162,7 @@ def run_scan(
         return result
 
     run_state = _RunState()
-    store = SqliteVectorStore(index_path_for(config.out_dir))
-    store.set_model_name(config.embed_model)
-    existing_ids = frozenset(store.list_ids())
+    store, existing_ids = _open_index(config)
     valid_ids: set[str] = set()
     try:
         for index, source_path in enumerate(findings.targets, start=1):
@@ -158,10 +175,16 @@ def run_scan(
             if out_path.exists():
                 valid_ids.add(str(source_path))
 
-        # 고아 벡터 정리 (v0.4 스펙 §3 항목5): 이번 스캔에서 위키가 없는 것으로 판명된
-        # doc_id(원문 삭제·위키 삭제 등)를 인덱스에서 지운다.
-        for stale_id in existing_ids - valid_ids:
-            store.delete(stale_id)
+        # 고아 벡터 정리 (v0.4 스펙 §3 항목5): 이번 스캔 대상 범위(root) 안에서 위키가 없는
+        # 것으로 판명된 doc_id(원문 삭제·위키 삭제 등)만 지운다. root 밖의 기존 doc_id(예:
+        # 더 넓은 폴더로 이미 인덱싱된 뒤 이번엔 하위 폴더만 좁혀 스캔한 경우)는 이번 스캔과
+        # 무관하므로 건드리지 않는다.
+        try:
+            for stale_id in existing_ids - valid_ids:
+                if Path(stale_id).is_relative_to(root):
+                    store.delete(stale_id)
+        except sqlite3.Error:
+            pass  # 정리 실패는 베스트 에포트 — 이미 완료된 스캔 결과를 무효화하지 않는다.
     finally:
         store.close()
 
@@ -189,6 +212,41 @@ def _enforce_gates(config: ScanConfig, plan: ScanPlan) -> None:
             f"{gate.max_total_tokens:,}을(를) 초과했습니다 — "
             "--force-gates 로 강행하거나 --max-total-tokens 를 올리세요."
         )
+
+
+def _open_index(config: ScanConfig) -> tuple[VectorStore, frozenset[str]]:
+    """이번 실행의 벡터 인덱스를 연다 — 실패는 선행 조건 실패로 명확히 안내한다.
+
+    인덱스가 이미 다른 임베딩 모델로 만들어져 있으면 모델 혼입을 막기 위해 즉시 거부한다
+    (v0.4 스펙 §4.3 "search가 인덱스에 기록된 모델을 강제 사용"의 자매 불변식 — scan 쪽도
+    한 인덱스에는 항상 한 모델만 쓰게 강제한다). 파일 손상·권한 문제 등 sqlite 계층 오류는
+    스펙 §5의 "손상 시 에러 + --force 안내"에 맞춰 `PreconditionError`로 감싼다.
+    """
+    index_path = index_path_for(config.out_dir)
+    store: VectorStore | None = None
+    try:
+        store = SqliteVectorStore(index_path)
+        existing_model = store.model_name
+        if existing_model is not None and existing_model != config.embed_model:
+            raise PreconditionError(
+                f"인덱스가 다른 임베딩 모델로 생성되어 있습니다: {existing_model} "
+                f"(요청: {config.embed_model}) — --embed-model {existing_model} 로 맞추거나, "
+                f"{index_path} 를 지우고 --force로 다시 생성하세요."
+            )
+        store.set_model_name(config.embed_model)
+        existing_ids = frozenset(store.list_ids())
+    except sqlite3.Error as exc:
+        if store is not None:
+            store.close()
+        raise PreconditionError(
+            f"인덱스 파일을 열지 못했습니다: {index_path} ({exc}) — 손상되었거나 접근할 수 "
+            f"없습니다. 문제를 해결하거나 파일을 지우고 --force로 다시 생성하세요."
+        ) from exc
+    except PreconditionError:
+        if store is not None:
+            store.close()
+        raise
+    return store, existing_ids
 
 
 def _process_one(
@@ -312,7 +370,7 @@ def _backfill_embedding(
     """위키가 스킵된 문서 중 인덱스에 아직 없는 것을 기존 위키 파일에서 임베딩해 채운다."""
     try:
         markdown = out_path.read_text(encoding="utf-8")
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
         result.embedding_failures.append(
             EmbeddingFailure(path=source_path, detail=f"기존 위키를 읽지 못했습니다: {exc}")
         )
@@ -330,10 +388,29 @@ def _index_document(
     store: VectorStore,
 ) -> None:
     """텍스트를 임베딩해 벡터 저장소에 넣는다. 실패는 해당 문서만 인덱싱 실패로 흡수한다
-    (v0.4 스펙 §3 항목4 — 위키는 이미 기록돼 있으므로 그대로 유지된다)."""
+    (v0.4 스펙 §3 항목4 — 위키는 이미 기록돼 있으므로 그대로 유지된다).
+
+    임베딩 실패 시 그 문서의 기존(이제는 내용과 어긋났을 수 있는) 벡터를 지운다 — 오래된
+    벡터를 남겨 검색이 낡은 내용을 신뢰하는 것처럼 보이는 것보다, 그 문서가 검색에서 아예
+    빠지는 편이 안전하다. 벡터 저장소 계층 오류(디스크·잠금 등)도 같은 방식으로 흡수해
+    개별 파일 실패가 나머지 처리를 멈추지 않게 한다.
+    """
+    doc_id = str(source_path)
     try:
         vector = embed(text, config.embed_model, config.ollama_url)
     except EmbeddingError as exc:
         result.embedding_failures.append(EmbeddingFailure(path=source_path, detail=str(exc)))
+        _delete_stale_vector(store, doc_id)
         return
-    store.upsert(str(source_path), vector, {"title": title, "source_path": str(source_path)})
+    try:
+        store.upsert(doc_id, vector, {"title": title, "source_path": doc_id})
+    except sqlite3.Error as exc:
+        result.embedding_failures.append(EmbeddingFailure(path=source_path, detail=str(exc)))
+
+
+def _delete_stale_vector(store: VectorStore, doc_id: str) -> None:
+    """재임베딩 실패 시 남아 있을 수 있는 오래된 벡터를 지운다 (베스트 에포트)."""
+    try:
+        store.delete(doc_id)
+    except sqlite3.Error:
+        pass

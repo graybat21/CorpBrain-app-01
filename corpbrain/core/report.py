@@ -89,8 +89,9 @@ def build_search_lines(results: list[SearchResult]) -> list[str]:
     lines = [f"검색 결과 {len(results)}건"]
     lines += [
         f"  {rank}. [{result.score:.3f}] "
-        f"{result.metadata.get('title', '(제목 없음)')} — "
-        f"{result.metadata.get('source_path', result.doc_id)}"
+        # 키가 없을 때뿐 아니라 빈 문자열(제목 없는 손상·수기 편집 위키)일 때도 대체 문구를 쓴다.
+        f"{result.metadata.get('title') or '(제목 없음)'} — "
+        f"{result.metadata.get('source_path') or result.doc_id}"
         for rank, result in enumerate(results, start=1)
     ]
     return lines
