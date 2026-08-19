@@ -218,9 +218,9 @@ def _open_index(config: ScanConfig) -> tuple[VectorStore, frozenset[str]]:
     """이번 실행의 벡터 인덱스를 연다 — 실패는 선행 조건 실패로 명확히 안내한다.
 
     인덱스가 이미 다른 임베딩 모델로 만들어져 있으면 모델 혼입을 막기 위해 즉시 거부한다
-    (v0.4 스펙 §4.3 "search가 인덱스에 기록된 모델을 강제 사용"의 자매 불변식 — scan 쪽도
-    한 인덱스에는 항상 한 모델만 쓰게 강제한다). 파일 손상·권한 문제 등 sqlite 계층 오류는
-    스펙 §5의 "손상 시 에러 + --force 안내"에 맞춰 `PreconditionError`로 감싼다.
+    (v0.4 스펙 §3 항목13·§4.2 ⑦ — search가 인덱스에 기록된 모델을 강제 사용하는 §3 항목7과
+    대칭을 이루는 scan 쪽 불변식). 파일 손상·권한 문제 등 sqlite 계층 오류는 스펙 §5의
+    "손상 시 에러 + --force 안내"에 맞춰 `PreconditionError`로 감싼다.
     """
     index_path = index_path_for(config.out_dir)
     store: VectorStore | None = None

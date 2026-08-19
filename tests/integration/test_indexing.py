@@ -245,7 +245,8 @@ def test_narrower_rescan_does_not_prune_vectors_outside_its_scope(
 def test_scan_rejects_reindexing_with_a_different_embed_model(
     corpus: Path, tmp_path: Path, ok_gateway: list[str]
 ) -> None:
-    """이미 다른 임베딩 모델로 만들어진 인덱스에 다른 모델로 재스캔하면 벡터가 섞이므로 거부한다."""
+    """이미 다른 임베딩 모델로 만들어진 인덱스에 다른 모델로 재스캔하면 벡터가 섞이므로 거부한다
+    (v0.4 스펙 §3 항목13)."""
     out_dir = tmp_path / "wiki"
     run_scan(_config(corpus, out_dir, embed_model=DEFAULT_EMBED_MODEL))
 
