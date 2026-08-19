@@ -11,6 +11,8 @@ from pathlib import Path
 
 DEFAULT_OUT_DIR = Path("./corpbrain_wiki")
 DEFAULT_MODEL = "qwen2.5:7b-instruct"
+#: 임베딩 전용 모델 (v0.4 스펙 §4.1). 요약 모델과 별개로 프리플라이트에서 존재를 확인한다.
+DEFAULT_EMBED_MODEL = "nomic-embed-text"
 DEFAULT_MAX_FILES = 50
 DEFAULT_MAX_CHARS = 12000
 DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
@@ -35,6 +37,8 @@ class ScanConfig:
     folder: Path
     out_dir: Path = DEFAULT_OUT_DIR
     model: str = DEFAULT_MODEL
+    #: 임베딩에 쓸 Ollama 모델 — scan 프리플라이트에서 존재를 확인한다(v0.4 §4.2 ④).
+    embed_model: str = DEFAULT_EMBED_MODEL
     max_files: int = DEFAULT_MAX_FILES
     max_chars: int = DEFAULT_MAX_CHARS
     ollama_url: str = DEFAULT_OLLAMA_URL

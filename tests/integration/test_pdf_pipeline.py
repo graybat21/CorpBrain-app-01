@@ -15,11 +15,11 @@ import pytest
 from pypdf import PdfReader, PdfWriter
 
 from corpbrain.core import gateway, run_scan
-from corpbrain.core.config import DEFAULT_MODEL, ScanConfig
+from corpbrain.core.config import DEFAULT_EMBED_MODEL, DEFAULT_MODEL, ScanConfig
 from corpbrain.core.render import FRONT_MATTER_KEYS, SECTION_HEADERS
 
-#: 대상 모델이 설치된 정상 `/api/tags` 응답 (v0.3 모델 선점검 통과용).
-TAGS_RESPONSE = {"models": [{"name": DEFAULT_MODEL}]}
+#: 요약·임베딩 대상 모델이 모두 설치된 정상 `/api/tags` 응답 (v0.3·v0.4 모델 선점검 통과용).
+TAGS_RESPONSE = {"models": [{"name": DEFAULT_MODEL}, {"name": DEFAULT_EMBED_MODEL}]}
 
 SUMMARY_JSON = {
     "title": "PDF 통합 제목",
@@ -75,6 +75,8 @@ def _ok_gateway(monkeypatch: pytest.MonkeyPatch) -> None:
     def _request_json(url: str, *, method: str = "GET", payload: Any = None, **_: Any) -> Any:
         if url.endswith("/api/tags"):
             return TAGS_RESPONSE
+        if url.endswith("/api/embeddings"):
+            return {"embedding": [0.1, 0.2, 0.3]}
         return {"response": json.dumps(SUMMARY_JSON, ensure_ascii=False)}
 
     monkeypatch.setattr(gateway, "request_json", _request_json)

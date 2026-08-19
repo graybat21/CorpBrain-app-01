@@ -30,6 +30,7 @@ from corpbrain.core.report import (
     build_doctor_lines,
     build_plan_report_lines,
     build_scan_banner_lines,
+    build_search_lines,
     build_summary_lines,
 )
 from corpbrain.core.scanner import (
@@ -40,6 +41,8 @@ from corpbrain.core.scanner import (
 
 #: `--model`을 대신 지정할 수 있는 환경변수 (스펙 §4.1).
 MODEL_ENV_VAR = "CORPBRAIN_MODEL"
+#: `--embed-model`을 대신 지정할 수 있는 환경변수 (v0.4 스펙 §4.1).
+EMBED_MODEL_ENV_VAR = "CORPBRAIN_EMBED_MODEL"
 
 #: `--max-file-size`는 MB 단위 입력이며 코어는 바이트로 저장한다 (v0.3 스펙 §4.1·§4.4).
 BYTES_PER_MB = 1_000_000
@@ -175,6 +178,46 @@ def build_parser() -> argparse.ArgumentParser:
             f"(기본 {core.DEFAULT_MAX_TOTAL_TOKENS})."
         ),
     )
+    scan.add_argument(
+        "--embed-model",
+        dest="embed_model",
+        default=None,
+        metavar="NAME",
+        help=(
+            f"인덱싱에 쓸 Ollama 임베딩 모델 (기본 {core.DEFAULT_EMBED_MODEL}). "
+            f"환경변수 {EMBED_MODEL_ENV_VAR}로도 지정할 수 있다. "
+            f"scan은 항상 인덱싱까지 수행하며 이 모델이 없으면 exit 1로 종료한다."
+        ),
+    )
+
+    search = subparsers.add_parser(
+        "search",
+        help="이미 생성된 위키 인덱스에서 자연어 쿼리와 유사한 문서를 찾는다.",
+    )
+    search.add_argument("query", help="검색할 자연어 쿼리.")
+    search.add_argument(
+        "--out",
+        dest="out_dir",
+        type=Path,
+        default=core.DEFAULT_OUT_DIR,
+        metavar="DIR",
+        help=f"scan이 만든 위키·인덱스 폴더 (기본 {core.DEFAULT_OUT_DIR}).",
+    )
+    search.add_argument(
+        "--top-k",
+        dest="top_k",
+        type=int,
+        default=5,
+        metavar="N",
+        help="반환할 최대 결과 수 (기본 5).",
+    )
+    search.add_argument(
+        "--ollama-url",
+        dest="ollama_url",
+        default=core.DEFAULT_OLLAMA_URL,
+        metavar="URL",
+        help=f"로컬 Ollama 주소 (기본 {core.DEFAULT_OLLAMA_URL}).",
+    )
 
     plan = subparsers.add_parser(
         "plan",
@@ -235,6 +278,16 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     doctor.add_argument(
+        "--embed-model",
+        dest="embed_model",
+        default=None,
+        metavar="NAME",
+        help=(
+            f"점검할 임베딩 모델 (기본 {core.DEFAULT_EMBED_MODEL}). "
+            f"환경변수 {EMBED_MODEL_ENV_VAR}로도 지정할 수 있다."
+        ),
+    )
+    doctor.add_argument(
         "--ollama-url",
         dest="ollama_url",
         default=core.DEFAULT_OLLAMA_URL,
@@ -250,6 +303,7 @@ def build_config(args: argparse.Namespace) -> core.ScanConfig:
         folder=args.folder,
         out_dir=args.out_dir,
         model=_resolve_model(args.model),
+        embed_model=_resolve_embed_model(args.embed_model),
         max_files=args.max_files,
         max_chars=args.max_chars,
         ollama_url=args.ollama_url,
@@ -268,6 +322,14 @@ def _resolve_model(flag_value: str | None) -> str:
     return env_value or core.DEFAULT_MODEL
 
 
+def _resolve_embed_model(flag_value: str | None) -> str:
+    """임베딩 모델 우선순위를 해소한다: 명시 `--embed-model` > 환경변수 > 코어 기본값 (v0.4 §4.1)."""
+    if flag_value:
+        return flag_value
+    env_value = os.environ.get(EMBED_MODEL_ENV_VAR, "").strip()
+    return env_value or core.DEFAULT_EMBED_MODEL
+
+
 def main(argv: list[str] | None = None) -> int:
     """콘솔 엔트리 포인트. 서브커맨드(`scan`/`plan`)로 분기해 종료 코드를 반환한다."""
     _force_utf8_output()
@@ -277,6 +339,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_plan(args)
     if args.command == "doctor":
         return _run_doctor(args)
+    if args.command == "search":
+        return _run_search(args)
     return _run_scan(args)
 
 
@@ -344,10 +408,31 @@ def _run_doctor(args: argparse.Namespace) -> int:
     필수 조건(Ollama 설치·구동·대상 모델)이 미충족이면 비-0(1), 준비되면 0. GPU 없음은
     경고로 표시하되 종료 코드에 영향을 주지 않는다. 전 항목을 점검(fail-fast 아님)한다.
     """
-    report = core.diagnose(model=_resolve_model(args.model), ollama_url=args.ollama_url)
+    report = core.diagnose(
+        model=_resolve_model(args.model),
+        embed_model=_resolve_embed_model(args.embed_model),
+        ollama_url=args.ollama_url,
+    )
     for line in build_doctor_lines(report):
         print(line)
     return EXIT_OK if report.ready else EXIT_PRECONDITION_FAILED
+
+
+def _run_search(args: argparse.Namespace) -> int:
+    """`search` — 위키 인덱스에서 쿼리와 유사한 문서를 찾아 stdout에 낸다 (v0.4 스펙 §3 항목6·7).
+
+    인덱스 없음·쿼리 임베딩 실패는 exit 1, 결과 0건은 exit 0(정상 — 빈 결과도 정상 응답).
+    """
+    try:
+        results = core.search_index(
+            args.out_dir, args.query, top_k=args.top_k, ollama_url=args.ollama_url
+        )
+    except PreconditionError as exc:
+        _log(f"선행 조건 실패: {exc}")
+        return EXIT_PRECONDITION_FAILED
+    for line in build_search_lines(results):
+        print(line)
+    return EXIT_OK
 
 
 def _emit_plan_report(config: core.ScanConfig) -> int:

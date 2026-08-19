@@ -13,14 +13,15 @@ from typing import Any
 import pytest
 
 from corpbrain.core import gateway, pipeline, scanner
-from corpbrain.core.config import DEFAULT_MODEL, ScanConfig
+from corpbrain.core.config import DEFAULT_EMBED_MODEL, DEFAULT_MODEL, ScanConfig
 from corpbrain.core.errors import PreconditionError
 from corpbrain.core.models import SkipReason
 from corpbrain.core.pipeline import run_scan
 from corpbrain.core.plan import plan_scan
 
-#: 대상 모델이 설치된 정상 `/api/tags` 응답 (v0.3 모델 선점검 통과용).
-TAGS_RESPONSE = {"models": [{"name": DEFAULT_MODEL}]}
+#: 요약·임베딩 대상 모델이 모두 설치된 정상 `/api/tags` 응답 (v0.3·v0.4 모델 선점검 통과용).
+TAGS_RESPONSE = {"models": [{"name": DEFAULT_MODEL}, {"name": DEFAULT_EMBED_MODEL}]}
+EMBEDDING_RESPONSE = {"embedding": [0.1, 0.2, 0.3]}
 
 SUMMARY_JSON = {
     "title": "문서 제목",
@@ -53,6 +54,8 @@ def stub_ollama(monkeypatch: pytest.MonkeyPatch) -> list[str]:
             return TAGS_RESPONSE
         if url.endswith("/api/generate"):
             return {"response": json.dumps(SUMMARY_JSON, ensure_ascii=False)}
+        if url.endswith("/api/embeddings"):
+            return EMBEDDING_RESPONSE
         raise AssertionError(f"예상치 못한 호출 대상: {url}")
 
     monkeypatch.setattr(gateway, "request_json", _request_json)

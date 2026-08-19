@@ -8,6 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
+from typing import Any
 
 
 class SkipReason(StrEnum):
@@ -42,6 +43,26 @@ class GeneratedWiki:
 
 
 @dataclass(frozen=True)
+class EmbeddingFailure:
+    """프리플라이트 통과 후 특정 문서의 임베딩 호출이 런타임에 실패한 1건 (v0.4 스펙 §4.3).
+
+    `SkippedFile`과 의미가 다르다 — 위키 `.md`는 이미 정상 생성돼 있고 인덱싱만 실패했다.
+    """
+
+    path: Path
+    detail: str = ""
+
+
+@dataclass(frozen=True)
+class SearchResult:
+    """벡터 검색 결과 1건 (v0.4 스펙 §4.3) — `VectorStore.search()`가 돌려준다."""
+
+    doc_id: str
+    score: float
+    metadata: dict[str, Any]
+
+
+@dataclass(frozen=True)
 class SummaryResult:
     """LLM이 반환한 고정 필드 요약 (스펙 §4.3)."""
 
@@ -59,6 +80,8 @@ class ScanResult:
     out_dir: Path
     generated: list[GeneratedWiki] = field(default_factory=list)
     skipped: list[SkippedFile] = field(default_factory=list)
+    #: 프리플라이트 통과 후 개별 문서의 임베딩 런타임 실패 (위키는 유지, 인덱싱만 실패) (v0.4 §4.3).
+    embedding_failures: list[EmbeddingFailure] = field(default_factory=list)
     #: 스캔 대상이 상한(`ScanConfig.max_files`)을 넘어 처리를 중단했는가.
     limit_exceeded: bool = False
     #: 상한 판정에 사용된 발견 파일 수.

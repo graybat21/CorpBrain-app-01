@@ -111,7 +111,8 @@ def test_token_budget_excludes_oversized_files(
     plan = plan_scan(ScanConfig(folder=tmp_path, max_file_size=50))
 
     # small.txt: chars=round(40*0.5)=20, tokens=round(20/2.5)=8.
-    assert plan.total_est_tokens == 8
+    # v0.4: total_est_tokens는 임베딩 비용 근사(10%)를 더한다 — 8 + round(8*0.10) = 9.
+    assert plan.total_est_tokens == 9
     assert plan.gate is not None
     assert plan.gate.oversized_count == 1
 
@@ -177,16 +178,19 @@ def test_build_doctor_lines_ready_and_not_ready() -> None:
 
     ready = DoctorReport(
         installed=True, running=True, model="m", model_present=True,
-        available_models=["m"], hardware=HardwareInfo(gpu=True, label="GPU: X"),
+        embed_model="e", embed_model_present=True,
+        available_models=["m", "e"], hardware=HardwareInfo(gpu=True, label="GPU: X"),
         max_file_size=20_000_000, max_total_tokens=200_000,
     )
     assert "준비 완료" in "\n".join(build_doctor_lines(ready))
 
     missing = DoctorReport(
         installed=True, running=True, model="qwen", model_present=False,
+        embed_model="nomic-embed-text", embed_model_present=False,
         available_models=[], hardware=HardwareInfo(gpu=False, label="CPU"),
         max_file_size=20_000_000, max_total_tokens=200_000,
     )
     text = "\n".join(build_doctor_lines(missing))
     assert "ollama pull qwen" in text
+    assert "ollama pull nomic-embed-text" in text
     assert "준비 미완료" in text

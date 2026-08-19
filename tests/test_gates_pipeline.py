@@ -15,12 +15,12 @@ import pytest
 from corpbrain import cli
 from corpbrain.core import gateway
 from corpbrain.core import plan as plan_module
-from corpbrain.core.config import DEFAULT_MODEL, ScanConfig
+from corpbrain.core.config import DEFAULT_EMBED_MODEL, DEFAULT_MODEL, ScanConfig
 from corpbrain.core.errors import GpuGateError, TokenBudgetExceededError
 from corpbrain.core.models import HardwareInfo, SkipReason
 from corpbrain.core.pipeline import run_scan
 
-TAGS_RESPONSE = {"models": [{"name": DEFAULT_MODEL}]}
+TAGS_RESPONSE = {"models": [{"name": DEFAULT_MODEL}, {"name": DEFAULT_EMBED_MODEL}]}
 SUMMARY_JSON = {
     "title": "제목",
     "one_line_summary": "한 줄",
@@ -35,6 +35,8 @@ def ok_gateway(monkeypatch: pytest.MonkeyPatch) -> None:
     def _request_json(url: str, *, method: str = "GET", payload: Any = None, **_: Any) -> Any:
         if url.endswith("/api/tags"):
             return TAGS_RESPONSE
+        if url.endswith("/api/embeddings"):
+            return {"embedding": [0.1, 0.2, 0.3]}
         return {"response": json.dumps(SUMMARY_JSON, ensure_ascii=False)}
 
     monkeypatch.setattr(gateway, "request_json", _request_json)
@@ -100,6 +102,28 @@ def test_token_gate_blocks_scan(
     with pytest.raises(TokenBudgetExceededError):
         run_scan(
             ScanConfig(folder=corpus, out_dir=tmp_path / "wiki", max_total_tokens=1)
+        )
+
+
+def test_token_gate_counts_embedding_margin_v0_4(
+    tmp_path: Path, ok_gateway: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """v0.4 §3 항목12: 임베딩 비용 가산분(원문 토큰의 10%) 때문에만 넘는 임계에서도 차단된다."""
+    from corpbrain.core.plan import plan_scan
+
+    _force_hardware(monkeypatch, gpu=True)
+    root = tmp_path / "docs"
+    root.mkdir()
+    (root / "note.txt").write_text("가" * 2000, encoding="utf-8")
+
+    base_plan = plan_scan(ScanConfig(folder=root))
+    base_tokens = base_plan.entries[0].est_tokens
+    assert base_tokens > 0
+
+    # 임계를 순수 요약 토큰과 정확히 같게 두면, 10% 가산분 없이는 통과했을 값이다.
+    with pytest.raises(TokenBudgetExceededError):
+        run_scan(
+            ScanConfig(folder=root, out_dir=tmp_path / "wiki", max_total_tokens=base_tokens)
         )
 
 

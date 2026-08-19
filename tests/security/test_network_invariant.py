@@ -15,7 +15,8 @@ from urllib.parse import urlsplit
 import pytest
 
 from corpbrain.core import gateway
-from corpbrain.core.config import DEFAULT_MODEL, ScanConfig
+from corpbrain.core.config import DEFAULT_EMBED_MODEL, DEFAULT_MODEL, ScanConfig
+from corpbrain.core.llm.embed import EmbeddingError, embed
 from corpbrain.core.llm.ollama_client import OllamaNotAvailableError, detect
 from corpbrain.core.pipeline import run_scan
 from corpbrain.core.plan import plan_scan
@@ -70,18 +71,31 @@ def _host_of(url: str) -> str:
 def test_pipeline_makes_no_non_localhost_connections(
     watch_sockets: SocketWatcher, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """관문을 스텁한 정상 실행에서 localhost 외 연결 시도가 0건이다 (완료의 정의 6)."""
+    """관문을 스텁한 정상 실행(요약+임베딩 포함)에서 localhost 외 연결 시도가 0건이다.
+
+    v0.4 스펙 §3 완료의 정의 9: 임베딩 API 호출을 포함해 모든 네트워크 호출이 단일 관문
+    (`gateway.request_json`)을 경유하는지 검증한다 — 임베딩 엔드포인트가 실제로 호출됐음을
+    `calls`로 확인해, 이 테스트가 임베딩 경로를 우회하지 않고 있음을 보장한다.
+    """
+    calls: list[str] = []
 
     def _request_json(url: str, *, method: str = "GET", payload: Any = None, **_: Any) -> Any:
+        calls.append(url)
         if url.endswith("/api/tags"):
-            return {"models": [{"name": DEFAULT_MODEL}]}
+            return {"models": [{"name": DEFAULT_MODEL}, {"name": DEFAULT_EMBED_MODEL}]}
+        if url.endswith("/api/embeddings"):
+            return {"embedding": [0.1, 0.2, 0.3]}
         return {"response": json.dumps(SUMMARY_JSON, ensure_ascii=False)}
 
     monkeypatch.setattr(gateway, "request_json", _request_json)
 
-    run_scan(ScanConfig(folder=FIXTURE_CORPUS, out_dir=tmp_path / "wiki", force_gates=True))
+    result = run_scan(
+        ScanConfig(folder=FIXTURE_CORPUS, out_dir=tmp_path / "wiki", force_gates=True)
+    )
 
     assert watch_sockets.offenders(LOCALHOST_HOSTS) == []
+    assert result.embedding_failures == []
+    assert any(url.endswith("/api/embeddings") for url in calls)  # 임베딩 경로가 실제로 돎
 
 
 def test_gateway_only_dials_the_given_localhost_url(watch_sockets: SocketWatcher) -> None:
@@ -90,6 +104,18 @@ def test_gateway_only_dials_the_given_localhost_url(watch_sockets: SocketWatcher
 
     with pytest.raises(OllamaNotAvailableError):
         detect(url)
+
+    assert watch_sockets.addresses  # 실제로 연결을 시도했다
+    assert watch_sockets.offenders(LOCALHOST_HOSTS) == []
+    assert all(host == _host_of(url) for host, _ in watch_sockets.addresses)
+
+
+def test_embed_only_dials_the_given_localhost_url(watch_sockets: SocketWatcher) -> None:
+    """관문 스텁 없이 embed()가 실제로 여는 소켓은 지정한 localhost 주소뿐이다 (v0.4 §3 항목9)."""
+    url = "http://127.0.0.1:11434"
+
+    with pytest.raises(EmbeddingError):
+        embed("문서 요약 텍스트", DEFAULT_EMBED_MODEL, url)
 
     assert watch_sockets.addresses  # 실제로 연결을 시도했다
     assert watch_sockets.offenders(LOCALHOST_HOSTS) == []

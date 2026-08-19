@@ -116,6 +116,19 @@ def test_plan_scan_returns_scan_plan_with_supported_files_only(tmp_path: Path) -
     assert plan.hardware == CPU
 
 
+def test_total_est_tokens_includes_ten_percent_embedding_cost(tmp_path: Path) -> None:
+    """v0.4 스펙 §3 항목12 · Grill T3: total_est_tokens = 요약 토큰 + 원문 추정 토큰의 10%."""
+    (tmp_path / "note.txt").write_text("가" * 2000, encoding="utf-8")
+
+    plan = plan_scan(_config(tmp_path))
+
+    entry = plan.entries[0]
+    assert entry.est_tokens > 0
+    expected = entry.est_tokens + round(entry.est_tokens * plan_mod.EMBED_TOKEN_RATIO)
+    assert plan.total_est_tokens == expected
+    assert plan.total_est_tokens > entry.est_tokens  # 가산분이 실제로 반영됨
+
+
 def test_plan_scan_entry_fields_come_from_stat_and_path(tmp_path: Path) -> None:
     (tmp_path / "note.txt").write_text("abcdef", encoding="utf-8")
 

@@ -46,6 +46,11 @@ CHARS_PER_TOKEN = 2.5
 GPU_RATE = 50
 CPU_RATE = 10
 
+#: 토큰 예산에 더할 임베딩 비용 근사 — 원문 추정 토큰의 10% (v0.4 스펙 §4.3 Grill T3).
+#: pre-scan 시점엔 위키 요약(임베딩 입력)이 아직 없어 실제 임베딩 길이를 알 수 없으므로,
+#: 원문 추정 토큰에 비례한 계수로 근사한다.
+EMBED_TOKEN_RATIO = 0.10
+
 #: nvidia-smi 호출의 짧은 타임아웃(초). 로컬 프로세스만 — 소켓·Ollama 미질의.
 NVIDIA_SMI_TIMEOUT = 2.0
 
@@ -85,9 +90,12 @@ def plan_scan(config: ScanConfig, *, findings: ScanFindings | None = None) -> Sc
 
     # 토큰 예산은 실제로 요약될 파일만 합산한다 — 곧 스킵될 대용량 파일이 예산을 헛되이
     # 초과시키지 않게 함이다 (v0.3 스펙 §4.4). 대용량 파일은 표시용으로 별도 집계한다.
+    # v0.4: 요약 토큰에 임베딩 비용 근사(문서별 원문 추정 토큰 × 10%)를 더한다(Grill T3).
     oversized_count = sum(1 for entry in entries if entry.size_bytes > config.max_file_size)
     total_est_tokens = sum(
-        entry.est_tokens for entry in entries if entry.size_bytes <= config.max_file_size
+        entry.est_tokens + round(entry.est_tokens * EMBED_TOKEN_RATIO)
+        for entry in entries
+        if entry.size_bytes <= config.max_file_size
     )
     rate = GPU_RATE if hardware.gpu else CPU_RATE
     gate = GateVerdict(

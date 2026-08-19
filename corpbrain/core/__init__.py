@@ -23,6 +23,7 @@ CLI(`corpbrain.cli`)와 후속 UI 어댑터는 모두 이 패키지의 공개 AP
 from __future__ import annotations
 
 from corpbrain.core.config import (
+    DEFAULT_EMBED_MODEL,
     DEFAULT_MAX_CHARS,
     DEFAULT_MAX_FILE_SIZE,
     DEFAULT_MAX_FILES,
@@ -42,20 +43,25 @@ from corpbrain.core.errors import (
     TokenBudgetExceededError,
 )
 from corpbrain.core.models import (
+    EmbeddingFailure,
     GateVerdict,
     GeneratedWiki,
     HardwareInfo,
     PlanEntry,
     ScanPlan,
     ScanResult,
+    SearchResult,
     SkippedFile,
     SkipReason,
     SummaryResult,
 )
 from corpbrain.core.pipeline import run_scan
 from corpbrain.core.plan import plan_scan
+from corpbrain.core.search import IndexNotFoundError, search_index
+from corpbrain.core.vectorstore import index_path_for
 
 __all__ = [
+    "DEFAULT_EMBED_MODEL",
     "DEFAULT_MAX_CHARS",
     "DEFAULT_MAX_FILES",
     "DEFAULT_MAX_FILE_SIZE",
@@ -67,20 +73,25 @@ __all__ = [
     "SUPPORTED_EXTENSIONS",
     "CorpBrainError",
     "DoctorReport",
+    "EmbeddingFailure",
     "GateVerdict",
     "GeneratedWiki",
     "GpuGateError",
     "HardwareInfo",
+    "IndexNotFoundError",
     "PlanEntry",
     "PreconditionError",
     "ScanConfig",
     "ScanPlan",
     "ScanResult",
+    "SearchResult",
     "SkipReason",
     "SkippedFile",
     "SummaryResult",
     "TokenBudgetExceededError",
     "diagnose",
+    "index_path_for",
     "plan_scan",
     "run_scan",
+    "search_index",
 ]
