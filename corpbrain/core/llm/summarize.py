@@ -108,6 +108,8 @@ class OllamaSummarizer:
     """로컬 요약 백엔드 — `llm.base.Summarizer` 프로토콜 구현 (v0.5 스펙 §4.3)."""
 
     engine = ENGINE_LOCAL
+    #: 로컬 백엔드는 외부로 나가지 않으므로 마스킹 대상이 아니다 — 항상 `None` (v0.5 §4.5).
+    last_mask = None
 
     def __init__(
         self, model: str, ollama_url: str, *, timeout: float = DEFAULT_TIMEOUT

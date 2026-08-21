@@ -64,3 +64,13 @@ class ScanConfig:
     #: `engine="cloud"`일 때 쓸 Anthropic 모델 (v0.5 §4.1). API 키는 여기 담지 않는다 —
     #: 자격증명은 `llm.anthropic_client`가 호출 시점에 환경변수에서 직접 읽는다.
     cloud_model: str = DEFAULT_CLOUD_MODEL
+
+    @property
+    def effective_model(self) -> str:
+        """이번 실행이 **실제로 요약에 쓸** 모델 이름 (v0.5 §4.1).
+
+        엔진에 따라 `model`(로컬)과 `cloud_model`(클라우드) 중 하나가 실제로 호출된다.
+        어댑터가 배너·로그에 모델명을 표시할 때 둘 중 무엇인지 매번 분기하지 않도록
+        코어가 한 곳에서 판정한다 — 분기를 빠뜨리면 호출되지도 않는 모델명이 찍힌다.
+        """
+        return self.cloud_model if self.engine == ENGINE_CLOUD else self.model

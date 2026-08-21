@@ -427,7 +427,7 @@ def _record_masking(source_path: Path, summarizer: Summarizer, result: ScanResul
 
     로컬 백엔드는 마스킹을 하지 않으므로(외부로 나가지 않는다) 남길 것이 없다.
     """
-    masked = getattr(summarizer, "last_mask", None)
+    masked = summarizer.last_mask
     if masked is None or not masked.counts:
         return
     result.pii_maskings.append(

@@ -16,6 +16,7 @@ from corpbrain.core.models import (
     SearchResult,
     SkipReason,
 )
+from corpbrain.core.pii import PiiType
 
 if TYPE_CHECKING:
     from corpbrain.core.environment import DoctorReport
@@ -87,8 +88,23 @@ def build_summary_lines(result: ScanResult) -> list[str]:
     return lines
 
 
+def pii_label_for(name: str) -> str:
+    """PII 유형 토큰(`RRN` 등)을 한국어 유형명으로 바꾼다 (스펙 §4.5 표의 '유형' 열).
+
+    출력 언어는 항상 한국어이므로(스펙 §4.3) 리포트에 내부 토큰을 그대로 노출하지 않는다.
+    알 수 없는 값이면 원시 토큰을 그대로 쓴다 — 표시가 실패를 가리지 않게 한다.
+    """
+    try:
+        return PiiType(name).label
+    except ValueError:
+        return name
+
+
 def _pii_summary_lines(result: ScanResult) -> list[str]:
-    """마스킹된 PII를 문서 수·총 건수·유형별로 요약한다 (v0.5 §4.5)."""
+    """마스킹된 PII를 문서 수·총 건수·유형별로 요약한다 (v0.5 §4.5).
+
+    유형은 건수 내림차순으로, 같은 건수면 한국어 유형명 순으로 낸다(결정적 출력).
+    """
     if not result.pii_maskings:
         return []
     per_type: dict[str, int] = {}
@@ -96,9 +112,11 @@ def _pii_summary_lines(result: ScanResult) -> list[str]:
         for name, count in masking.counts.items():
             per_type[name] = per_type.get(name, 0) + count
     total = sum(masking.total for masking in result.pii_maskings)
-    breakdown = ", ".join(
-        f"{name} {count}건" for name, count in sorted(per_type.items())
+    ordered = sorted(
+        ((pii_label_for(name), count) for name, count in per_type.items()),
+        key=lambda item: (-item[1], item[0]),
     )
+    breakdown = ", ".join(f"{label} {count}건" for label, count in ordered)
     return [
         f"PII 마스킹 {total}건 (문서 {len(result.pii_maskings)}개) — {breakdown}",
     ]

@@ -21,6 +21,7 @@ from typing import Any
 from urllib.parse import urljoin  # 순수 문자열 유틸 — 네트워크 호출 없음
 
 from corpbrain.core import gateway
+from corpbrain.core.config import ENGINE_CLOUD
 from corpbrain.core.errors import CorpBrainError, PreconditionError
 from corpbrain.core.llm.base import LLMParseError, validate_summary_fields
 from corpbrain.core.models import SummaryResult
@@ -308,7 +309,7 @@ def _tool_input(envelope: Any) -> Any:
 class AnthropicSummarizer:
     """클라우드 요약 백엔드 — `llm.base.Summarizer` 프로토콜 구현 (v0.5 §4.3)."""
 
-    engine = "cloud"
+    engine = ENGINE_CLOUD
 
     def __init__(self, model: str, api_key: str, *, timeout: float = DEFAULT_TIMEOUT) -> None:
         self.model = model

@@ -14,6 +14,7 @@ from typing import Any, Protocol
 
 from corpbrain.core.errors import CorpBrainError
 from corpbrain.core.models import SummaryResult
+from corpbrain.core.pii import MaskingResult
 
 #: 문자열 필드와 문자열 배열 필드 (스펙 §4.3의 고정 필드).
 TEXT_FIELDS = ("title", "one_line_summary", "summary")
@@ -35,6 +36,12 @@ class Summarizer(Protocol):
     engine: str
     #: 생성물 front-matter에 기록할 실제 모델 이름.
     model: str
+    #: 직전 `summarize()` 호출에서 마스킹한 PII 집계 (v0.5 스펙 §4.5).
+    #:
+    #: 외부로 나가지 않는 백엔드(로컬 Ollama)는 마스킹할 이유가 없으므로 **항상 `None`**이다.
+    #: 계약의 일부로 두는 이유는, 파이프라인이 `getattr`로 속성을 더듬으면 이름이 바뀌거나
+    #: 새 백엔드가 다르게 부를 때 PII 리포트가 **아무 오류 없이 사라지기** 때문이다.
+    last_mask: MaskingResult | None
 
     def summarize(self, text: str) -> SummaryResult:
         """절단된 문서 텍스트를 고정 필드 요약으로 변환한다.

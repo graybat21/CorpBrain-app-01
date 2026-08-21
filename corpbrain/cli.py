@@ -435,7 +435,10 @@ def _run_scan(args: argparse.Namespace) -> int:
     if args.dry_run:
         return _emit_plan_report(config)
 
-    _log(f"스캔 시작: {config.folder} → {config.out_dir} (모델 {config.model})")
+    _log(
+        f"스캔 시작: {config.folder} → {config.out_dir} "
+        f"(엔진 {config.engine} · 모델 {config.effective_model})"
+    )
     if resolve_excluded_out_dir(config.folder.resolve(), config.out_dir) is not None:
         _log(f"안내: 출력 폴더가 스캔 대상 폴더 안에 있어 자동으로 제외합니다 — {config.out_dir}")
     banner = _emit_scan_banner(config)
