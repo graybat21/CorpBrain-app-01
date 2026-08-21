@@ -21,6 +21,7 @@ from corpbrain.core.scanner import (
     enforce_limit,
     is_supported,
     iter_files,
+    resolve_excluded_out_dir,
     safe_size,
     scan_folder,
     validated_root,
@@ -126,6 +127,87 @@ def test_iter_files_yields_every_file_in_deterministic_order(tmp_path: Path) -> 
 def test_iter_files_on_missing_folder_yields_nothing(tmp_path: Path) -> None:
     """없는 폴더는 예외 없이 빈 순회 — 선행 조건 검사는 FR-005 담당."""
     assert list(iter_files(tmp_path / "no_such_dir")) == []
+
+
+# --- --out가 스캔 대상 폴더 안에 중첩된 경우 자동 제외 (재귀 재처리 방지) ---------
+
+
+def test_scan_folder_excludes_nested_out_dir_entirely(tmp_path: Path) -> None:
+    """--out이 스캔 대상 안에 있으면 그 하위 트리는 targets에도 skipped에도 나타나지 않는다.
+
+    직전 실행의 위키 산출물(.md)이 확장자상 지원 포맷과 같아, 배제하지 않으면 다음 실행에서
+    새 입력 문서로 재처리된다(인덱스 오염·산출물 무한 중첩의 원인).
+    """
+    (tmp_path / "note.txt").write_text("본문", encoding="utf-8")
+    out_dir = tmp_path / "wiki"
+    out_dir.mkdir()
+    (out_dir / "note.txt.md").write_text("---\n---\n# 제목", encoding="utf-8")
+    (out_dir / "sub").mkdir()
+    (out_dir / "sub" / "other.md").write_text("# 다른 산출물", encoding="utf-8")
+
+    findings = scan_folder(tmp_path, out_dir=out_dir)
+
+    root = tmp_path.resolve()
+    assert findings.targets == [root / "note.txt"]
+    assert findings.skipped == []  # 개별 스킵 사유로도 나타나지 않고 통째로 제외됨
+
+
+def test_scan_folder_ignores_out_dir_when_not_nested(tmp_path: Path) -> None:
+    """--out이 스캔 대상 밖(형제 디렉터리)이면 아무 영향이 없다(회귀 방지)."""
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "note.txt").write_text("본문", encoding="utf-8")
+    sibling_out = tmp_path / "docs-wiki"
+
+    findings = scan_folder(tmp_path / "docs", out_dir=sibling_out)
+
+    assert findings.targets == [(tmp_path / "docs").resolve() / "note.txt"]
+
+
+def test_scan_folder_without_out_dir_behaves_as_before(tmp_path: Path) -> None:
+    """out_dir을 생략하면 기존 동작과 동일하다(하위 호환)."""
+    (tmp_path / "note.txt").write_text("본문", encoding="utf-8")
+
+    assert scan_folder(tmp_path) == scan_folder(tmp_path, out_dir=None)
+
+
+def test_resolve_excluded_out_dir_returns_none_when_out_dir_is_none(
+    tmp_path: Path,
+) -> None:
+    assert resolve_excluded_out_dir(tmp_path.resolve(), None) is None
+
+
+def test_resolve_excluded_out_dir_returns_none_when_equal_to_root(
+    tmp_path: Path,
+) -> None:
+    """--out이 스캔 대상과 완전히 같으면(원본·산출물 혼재) 여기서는 다루지 않는다."""
+    root = tmp_path.resolve()
+    assert resolve_excluded_out_dir(root, tmp_path) is None
+
+
+def test_resolve_excluded_out_dir_returns_none_when_sibling(tmp_path: Path) -> None:
+    root = (tmp_path / "docs").resolve()
+    sibling = tmp_path / "docs-wiki"
+    assert resolve_excluded_out_dir(root, sibling) is None
+
+
+def test_resolve_excluded_out_dir_returns_resolved_path_when_nested(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path.resolve()
+    nested = tmp_path / "wiki"
+    assert resolve_excluded_out_dir(root, nested) == nested.resolve()
+
+
+def test_iter_files_prunes_excluded_dir_without_descending(tmp_path: Path) -> None:
+    """exclude_dir을 주면 그 안의 파일은 iter_files 단계에서부터 아예 나오지 않는다."""
+    (tmp_path / "a.txt").write_text("x", encoding="utf-8")
+    excluded = tmp_path / "wiki"
+    excluded.mkdir()
+    (excluded / "b.md").write_text("x", encoding="utf-8")
+
+    paths = list(iter_files(tmp_path, exclude_dir=excluded.resolve()))
+
+    assert paths == [tmp_path.resolve() / "a.txt"]
 
 
 # --- Scenario 2: 미지원 확장자 스킵 분류 -----------------------------------------

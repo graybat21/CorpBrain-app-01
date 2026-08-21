@@ -34,6 +34,7 @@ from corpbrain.core.report import (
 )
 from corpbrain.core.scanner import (
     ScanFindings,
+    resolve_excluded_out_dir,
     scan_folder,
     validated_root,
 )
@@ -303,6 +304,8 @@ def _run_scan(args: argparse.Namespace) -> int:
         return _emit_plan_report(config)
 
     _log(f"스캔 시작: {config.folder} → {config.out_dir} (모델 {config.model})")
+    if resolve_excluded_out_dir(config.folder.resolve(), config.out_dir) is not None:
+        _log(f"안내: 출력 폴더가 스캔 대상 폴더 안에 있어 자동으로 제외합니다 — {config.out_dir}")
     banner = _emit_scan_banner(config)
     findings, plan = banner if banner is not None else (None, None)
 
@@ -374,7 +377,7 @@ def _emit_scan_banner(
     """
     try:
         root = validated_root(config.folder)
-        findings = scan_folder(root, max_files=None)
+        findings = scan_folder(root, max_files=None, out_dir=config.out_dir)
         plan = core.plan_scan(config, findings=findings)
     except PreconditionError:
         return None

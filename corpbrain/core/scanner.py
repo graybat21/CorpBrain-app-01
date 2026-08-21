@@ -37,6 +37,7 @@ __all__ = [
     "enforce_limit",
     "is_supported",
     "iter_files",
+    "resolve_excluded_out_dir",
     "safe_size",
     "scan_folder",
     "validated_root",
@@ -71,7 +72,10 @@ def is_supported(path: Path) -> bool:
 
 
 def iter_files(
-    root: Path, on_error: Callable[[OSError], None] | None = None
+    root: Path,
+    on_error: Callable[[OSError], None] | None = None,
+    *,
+    exclude_dir: Path | None = None,
 ) -> Iterator[Path]:
     """`root` 아래의 모든 파일 경로를 재귀적으로 yield 한다.
 
@@ -84,6 +88,11 @@ def iter_files(
         on_error: 디렉터리를 열지 못했을 때(권한 거부 등) 그 `OSError`를 받는 콜백.
             생략하면 해당 디렉터리를 조용히 건너뛴다. 어느 쪽이든 순회는 계속되며
             예외가 호출자에게 전파되지 않는다.
+        exclude_dir: 있으면 이 절대경로 디렉터리 전체(그 하위 포함)를 방문하지 않는다 —
+            `os.walk`의 `dirnames`를 직접 가지치기해 하위로 아예 내려가지 않으므로,
+            그 안의 파일이 아무리 많아도 개별 스킵 분류 없이 통째로 순회에서 빠진다.
+            `scan_folder`가 `--out`이 `root` 안에 중첩된 경우 그 하위 트리를 넘길 때 쓴다
+            (호출자가 이미 `resolve_excluded_out_dir`로 걸러 넘긴다).
 
     Yields:
         `root.resolve()` 기준 절대경로. 같은 폴더 안에서는 이름 오름차순,
@@ -91,13 +100,17 @@ def iter_files(
     """
     base = root.resolve()
     for dirpath, dirnames, filenames in os.walk(base, onerror=on_error):
-        dirnames.sort()
         current = Path(dirpath)
+        if exclude_dir is not None:
+            dirnames[:] = [name for name in dirnames if (current / name) != exclude_dir]
+        dirnames.sort()
         for name in sorted(filenames):
             yield current / name
 
 
-def scan_folder(root: Path, max_files: int | None = None) -> ScanFindings:
+def scan_folder(
+    root: Path, max_files: int | None = None, *, out_dir: Path | None = None
+) -> ScanFindings:
     """`root`를 재귀 스캔해 처리 대상·스킵 목록으로 나누고 상한을 검사한다.
 
     스킵 판정 순서는 긴 경로 → 미지원 확장자 → 권한 거부다. 경로가 260자를 넘으면
@@ -107,6 +120,10 @@ def scan_folder(root: Path, max_files: int | None = None) -> ScanFindings:
         root: 스캔할 입력 폴더.
         max_files: 처리 대상 상한 (스펙 §4.1 `--max`, 기본값은 호출자가
             `config.DEFAULT_MAX_FILES`로 주입한다). `None`이면 상한을 검사하지 않는다.
+        out_dir: `--out` 위키 출력 폴더(선택). `root` 안에 중첩돼 있으면(예: `--out`이 스캔
+            대상의 하위 폴더) 그 하위 트리 전체를 스캔에서 제외한다 — 그러지 않으면 직전
+            실행이 만든 위키 산출물(`.md`)이 다음 실행에서 새 입력 문서로 다시 처리되어
+            인덱스가 오염되고 산출물이 중첩되어 계속 불어난다.
 
     Returns:
         `ScanFindings`. 지원 파일 수가 `max_files`를 **초과**하면 처리를 시작하지 않고
@@ -115,6 +132,7 @@ def scan_folder(root: Path, max_files: int | None = None) -> ScanFindings:
         하위구조를 그대로 계산할 수 있다 (FR-012 미러링).
     """
     base = root.resolve()
+    exclude_dir = resolve_excluded_out_dir(base, out_dir)
     targets: list[Path] = []
     skipped: list[SkippedFile] = []
 
@@ -132,7 +150,7 @@ def scan_folder(root: Path, max_files: int | None = None) -> ScanFindings:
             )
         )
 
-    for path in iter_files(root, on_error=record_walk_error):
+    for path in iter_files(root, on_error=record_walk_error, exclude_dir=exclude_dir):
         reason = _skip_reason(path)
         if reason is None:
             targets.append(path)
@@ -143,6 +161,22 @@ def scan_folder(root: Path, max_files: int | None = None) -> ScanFindings:
         targets=targets, skipped=skipped, discovered_count=len(targets)
     )
     return enforce_limit(unlimited, max_files)
+
+
+def resolve_excluded_out_dir(root: Path, out_dir: Path | None) -> Path | None:
+    """`out_dir`가 (이미 resolve된) `root` 안에 중첩돼 있으면 그 절대경로를 돌려준다.
+
+    `scan_folder`가 이 값을 `iter_files`에 넘겨 하위 트리 전체를 스캔에서 제외하는 데
+    쓴다. `out_dir`가 `root`와 완전히 같은 경우(둘을 동일 폴더로 지정)는 여기서 다루지
+    않고 `None`을 돌려준다 — 원본 문서와 위키 산출물이 뒤섞이는 별도의(더 심각한) 오용
+    사례이며, 하위 트리 가지치기만으로는 안전하게 해소할 수 없다.
+    """
+    if out_dir is None:
+        return None
+    resolved = out_dir.resolve()
+    if resolved == root or not resolved.is_relative_to(root):
+        return None
+    return resolved
 
 
 def enforce_limit(findings: ScanFindings, max_files: int | None) -> ScanFindings:
