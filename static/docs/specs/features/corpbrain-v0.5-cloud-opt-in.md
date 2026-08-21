@@ -1,0 +1,269 @@
+# 스펙: CorpBrain v0.5 — 클라우드 옵트인 (Anthropic API 요약 연동)
+
+- 상태: 확정
+- 최종 갱신: 2026-08-21
+
+## 1. 목표
+v0.1~v0.4로 완성된 로컬 스캔→요약→마크다운 위키 파이프라인에, 사용자가 명시적으로 켤 때만
+동작하는 클라우드 요약 경로를 추가한다. 로컬 Ollama 모델의 품질 한계, 로컬 환경 미가용(GPU
+없음·Ollama 미설치 등), 대용량 문서의 컨텍스트 한계 세 상황 모두에서 사용자가 대안으로 쓸 수
+있게 한다. 클라우드 경로는 단일 provider(Anthropic API)로 요약(summarize) 호출에만 적용되며,
+반드시 **동의 → PII 마스킹 → NetworkGuard 목적지 allowlist**를 거쳐 기존 단일 관문
+(`gateway.request_json`) 하나로만 나간다. 기본 동작(`--engine` 미지정)은 v0.4까지와 동일하게
+100% 로컬이며, 외부 통신은 사용자가 `--engine cloud`를 명시하고 동의를 마친 경우에만 발생한다.
+[사용자 결정]
+
+## 2. 비목표
+이번 슬라이스에서 다음은 하지 않는다. [사용자 결정]
+- 복수 클라우드 provider 지원 및 임의 OpenAI-호환 엔드포인트 — Anthropic API 단일 provider만
+  지원한다. NetworkGuard allowlist는 이 provider의 호스트로 하드코딩되며 사용자가 바꿀 수 없다.
+- 임베딩·벡터검색(v0.4)의 클라우드 경로 — 임베딩은 계속 로컬 `nomic-embed-text` 전용이며
+  `--engine`의 영향을 받지 않는다.
+- ML 기반 PII 탐지 — 정규식 기반 한국 특화 7종(§4.4)만 다룬다.
+- 레이트리밋·일시적 API 오류에 대한 자동 재시도·백오프.
+- 파일별 자동 라우팅/폴백(문서 크기·로컬 실패에 따른 자동 엔진 전환) — 엔진 선택은 `scan` 실행
+  전체 단위의 수동 지정(`--engine`)만 지원한다.
+- API 키의 OS 키링·암호화 디스크 저장 — 환경변수로만 받고 디스크에 저장하지 않는다.
+- RAG 답변 합성(클라우드 활용) — v0.4에서 이월된 별도 후속 슬라이스이며 이번 범위 밖이다.
+
+## 3. 완료의 정의
+검증 방식(전반): 동의·게이트 판정·PII 마스킹·프롬프트 조립은 순수 코어 단위테스트로, 파이프라인은
+Anthropic HTTP를 mock으로 스텁한 통합테스트로 검증하고, 네트워크 목적지 제약은 기존 소켓 감시
+테스트를 확장해 검증하며, 마무리로 실제 Anthropic API 1회 수동 스모크를 실행한다. PR 생성 전
+`/security-review`를 실행해 API 키 유출·PII 마스킹 우회·allowlist 우회 관련 미해결 고위험
+발견사항이 없어야 완료로 간주한다.
+
+1. `corpbrain consent cloud --grant`를 실행하면 로컬 설정 파일(§4.2)에 동의 상태가 기록되고
+   **exit 0**으로 종료한다. 이후 `scan --engine cloud`는 동의 확인 단계를 통과한다.
+   - 검증: 명령 실행 후 설정 파일 내용 확인 + 후속 `scan --engine cloud`가 동의 단계에서
+     막히지 않음을 통합테스트로 확인.
+2. 동의가 기록되지 않은 상태에서 `scan --engine cloud`를 실행하면 파일을 하나도 처리하지 않고
+   **exit 1**(선행조건 실패)로 종료하며, stderr 안내에 `corpbrain consent cloud --grant`를
+   언급한다.
+   - 검증: 통합테스트 — 산출물 0개·exit 코드·안내 문자열 확인.
+3. `corpbrain consent cloud --revoke`를 실행하면 설정 파일의 동의 기록이 제거·비활성화되고
+   **exit 0**으로 종료한다. 이후 `scan --engine cloud`는 다시 2번과 동일하게 실패한다.
+   - 검증: 통합테스트 — grant→revoke→scan 순서로 실행해 최종 실패를 확인.
+4. 동의는 되어 있으나 `ANTHROPIC_API_KEY` 환경변수가 없거나, 있어도 Anthropic API가
+   인증실패(401)를 반환하면, 파일을 하나도 처리하지 않고 **exit 1**(선행조건 실패)로 종료한다.
+   - 검증: 통합테스트(키 미설정 케이스 + 401 mock 케이스) — 두 경우 모두 산출물 0개·exit 1 확인.
+5. 선행조건(동의·API 키)을 통과해 정상 처리된 파일의 위키 `.md`는 front-matter에
+   `engine: "cloud"`와 실제 사용한 `model`(예: `claude-haiku-4-5-20251001`) 값을 포함한다.
+   - 검증: 생성물 파싱으로 front-matter 필드값 확인.
+6. 한국 특화 PII 7종(§4.4)을 각각 심은 픽스처 문서를 `--engine cloud`로 처리하면, gateway가
+   실제로 외부로 보내는 요청 payload 전체에 원본 PII 문자열이 한 글자도 등장하지 않고, 대신
+   마스킹 플레이스홀더로 치환되어 있다. 산출된 위키 자체는 정상 생성된다.
+   - 검증: 단위테스트(마스킹 함수 자체, 7종 각각) + 통합테스트(gateway 호출 직전 payload를
+     캡처해 원본 PII 부분 문자열 부재를 assert).
+7. `--engine cloud`로 실행하는 동안 발생하는 모든 소켓 연결의 목적지는 `api.anthropic.com`
+   (HTTPS)뿐이다. `--engine local`(기본값, 미지정 시)로 실행하는 동안은 v0.4까지와 동일하게
+   `--ollama-url` 외 연결이 없다. 두 엔진 모두 동시에는 한 run에서 섞이지 않는다.
+   - 검증: 기존 `tests/security/test_network_invariant.py`의 `SocketWatcher`를 두 엔진
+     시나리오로 확장해 각각 검증.
+8. 개별 파일 처리 중 레이트리밋(429) 또는 일시적 오류(5xx·타임아웃)가 발생하면, 재시도 없이
+   해당 파일만 신규 스킵 사유(`cloud_rate_limited` 또는 `cloud_api_error`)로 스킵 리포트에
+   남기고 나머지 파일은 계속 처리하며, 전체 종료 코드는 **0**(부분 성공)이다. **매핑 규칙**
+   [제안 후 승인]: HTTP 429만 `cloud_rate_limited`. 그 외 모든 실패(5xx, 타임아웃, 연결오류,
+   400·404 등 요청 자체 결함 포함)는 `cloud_api_error`로 통합한다 — 신규 SkipReason은 이
+   두 값뿐이며, 프리플라이트(§4.3)를 통과한 뒤 개별 파일에서 발생하는 어떤 실패도 이 두
+   사유 중 하나로 수렴한다(전체 실행을 중단시키지 않는다).
+   - 검증: 통합테스트 — 특정 파일에서만 429/5xx/timeout이 나도록 mock, 해당 파일 스킵 사유·
+     타 파일 정상 생성·exit 0 확인.
+9. 같은 폴더를 `--engine local`로 스캔한 뒤 원문 변경 없이 `--engine cloud`로 재스캔하면(또는
+   반대 방향) 기존 위키의 front-matter `engine` 값과 이번 실행의 `--engine`이 다르므로
+   mtime과 무관하게 강제로 재생성된다. 같은 `engine`으로 재스캔하면 기존 mtime 규칙(변경 없으면
+   스킵)이 그대로 적용된다.
+   - 검증: 통합테스트 — local→cloud, cloud→cloud 두 시나리오에서 `generated_at`/`engine`
+     변경 여부로 재생성·스킵 판정 확인.
+10. `corpbrain doctor`는 `--engine` 플래그 유무와 무관하게 항상 cloud 동의 여부와
+    `ANTHROPIC_API_KEY` 존재 여부를 점검 항목에 포함해 보고한다. 이 두 항목은 v0.3의 GPU
+    선례와 동일하게 **정보/경고성**으로만 표시되며 `doctor`의 전체 종료 코드에는 영향을 주지
+    않는다(전체 exit code는 기존과 동일하게 로컬 Ollama·모델·GPU 판정만으로 결정된다).
+    - 검증: 통합테스트 — 동의/키 유무 4가지 조합에서 출력 문구는 달라지되 exit code는
+      로컬 판정 결과만 반영함을 확인.
+11. `--engine cloud`일 때 v0.3의 GPU 게이트(§4.2 v0.3 스펙)는 자동으로 생략되어, GPU 미탐지
+    환경에서도 cloud 처리가 차단되지 않는다. `--max-total-tokens` 토큰 게이트는 `engine`과
+    무관하게 v0.3과 동일하게 적용된다.
+    - 검증: 통합테스트 — GPU 미탐지 mock 환경에서 `--engine cloud`가 차단 없이 진행되고,
+      `--engine local`은 기존처럼 차단됨을 함께 확인. 토큰 게이트는 두 엔진 모두 동일 임계로
+      차단됨을 확인.
+12. 신규 `corpbrain/core/llm/anthropic_client.py`는 `corpbrain.core.gateway.request_json()`만
+    경유하며 `urllib`/`socket`/`http`/`requests`/`httpx` 등 네트워크 모듈을 직접 import하지
+    않는다. 기존 AST 기반 단일 관문 정적 테스트(`tests/test_gateway.py`)가 수정 없이 통과한다.
+    - 검증: 기존 정적 테스트 재실행(무수정 통과 확인).
+13. `ruff check .` · `pytest`가 모두 통과하고, PR 생성 전 실행한 `/security-review`에 API 키
+    유출·PII 마스킹 우회·NetworkGuard allowlist 우회로 분류되는 미해결 고위험 발견사항이 없다.
+    - 검증: CI 통과 + 리뷰 리포트를 PR 설명에 링크.
+
+## 4. 인터페이스 계약
+
+### 4.1 CLI [사용자 결정·제안 승인]
+```
+corpbrain scan <folder>
+  ... (v0.4 인자 유지) ...
+  --engine {local|cloud}    기본 local (미지정 시 v0.4까지와 동일하게 동작)
+  --cloud-model NAME        기본 claude-haiku-4-5-20251001 (engine=cloud일 때만 사용)
+
+corpbrain consent cloud --grant     최초 1회 명시 동의를 기록하고 exit 0
+corpbrain consent cloud --revoke    동의 기록을 제거하고 exit 0
+
+corpbrain doctor
+  ... (v0.3 인자 유지) ...
+  # engine 플래그 없음 — cloud 동의·API 키 상태는 항상 함께 보고한다.
+```
+- 종료 코드: 기존 체계를 그대로 재사용한다 — `1`(선행조건 실패: 동의 없음·API 키 없음·
+  인증실패 401 포함) / `3`(상한 초과, 기존과 동일) / `0`(정상 또는 부분 성공). 신규 종료 코드는
+  추가하지 않는다. [제안 후 승인]
+- API 키: `ANTHROPIC_API_KEY` 환경변수로만 받는다(Anthropic 공식 SDK/도구와 동일한 이름을
+  재사용해 사용자가 이미 설정해 둔 값을 그대로 쓸 수 있게 한다). CLI 플래그·설정 파일에는
+  저장하지 않는다. [사용자 결정]
+- **doctor 출력 문구** [제안 후 승인]: v0.3의 OK/실패/경고 마커 체크리스트 뒤에 cloud 항목
+  두 줄을 추가한다. GPU와 동일하게 **경고 마커**를 쓰며 doctor의 전체 exit code에는 영향을
+  주지 않는다.
+  ```
+  [경고] Cloud 동의: 없음 — corpbrain consent cloud --grant 로 동의
+  [경고] ANTHROPIC_API_KEY: 미설정 — 환경변수로 설정 필요
+  ```
+  둘 다 충족되면 `[OK] Cloud(Anthropic): 사용 준비됨`으로 표시한다.
+- **consent 명령 출력**: `--grant`/`--revoke` 모두 실행 결과를 한국어 한 줄로 stdout에 낸다
+  (예: `cloud 엔진(Anthropic API) 동의를 저장했습니다.` / `cloud 엔진 동의를 철회했습니다.`).
+
+### 4.2 동의 저장소 [제안 후 승인]
+- 위치: `~/.corpbrain/config.json` (사용자 홈 디렉터리 하위, 프로세스 전역 — 이번 슬라이스의
+  유일한 영속 설정 파일).
+- 스키마:
+  ```json
+  {
+    "cloud_consent": {
+      "anthropic": {
+        "granted": true,
+        "granted_at": "2026-08-21T10:00:00+00:00"
+      }
+    }
+  }
+  ```
+- `consent cloud --grant`는 파일이 없으면 생성하고, 있으면 `cloud_consent.anthropic` 키만
+  갱신한다(다른 키는 보존 — 후속 설정 확장을 위한 이음새).
+- `consent cloud --revoke`는 `cloud_consent.anthropic.granted`를 `false`로 남기거나 키 자체를
+  제거한다(둘 중 무엇이든 이후 `granted`가 `true`가 아니면 동의 없음으로 취급).
+- API 키는 이 파일에 절대 쓰지 않는다.
+- **쓰기 방식** [제안 후 승인]: 원자적 쓰기(임시 파일에 쓴 뒤 `os.replace`로 교체)를 사용한다.
+  보안 상태를 담는 유일한 영속 파일이므로, 쓰기 도중 중단되어도 기존 파일이 깨진 JSON으로
+  남지 않도록 한다.
+
+### 4.3 요약 호출 구현 [사용자 결정]
+- Anthropic 공식 SDK를 사용하지 않는다. `gateway.request_json()`에 `headers: dict[str, str] |
+  None = None` 파라미터를 추가해 커스텀 헤더(`x-api-key`, `anthropic-version`)를 실어 raw
+  HTTP로 Anthropic Messages API(`POST https://api.anthropic.com/v1/messages`)를 직접 호출한다.
+  이로써 단일 관문 불변식(모든 외부 호출은 `gateway.py` 하나만 경유)이 그대로 유지된다.
+- 신규 `corpbrain/core/llm/anthropic_client.py`가 `ollama_client.py`/`summarize.py`와 동일한
+  패턴으로 이 호출을 감싼다: 프롬프트 조립 → gateway 호출 → 응답 파싱 → `SummaryResult` 반환.
+- JSON 5필드(`title`/`one_line_summary`/`key_points`/`summary`/`tags`) 강제는 Anthropic tool
+  use(function calling)로 스키마를 강제한다(`tool_choice`로 도구 호출을 강제) — Ollama의
+  `format: "json"` 프롬프트 기반 방식보다 파싱 실패율이 낮다. [제안 후 승인]
+- **프롬프트·tool 스키마** [제안 후 승인]: system prompt는 MVP 스펙 §4.3의 기존
+  `PROMPT_TEMPLATE`(한국어 요약 지침, 5필드 의미 설명)을 그대로 재사용하되, "JSON으로만
+  응답하라" 류의 포맷 강제 문구는 제거한다(강제는 `tool_choice`가 대신 담당). tool 이름은
+  `emit_summary`, `input_schema`는 5필드를 모두 `required`로 두되 `key_points`/`tags`의
+  `minItems`/`maxItems`는 지정하지 않는다(기존 `parse_summary()`와 동일하게 "비어있지 않은
+  문자열 배열"만 검증해 로컬·클라우드 검증 규칙을 일치시킨다). `max_tokens`는 2048로 고정한다
+  (`--max-chars` 12000자 입력 대비 요약 출력에 충분한 여유).
+- 응답 검증 규칙은 기존 `parse_summary()`(MVP 스펙 §4.3)와 동일하게 5필드 필수·문자열 필드
+  공백 불허·리스트 필드는 문자열 배열만 허용한다. 검증 실패는 기존과 동일하게 해당 파일만
+  스킵 처리된다(§3 항목 8과 별개로, JSON 스키마 자체 파싱 실패는 기존 `LLMParseError` 계열로
+  수렴한다). [제안 후 승인]
+- 코드 구조: `Summarizer` 공통 인터페이스(프로토콜)를 먼저 정의하고 `OllamaSummarizer`·
+  `AnthropicSummarizer` 두 구현체를 둔다. `pipeline.py`가 `config.engine` 값으로 둘 중 하나를
+  선택해 호출한다(복수 provider 지원은 비목표이므로 구현체는 지금은 이 둘뿐이다). [제안 후 승인]
+- **인증 프리플라이트** [제안 후 승인]: `engine=cloud`일 때 파일 루프 진입 전
+  `GET https://api.anthropic.com/v1/models`를 1회 호출해 `ANTHROPIC_API_KEY` 유효성과
+  연결성을 확인한다(토큰 비용 없음). 이 호출이 401을 반환하면 파일을 하나도 처리하지 않고
+  즉시 선행조건 실패로 종료한다(§3 항목 4). 기존 v0.3의 Ollama 모델 존재 확인(`/api/tags`)과
+  같은 자리 — "환경/인증을 자원 처리보다 먼저 확정한다"는 fail-fast 관례를 그대로 따른다.
+- **타임아웃**: 프리플라이트·요약 호출 모두 기존 `DEFAULT_TIMEOUT`(60초, `ollama_client`/
+  `summarize`/`embed`가 공유하는 상수)를 그대로 재사용한다. cloud 전용 신규 타임아웃 상수는
+  두지 않는다. [제안 후 승인]
+
+### 4.4 NetworkGuard [사용자 결정]
+- allowlist는 하드코딩 단일 호스트 `api.anthropic.com`이며 CLI로 override할 수 없다.
+- `gateway.request_json()` 진입부(MVP 스펙 §4.5에서 예약해 둔 확장 지점)에서 소켓을 열기 전
+  목적지 호스트를 검사한다: `engine=local` 경로는 `--ollama-url`의 호스트만, `engine=cloud`
+  경로는 `api.anthropic.com`만 허용한다. 불일치 시 소켓을 열지 않고 즉시 실패시킨다.
+- `engine=cloud` 요청은 스킴이 반드시 `https`여야 한다. 리다이렉트는 추적하지 않는다(3xx
+  응답을 받으면 그대로 실패로 처리한다).
+- **구현 방식** [제안 후 승인]: `urllib.parse.urlsplit(url)`로 `(scheme, hostname)`을 추출해
+  대소문자 무시 정확 일치로 allowlist와 비교한다(서픽스·와일드카드 매칭 없음). 리다이렉트
+  추적 차단은 표준 `urllib.request.HTTPRedirectHandler`를 오버라이드해 3xx 응답 시 무조건
+  예외를 발생시키는 커스텀 opener를 `gateway.py`에 둔다. DNS 재확인(rebinding 방지) 등
+  소켓 레벨 검증은 하지 않는다 — 단일 하드코딩 호스트 + HTTPS 강제로 충분하다고 판단한다.
+  추가 서드파티 의존성 없이 stdlib(`urllib`)만으로 구현한다.
+
+### 4.5 PII 마스킹 [사용자 결정]
+- 신규 모듈(예: `corpbrain/core/pii.py`)이 정규식 기반 탐지·마스킹을 담당한다.
+- **정밀도 원칙** [사용자 결정]: 체크섬·Luhn 등 검증 알고리즘 없이 **형태(자릿수·구분자) 기반
+  느슨한 매칭**만 쓴다. 과탐(정상 숫자열을 마스킹)은 감수하되 누락(실제 PII를 놓침)을
+  최소화하는 방향으로 기운다 — 마스킹 대상은 클라우드로 나가는 전송본일 뿐 원본 위키에는
+  영향을 주지 않으므로 과탐 비용이 낮다.
+- **패턴 7종 정의** [제안 후 승인]:
+
+  | 유형 | 정규식(형태) | 비고 |
+  |------|--------------|------|
+  | 주민등록번호 | `\b\d{6}-?[1-8]\d{6}\b` | 하이픈 유무 모두 허용, 뒷자리 첫 숫자 1~8(성별·내외국인 코드 범위)로 과탐 일부 제한. 체크섬 미검증. |
+  | 전화번호 | `\b01[016789]-?\d{3,4}-?\d{4}\b` (휴대전화) 및 `\b0(2\|[3-6]\d)-?\d{3,4}-?\d{4}\b` (일반전화) | 두 패턴을 OR로 결합. |
+  | 이메일 | `\b[\w.+-]+@[\w-]+\.[A-Za-z]{2,}\b` | 표준적인 이메일 형태 매칭. |
+  | 사업자등록번호 | `\b\d{3}-\d{2}-\d{5}\b` | 하이픈 포함 표준 표기만(3-2-5). |
+  | 신용카드번호 | `\b\d{4}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}\b` | 16자리 4그룹(국내 대다수 카드). 15자리(Amex 등)는 비목표. |
+  | 계좌번호 | `\b\d{2,6}-\d{2,6}-\d{2,6}(-\d{1,6})?\b` | 국내 은행별 표준 포맷이 없어 휴리스틱(하이픈 2~3개로 구분된 숫자 그룹)이다 — 7종 중 오탐률이 가장 높을 수 있음을 인지하고 채택한다. |
+  | IP주소 | `\b(?:\d{1,3}\.){3}\d{1,3}\b` | IPv4만. 옥텟 범위(0~255) 미검증(형태만). IPv6은 비목표. |
+
+- `engine=cloud`로 요약을 요청하기 직전, 프롬프트에 들어갈 원문 텍스트에 대해 7종을 모두
+  탐지해 각각 `[REDACTED_<TYPE>]` 형태의 플레이스홀더로 치환한 뒤 전송한다. 치환 개수는
+  파일별로 진행 로그/요약 리포트에 표시한다(차단하지 않는다 — §3 항목 6).
+- `engine=local`(Ollama) 경로에는 마스킹을 적용하지 않는다(로컬은 외부로 나가지 않으므로
+  MVP 스펙의 기존 동작을 유지한다).
+
+### 4.6 출력 마크다운 템플릿 확장 [사용자 결정]
+- MVP 스펙(§4.4)의 front-matter에 `engine` 필드를 추가한다:
+  ```markdown
+  ---
+  source_path: "<원문 절대경로>"
+  generated_at: "<ISO8601>"
+  model: "<사용 모델>"
+  engine: "local" | "cloud"
+  source_bytes: <숫자>
+  ---
+  ```
+- 본문 섹션 구조(제목/한 줄 요약/핵심 포인트/요약/태그·키워드/원문)는 MVP 스펙과 동일하게
+  유지한다.
+- 재실행 판정(`rerun.py`)은 기존 mtime 비교에 더해, 기존 위키 front-matter의 `engine` 값과
+  이번 실행의 `--engine`이 다르면 mtime과 무관하게 재생성 대상으로 판정하도록 확장한다
+  (§3 항목 9).
+
+### 4.7 게이트 상호작용 [사용자 결정]
+- `--engine cloud`일 때 v0.3 GPU 게이트(§4.2, v0.3 스펙)는 preflight에서 건너뛴다(로컬 GPU
+  자원과 무관하므로).
+- `--max-total-tokens` 토큰 게이트는 `engine`과 무관하게 v0.3과 동일한 임계·판정 로직을
+  적용한다(비용 보호 목적으로 유지).
+- `--force-gates`는 기존과 동일하게 GPU·토큰 게이트만 우회하며, 동의·API 키 선행조건에는
+  영향을 주지 않는다(요약 자체가 불가능한 조건이므로 v0.3의 Ollama 선행조건과 같은 취급).
+
+## 5. 엣지 케이스와 실패 시나리오 [사용자 결정]
+- 동의 없이 `--engine cloud`: 선행조건 실패, exit 1, `consent cloud --grant` 안내.
+- `ANTHROPIC_API_KEY` 미설정 또는 401: 선행조건 실패, exit 1, 파일 미처리.
+- 429(레이트리밋)·5xx·타임아웃: 재시도 없이 해당 파일만 스킵(사유 포함), 나머지 계속 처리,
+  exit 0(부분 성공).
+- Anthropic 응답이 tool use 스키마를 어겨 필수 필드가 비거나 타입이 다른 경우: 해당 파일만
+  기존 `LLMParseError` 계열로 스킵, 나머지 계속 처리.
+- PII 7종 중 일부만 포함된 문서: 탐지된 패턴만 마스킹하고 나머지는 그대로 전송(과탐지로 인한
+  차단 없음).
+- 동일 폴더를 engine을 바꿔 가며 반복 스캔: §4.6의 확장된 재실행 규칙에 따라 engine이 다르면
+  강제 재생성, 같으면 기존 mtime 규칙.
+- `consent cloud --revoke` 후에도 `ANTHROPIC_API_KEY`가 환경에 남아 있을 수 있음 — 동의가
+  선행조건이므로 키가 있어도 동의가 없으면 여전히 exit 1로 차단된다.
+- `--engine cloud` + `--force-gates` 동시 지정: GPU 게이트는 어차피 cloud에서 생략되므로
+  `--force-gates`는 토큰 게이트에만 실질적 영향을 준다.
+- `doctor`가 `ANTHROPIC_API_KEY`는 있으나 동의가 없는 상태, 또는 그 반대(동의는 있으나 키
+  없음) 두 조합 모두를 구분해 보고한다.
+
+## 미결정 사항
+없음
