@@ -3,8 +3,8 @@
 이 문서는 v0.5 구현 루프의 **조기 종료 판정 단일 근거**다.
 CORE_BUDGET(≥3) · MINOR_BUDGET(≥10)은 오직 아래 카운터로만 판정한다.
 
-CORE: 1
-MINOR: 8
+CORE: 2
+MINOR: 9
 
 ## 기록 규칙
 - 형식: `- [CORE|MINOR] <결정> | 근거 | 관련 파일 | 결정 주체(main|sub-A|sub-B)`
@@ -19,6 +19,26 @@ MINOR: 8
 ### 메인 에이전트 (파트 C — 관문·클라우드 클라이언트·통합)
 - [CORE] Anthropic API 키는 `anthropic_client` 코어 모듈이 호출 시점에 `os.environ`에서 직접 읽고 `ScanConfig`에 싣지 않는다 | 스펙 §4.1은 "환경변수로만 받는다"만 규정하고 어느 계층이 읽는지는 미정. 기존 관례(CLI가 env 해소 후 ScanConfig에 담기)를 따르면 자격증명이 로그·에러에 repr될 수 있는 값 객체에 실린다 — 보안상 수명·노출면을 최소화하려고 관례에서 의도적으로 벗어났다 | `corpbrain/core/llm/anthropic_client.py` | main
 - [MINOR] cloud 요약 타임아웃은 300초(로컬 `summarize.DEFAULT_TIMEOUT`과 동일), 프리플라이트는 60초 | 스펙 §4.3은 "기존 DEFAULT_TIMEOUT(60초)를 재사용"이라고 적었으나 실제 코드베이스는 `summarize=300.0`·`embed=60.0`으로 60초 공유 상수가 존재하지 않는다. 같은 성격(요약)의 값을 따르고 가벼운 프리플라이트만 60초를 쓰는 것으로 스펙의 의도(신규 정책을 만들지 않는다)를 지켰다 | `corpbrain/core/llm/anthropic_client.py` | main
+
+### 보안 검토(/security-review) 후속 — 2026-08-21
+- [CORE] PII 정규식 7종의 경계를 스펙 §4.5 표의 `\b` 대신 **ASCII 전용 lookaround**
+  (`(?<![0-9A-Za-z_])` / `(?![0-9A-Za-z_])`)로 바꾸고, 이메일은 다단 도메인을 통째로 잡도록
+  확장했다 | 보안 검토가 확인한 실제 유출: 파이썬 `\b`·`\w`는 유니코드 인식이라 한글도 단어
+  문자다. 한국어는 조사가 공백 없이 붙으므로(`010-1234-5678로`, `900101-1234567입니다`,
+  `192.168.0.1에서`) 경계가 성립하지 않아 패턴이 통째로 빗나가고 **원문 PII가 그대로 클라우드로
+  전송**됐다(실측: 7종 중 6종이 조사 인접 시 무마스킹, 카드번호는 뒤 4자리 노출). 스펙 §4.5의
+  정밀도 원칙("누락을 최소화")과 정반대의 실패 모드라 원칙에 맞추려면 표의 문자열을 벗어나야
+  했다 | `corpbrain/core/pii.py`, `tests/test_pii.py` | main
+  - **스펙 후속 조치 필요**: `static/docs/specs/features/corpbrain-v0.5-cloud-opt-in.md` §4.5의
+    정규식 표가 이제 구현과 다르다. 스펙은 이 루프의 수정 금지 대상이라 손대지 않았으므로,
+    사용자가 표를 ASCII 경계 버전으로 갱신해 정본을 일치시켜야 한다.
+- [MINOR] 관문 opener를 빈 `ProxyHandler({})`로 만들어 `http_proxy`·`https_proxy` 환경변수와
+  Windows 레지스트리 프록시 설정을 무시한다 | `urllib`은 `127.0.0.1`·`localhost`를 프록시에서
+  자동 제외하지 않아, 선의로 설정된 사내 프록시 하나만으로 마스킹되지 않은 로컬 요약 본문이
+  평문 HTTP로 사외 프록시에 전달될 수 있었다(실측 확인). 로드맵 불변식 "기본 로컬 — 외부 통신
+  0"을 지키는 쪽을 택했다. **트레이드오프**: 프록시를 통해서만 외부에 나갈 수 있는 사내망에서는
+  `--engine cloud`가 동작하지 않는다 — 필요해지면 명시적 opt-in 플래그로 여는 것이 맞다 |
+  `corpbrain/core/gateway.py` | main
 
 ### 파트 A (`core/pii.py`) — sub-A 보고를 메인이 재분류해 기록
 - [MINOR] `[REDACTED_<TYPE>]`의 TYPE 토큰을 `RRN`/`PHONE`/`EMAIL`/`BIZ_NO`/`CARD`/`ACCOUNT`/`IP`로 확정 | 스펙 §4.5는 플레이스홀더 형태만 정하고 토큰 문자열은 미정 | `corpbrain/core/pii.py` | sub-A

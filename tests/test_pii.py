@@ -248,3 +248,66 @@ def test_every_type_has_a_korean_label() -> None:
 
     assert len(labels) == 7
     assert PiiType.RRN.label == "주민등록번호"
+
+
+# --- 한글 인접 PII 회귀 (2026-08-21 보안 검토 검출) ------------------------------
+
+#: 조사·의존명사가 공백 없이 바로 붙는 한국어 문장. 유니코드 `\b`로는 경계가 성립하지 않아
+#: 원문 PII가 그대로 전송본에 실렸던 케이스들이다 — 7종 전부를 조사 인접 형태로 고정한다.
+HANGUL_ADJACENT_CASES = [
+    ("주민등록번호900101-1234567입니다", "900101-1234567", PiiType.RRN),
+    ("연락처는 010-1234-5678로 주세요", "010-1234-5678", PiiType.PHONE),
+    ("담당자 010-9876-5432님께 문의", "010-9876-5432", PiiType.PHONE),
+    ("메일은 hong@corp.co.kr입니다", "hong@corp.co.kr", PiiType.EMAIL),
+    ("사업자등록번호 123-45-67890입니다", "123-45-67890", PiiType.BIZ_NO),
+    ("카드번호 1234-5678-1234-5678입니다", "1234-5678-1234-5678", PiiType.CARD),
+    ("급여계좌 110-234-567890으로 입금", "110-234-567890", PiiType.ACCOUNT),
+    ("서버 192.168.0.1에서 접속했습니다", "192.168.0.1", PiiType.IP),
+    ("사내 서버 10.0.0.5번에 접속", "10.0.0.5", PiiType.IP),
+]
+
+
+@pytest.mark.parametrize(("text", "raw", "expected"), HANGUL_ADJACENT_CASES)
+def test_hangul_adjacent_pii_is_masked(text: str, raw: str, expected: PiiType) -> None:
+    """조사가 바로 붙어도 마스킹된다 — 한글은 유니코드 단어 문자라 `\\b`가 성립하지 않는다."""
+    result = mask_pii(text)
+
+    assert raw not in result.text, f"원문 PII가 전송본에 남았다: {raw}"
+    assert expected.placeholder in result.text
+    assert result.counts.get(expected) == 1
+
+
+def test_realistic_korean_paragraph_masks_all_seven_types() -> None:
+    """조사가 섞인 실제 한국어 인사 문서 형태에서 7종이 모두 가려진다."""
+    paragraph = (
+        "담당자: 김철수 (주민등록번호 900101-1234567입니다)\n"
+        "연락처는 010-9876-5432로 문의 바랍니다.\n"
+        "이메일은 hong@corp.co.kr입니다.\n"
+        "법인 사업자등록번호 123-45-67890이며,\n"
+        "급여계좌는 110-234-567890으로 지정되어 있습니다.\n"
+        "카드번호 1234-5678-1234-5678입니다.\n"
+        "사내 서버 192.168.0.11에서 확인 가능합니다.\n"
+    )
+
+    result = mask_pii(paragraph)
+
+    for raw in (
+        "900101-1234567", "010-9876-5432", "hong@corp.co.kr",
+        "123-45-67890", "110-234-567890", "1234-5678-1234-5678", "192.168.0.11",
+    ):
+        assert raw not in result.text, f"원문 PII가 전송본에 남았다: {raw}"
+    assert set(result.counts) == set(PiiType)
+
+
+def test_multi_label_domain_is_masked_whole() -> None:
+    """`corp.co.kr`처럼 라벨이 셋 이상인 도메인이 중간에서 잘리지 않는다."""
+    result = mask_pii("hong@corp.co.kr 로 보내주세요")
+
+    assert result.text == "[REDACTED_EMAIL] 로 보내주세요"
+
+
+def test_ipv4_does_not_leave_a_trailing_octet() -> None:
+    """다섯 번째 옥텟이 남아 부분 노출되지 않는다."""
+    result = mask_pii("주소 192.168.0.1.5 입니다")
+
+    assert "192.168" not in result.text

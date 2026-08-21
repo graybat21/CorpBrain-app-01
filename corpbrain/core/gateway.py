@@ -59,8 +59,17 @@ class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
         return None
 
 
-#: 리다이렉트를 따라가지 않는 opener — 모든 요청이 이 opener로만 나간다.
-_OPENER = urllib.request.build_opener(_NoRedirectHandler)
+#: 리다이렉트를 따라가지 않고 **프록시도 타지 않는** opener — 모든 요청이 이 opener로만 나간다.
+#:
+#: `build_opener()`의 기본 `ProxyHandler`는 `http_proxy`/`https_proxy` 환경변수와 Windows 레지스트리
+#: 프록시 설정을 자동으로 읽어들인다. 그러면 NetworkGuard가 URL **문자열**을 통과시킨 뒤 소켓은
+#: 전혀 다른 목적지로 열릴 수 있고, 특히 `urllib`는 `127.0.0.1`·`localhost`를 프록시에서 자동
+#: 제외하지 않는다 — 선의로 설정된 사내 프록시 하나만으로 "기본 로컬·외부 통신 0" 불변식이
+#: 조용히 깨지고, 마스킹되지 않은 로컬 요약 본문이 평문 HTTP로 사외로 나갈 수 있다.
+#: 빈 `ProxyHandler({})`를 명시해 프록시 설정을 아예 무시한다.
+_OPENER = urllib.request.build_opener(
+    urllib.request.ProxyHandler({}), _NoRedirectHandler
+)
 
 
 def _guard_destination(
