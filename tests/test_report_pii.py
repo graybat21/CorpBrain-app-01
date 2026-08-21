@@ -186,3 +186,44 @@ def test_banner_shows_the_ollama_model_by_default(
     )
     assert DEFAULT_MODEL in banner
     assert "엔진 local" in banner
+
+
+# --- 파일별 PII 표시 (§4.5 "파일별로", 코드 리뷰 후속) --------------------------------
+
+
+def test_detail_lines_name_each_masked_document() -> None:
+    """어느 문서가 무엇을 가린 채 나갔는지 파일별로 보인다 — 감사 질문의 답이다."""
+    from corpbrain.core.report import build_detail_lines
+
+    result = _result_with(
+        PiiMasking(path=Path("a.docx"), total=5, counts={"RRN": 4, "BIZ_NO": 1}),
+        PiiMasking(path=Path("b.txt"), total=2, counts={"PHONE": 2}),
+    )
+
+    lines = [ln for ln in build_detail_lines(result) if "PII 마스킹" in ln]
+
+    assert len(lines) == 2
+    assert "a.docx" in lines[0] and "5건" in lines[0]
+    assert "주민등록번호 4건" in lines[0]
+    assert "b.txt" in lines[1] and "전화번호 2건" in lines[1]
+
+
+def test_detail_lines_have_no_pii_entry_for_local_runs() -> None:
+    """로컬 엔진 실행에는 파일별 PII 줄이 나오지 않는다."""
+    from corpbrain.core.report import build_detail_lines
+
+    assert not any("PII 마스킹" in ln for ln in build_detail_lines(_result_with()))
+
+
+def test_detail_lines_never_leak_raw_type_tokens() -> None:
+    """파일별 줄도 내부 토큰이 아니라 한국어 유형명을 쓴다."""
+    from corpbrain.core.report import build_detail_lines
+
+    result = _result_with(
+        PiiMasking(path=Path("a.txt"), total=1, counts={"BIZ_NO": 1})
+    )
+
+    line = next(ln for ln in build_detail_lines(result) if "PII 마스킹" in ln)
+
+    assert "사업자등록번호" in line
+    assert "BIZ_NO" not in line

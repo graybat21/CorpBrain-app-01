@@ -453,3 +453,123 @@ def test_cloud_still_enforces_token_gate(
 
     with pytest.raises(TokenBudgetExceededError):
         run_scan(_cloud_config(corpus, tmp_path, force_gates=False, max_total_tokens=1))
+
+
+# --- Ollama 없이 cloud 실행 (§1 "로컬 미가용" 시나리오, 코드 리뷰 후속) ----------------
+
+
+def _cloud_only_gateway(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Ollama는 죽어 있고 Anthropic만 응답하는 환경을 만든다."""
+    from corpbrain.core.llm.ollama_client import OllamaNotAvailableError
+
+    urls: list[str] = []
+
+    def _request_json(url: str, *, method: str = "GET", payload: Any = None, **_: Any) -> Any:
+        urls.append(url)
+        if url.endswith("/api/tags"):
+            raise OllamaNotAvailableError("Ollama 데몬이 응답하지 않습니다")
+        if url.endswith("/api/embeddings"):
+            raise AssertionError("인덱싱을 건너뛰어야 하는데 임베딩을 호출했다")
+        if url.endswith("/v1/models"):
+            return {"data": []}
+        return _tool_use_response(payload["messages"][0]["content"])
+
+    monkeypatch.setattr(gateway, "request_json", _request_json)
+    return urls
+
+
+def test_cloud_runs_without_ollama_and_skips_indexing(
+    corpus: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ollama가 없어도 cloud는 위키를 만든다 — 스펙 §1의 '로컬 미가용' 사용자가 목표다."""
+    grant_cloud_consent()
+    _cloud_only_gateway(monkeypatch)
+
+    result = run_scan(_cloud_config(corpus, tmp_path))
+
+    assert len(result.generated) == 2
+    assert result.indexing_skipped is True
+    assert result.embedding_failures == []  # 실패가 아니라 '건너뜀'이다
+
+
+def test_skipped_indexing_creates_no_index_file(
+    corpus: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """인덱싱을 건너뛰면 인덱스 파일 자체가 생기지 않는다."""
+    from corpbrain.core.vectorstore import index_path_for
+
+    grant_cloud_consent()
+    _cloud_only_gateway(monkeypatch)
+
+    run_scan(_cloud_config(corpus, tmp_path))
+
+    assert not index_path_for(tmp_path / "wiki").exists()
+
+
+def test_skipped_indexing_is_reported_to_the_user(
+    corpus: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """조용히 넘어가지 않는다 — search로 찾을 수 없다는 사실을 알린다."""
+    from corpbrain.core.report import build_summary_lines
+
+    grant_cloud_consent()
+    _cloud_only_gateway(monkeypatch)
+
+    result = run_scan(_cloud_config(corpus, tmp_path))
+
+    summary = "\n".join(build_summary_lines(result))
+    assert "인덱싱 생략" in summary
+    assert "search" in summary
+
+
+def test_local_engine_still_requires_ollama(
+    corpus: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """로컬 엔진은 요약 자체가 불가능하므로 종전대로 차단된다."""
+    from corpbrain.core.llm.ollama_client import OllamaNotAvailableError
+
+    def _dead(url: str, **_: Any) -> Any:
+        raise OllamaNotAvailableError("Ollama 데몬이 응답하지 않습니다")
+
+    monkeypatch.setattr(gateway, "request_json", _dead)
+
+    with pytest.raises(PreconditionError):
+        run_scan(ScanConfig(folder=corpus, out_dir=tmp_path / "wiki", force_gates=True))
+
+
+def test_cloud_still_indexes_when_ollama_is_available(
+    corpus: Path, tmp_path: Path, cloud_gateway: _CloudGateway
+) -> None:
+    """Ollama가 있으면 cloud도 기존대로 인덱싱한다 (기능 후퇴 없음)."""
+    grant_cloud_consent()
+
+    result = run_scan(_cloud_config(corpus, tmp_path))
+
+    assert result.indexing_skipped is False
+    assert any(url.endswith("/api/embeddings") for url in cloud_gateway.urls)
+
+
+def test_missing_embed_model_only_skips_indexing_on_cloud(
+    corpus: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """임베딩 모델만 없는 경우도 cloud는 진행하고 로컬은 차단한다."""
+    from corpbrain.core.llm.ollama_client import ModelNotAvailableError
+
+    def _no_embed_model(url: str, *, method: str = "GET", payload: Any = None, **_: Any) -> Any:
+        if url.endswith("/api/tags"):
+            return {"models": [{"name": DEFAULT_MODEL}]}  # 임베딩 모델 없음
+        if url.endswith("/v1/models"):
+            return {"data": []}
+        if url.endswith("/api/embeddings"):
+            raise AssertionError("인덱싱을 건너뛰어야 하는데 임베딩을 호출했다")
+        return _tool_use_response(payload["messages"][0]["content"])
+
+    grant_cloud_consent()
+    monkeypatch.setattr(gateway, "request_json", _no_embed_model)
+
+    result = run_scan(_cloud_config(corpus, tmp_path))
+    assert len(result.generated) == 2
+    assert result.indexing_skipped is True
+
+    with pytest.raises(ModelNotAvailableError):
+        run_scan(ScanConfig(folder=corpus, out_dir=tmp_path / "local", force_gates=True))

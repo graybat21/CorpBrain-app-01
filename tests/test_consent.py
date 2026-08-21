@@ -246,3 +246,82 @@ def test_config_file_never_contains_api_key(
     assert "ANTHROPIC_API_KEY" not in raw
     assert "api_key" not in raw
     assert set(_read(path)[CONSENT_KEY][CONSENT_PROVIDER]) == {"granted", "granted_at"}
+
+
+# --- 갱신 시 기존 내용 보호 (코드 리뷰 후속) ---------------------------------------
+
+
+def test_unreadable_file_is_not_silently_overwritten(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """읽지 못한 파일을 덮어써 다른 키를 날리지 않는다 — 실패로 알린다.
+
+    권한 거부·파일 잠금은 '내용이 없다'가 아니라 '내용을 확인하지 못했다'이므로,
+    빈 문서로 덮어쓰면 멀쩡한 설정이 사라진다 (스펙 §4.2의 "다른 키는 보존" 이음새).
+    """
+    path = tmp_path / "config.json"
+    path.write_text('{"other_setting": "소중한 값"}', encoding="utf-8")
+
+    def _deny(*_args: object, **_kwargs: object) -> str:
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(Path, "read_text", _deny)
+
+    with pytest.raises(ConsentStoreError):
+        grant_cloud_consent(config_path=path)
+
+
+def test_unreadable_file_keeps_its_contents(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """갱신이 거부된 뒤에도 원본 파일은 그대로 남아 있다."""
+    path = tmp_path / "config.json"
+    original = '{"other_setting": "소중한 값"}'
+    path.write_text(original, encoding="utf-8")
+    real_read = Path.read_text
+
+    def _deny(self: Path, *args: object, **kwargs: object) -> str:
+        if self == path:
+            raise PermissionError(13, "Permission denied")
+        return real_read(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "read_text", _deny)
+    with pytest.raises(ConsentStoreError):
+        revoke_cloud_consent(config_path=path)
+
+    monkeypatch.undo()
+    assert path.read_text(encoding="utf-8") == original
+
+
+def test_missing_file_still_creates_a_fresh_document(tmp_path: Path) -> None:
+    """'파일 없음'은 여전히 정상 경로다 — 새로 만든다(멱등)."""
+    path = tmp_path / "nested" / "config.json"
+
+    grant_cloud_consent(config_path=path)
+
+    assert is_cloud_consent_granted(config_path=path) is True
+
+
+def test_corrupt_json_is_still_overwritten(tmp_path: Path) -> None:
+    """내용을 해석할 수 없으면 보존할 대상이 없으므로 덮어쓴다 (기존 결정 유지)."""
+    path = tmp_path / "config.json"
+    path.write_text("{ 깨진 JSON", encoding="utf-8")
+
+    grant_cloud_consent(config_path=path)
+
+    assert is_cloud_consent_granted(config_path=path) is True
+
+
+def test_lookup_still_fails_safe_on_unreadable_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """조회는 여전히 예외를 내지 않고 '동의 없음'으로 안전하게 실패한다."""
+    path = tmp_path / "config.json"
+    path.write_text('{"cloud_consent": {"anthropic": {"granted": true}}}', encoding="utf-8")
+
+    def _deny(*_args: object, **_kwargs: object) -> str:
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(Path, "read_text", _deny)
+
+    assert is_cloud_consent_granted(config_path=path) is False

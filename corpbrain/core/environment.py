@@ -10,9 +10,9 @@
 
 from __future__ import annotations
 
-import os
 import shutil
 from dataclasses import dataclass
+from pathlib import Path
 
 from corpbrain.core.config import (
     DEFAULT_EMBED_MODEL,
@@ -23,7 +23,10 @@ from corpbrain.core.config import (
 )
 from corpbrain.core.consent import is_cloud_consent_granted
 from corpbrain.core.llm import ollama_client
-from corpbrain.core.llm.anthropic_client import API_KEY_ENV_VAR
+from corpbrain.core.llm.anthropic_client import (
+    CloudAuthError,
+    resolve_api_key,
+)
 from corpbrain.core.llm.ollama_client import OllamaNotAvailableError
 from corpbrain.core.models import HardwareInfo
 from corpbrain.core.plan import detect_hardware
@@ -93,12 +96,20 @@ def diagnose(
     timeout: float = 5.0,
     max_file_size: int = DEFAULT_MAX_FILE_SIZE,
     max_total_tokens: int = DEFAULT_MAX_TOTAL_TOKENS,
+    config_path: Path | None = None,
 ) -> DoctorReport:
     """환경을 점검해 `DoctorReport`를 조립한다 (전 항목 점검, fail-fast 아님).
 
     설치 감지는 로컬 PATH 조회(`shutil.which`)뿐이고, 데몬·모델은 단일 관문을 경유한다.
     데몬 미구동이면 모델 목록을 알 수 없으므로 `running=False`·`model_present=False`·
     `embed_model_present=False`로 둔다.
+
+    Args:
+        config_path: 동의 설정 파일 경로(선택). `consent` 모듈이 테스트 격리를 위해 마련한
+            경로 주입 이음새를 여기서도 그대로 이어 준다 — 이 인자가 없으면 `diagnose`를
+            직접 호출하는 테스트가 개발자의 실제 `~/.corpbrain/config.json`을 읽게 되어,
+            수동 스모크로 동의를 한 번 켜는 순간 조용히 다른 분기를 타게 된다.
+            `None`(기본)이면 실제 사용자 설정 경로를 쓴다.
     """
     installed = shutil.which(OLLAMA_BINARY) is not None
     hardware = detect_hardware()
@@ -126,6 +137,20 @@ def diagnose(
         hardware=hardware,
         max_file_size=max_file_size,
         max_total_tokens=max_total_tokens,
-        cloud_consent=is_cloud_consent_granted(),
-        cloud_api_key=bool(os.environ.get(API_KEY_ENV_VAR, "").strip()),
+        cloud_consent=is_cloud_consent_granted(config_path=config_path),
+        cloud_api_key=_api_key_present(),
     )
+
+
+def _api_key_present() -> bool:
+    """`ANTHROPIC_API_KEY`가 설정돼 있는지만 본다 — 값 자체는 읽어 두지 않는다.
+
+    판정 규칙(공백 제거 후 비어 있으면 없음)을 `anthropic_client.resolve_api_key`와
+    한 곳에서 맞춘다 — doctor가 "설정됨"이라고 했는데 정작 scan이 "미설정"으로 막히는
+    엇갈림을 막기 위함이다.
+    """
+    try:
+        resolve_api_key()
+    except CloudAuthError:
+        return False
+    return True

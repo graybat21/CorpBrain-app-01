@@ -99,7 +99,7 @@ def grant_cloud_consent(*, config_path: Path | None = None) -> None:
         ConsentStoreError: 설정 폴더 생성 또는 파일 기록에 실패한 경우.
     """
     path = config_path or default_config_path()
-    document = _read_document(path)
+    document = _read_document_for_update(path)
     document[CONSENT_KEY] = _with_provider(
         document,
         {"granted": True, "granted_at": datetime.now(UTC).isoformat()},
@@ -122,7 +122,7 @@ def revoke_cloud_consent(*, config_path: Path | None = None) -> None:
         ConsentStoreError: 설정 폴더 생성 또는 파일 기록에 실패한 경우.
     """
     path = config_path or default_config_path()
-    document = _read_document(path)
+    document = _read_document_for_update(path)
     document[CONSENT_KEY] = _with_provider(document, {"granted": False})
     _write_document(path, document)
 
@@ -138,13 +138,47 @@ def _with_provider(document: dict[str, Any], entry: dict[str, Any]) -> dict[str,
 def _read_document(path: Path) -> dict[str, Any]:
     """설정 파일을 dict로 읽는다. 읽을 수 없거나 최상위가 객체가 아니면 빈 dict.
 
-    호출자가 '동의 없음'으로 안전하게 진행할 수 있도록 어떤 예외도 밖으로 내지 않는다
-    (파일 없음·권한 거부·깨진 JSON·UTF-8 디코딩 실패 모두 동일 취급).
+    **조회 전용**이다. 호출자가 '동의 없음'으로 안전하게 진행할 수 있도록 어떤 예외도 밖으로
+    내지 않는다(파일 없음·권한 거부·깨진 JSON·UTF-8 디코딩 실패 모두 동일 취급). 조회에서
+    빈 dict는 곧 '동의 없음'이라 안전한 방향으로 실패하는 셈이다.
+
+    갱신(grant/revoke) 경로는 이 함수를 쓰지 않는다 — `_read_document_for_update` 참조.
     """
     try:
         raw = path.read_text(encoding="utf-8")
     except (OSError, ValueError):  # 파일 없음·권한 거부·디코딩 실패(UnicodeDecodeError)
         return {}
+    try:
+        document = json.loads(raw)
+    except ValueError:  # 깨진 JSON
+        return {}
+    return document if isinstance(document, dict) else {}
+
+
+def _read_document_for_update(path: Path) -> dict[str, Any]:
+    """갱신 직전에 기존 문서를 읽는다 — 보존할 수 없는 상황이면 덮어쓰지 않고 실패한다.
+
+    조회(`_read_document`)와 달리 **'파일이 없다'와 '파일을 읽지 못했다'를 구분**한다.
+    둘 다 빈 dict로 뭉개면, 동기화 클라이언트가 잠갔거나 권한이 잠시 막힌 것뿐인
+    멀쩡한 설정 파일을 통째로 덮어써 다른 키를 날리게 된다(스펙 §4.2가 요구한 "다른 키는
+    보존" 이음새가 바로 그때 깨진다).
+
+    - 파일 없음 → 빈 dict (새로 만든다)
+    - 내용이 파싱 불가(깨진 JSON·비-객체·디코딩 실패) → 빈 dict (보존할 내용을 알 수 없으므로
+      새 문서로 덮어쓴다 — 손상 파일 때문에 동의 기록이 영구히 막히지 않게 한다)
+    - 그 밖의 읽기 실패(권한 거부 등) → `ConsentStoreError` (내용이 멀쩡할 수 있으므로 보호한다)
+    """
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return {}
+    except UnicodeDecodeError:
+        return {}  # 내용을 해석할 수 없다 — 보존할 대상이 없다
+    except OSError as exc:
+        raise ConsentStoreError(
+            f"설정 파일을 읽지 못해 갱신을 중단했습니다: {path} ({exc}) — "
+            f"덮어쓰면 기존 설정이 사라질 수 있습니다. 권한·잠금을 확인한 뒤 다시 실행하세요."
+        ) from exc
     try:
         document = json.loads(raw)
     except ValueError:  # 깨진 JSON

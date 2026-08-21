@@ -103,6 +103,9 @@ class ScanResult:
     embedding_failures: list[EmbeddingFailure] = field(default_factory=list)
     #: 클라우드로 보내기 전 마스킹한 PII 집계 (파일별). `engine="local"`이면 항상 빈 목록이다 (v0.5 §4.5).
     pii_maskings: list[PiiMasking] = field(default_factory=list)
+    #: 로컬 Ollama가 없어 벡터 인덱싱을 건너뛰었는가 (`--engine cloud` 전용, v0.5 §1).
+    #: True면 위키는 정상 생성됐지만 `search`가 이 문서들을 찾지 못한다.
+    indexing_skipped: bool = False
     #: 스캔 대상이 상한(`ScanConfig.max_files`)을 넘어 처리를 중단했는가.
     limit_exceeded: bool = False
     #: 상한 판정에 사용된 발견 파일 수.

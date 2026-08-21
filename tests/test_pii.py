@@ -195,11 +195,36 @@ def test_rrn_gender_digit_outside_range_is_not_masked() -> None:
     assert result.counts == {}
 
 
-def test_iso_date_is_over_masked_as_account() -> None:
-    """계좌번호 휴리스틱의 알려진 과탐 — 스펙이 "오탐률이 가장 높다"고 인지하고 채택한 동작이다."""
-    result = mask_pii("작성일 2026-08-21")
+@pytest.mark.parametrize(
+    "text",
+    [
+        "작성일 2026-08-21",
+        "작성일 2026-08-21.",
+        "기간 2026-08-21~2026-09-30",
+        "2026-01-01 부터",
+        "마감 2025-12-31 까지",
+    ],
+)
+def test_iso_dates_are_not_masked_as_account(text: str) -> None:
+    """ISO 날짜는 계좌번호로 잡지 않는다 — 날짜는 개인정보가 아니고, 계약서·회의록의
+    거의 모든 줄에 있어 요약을 뭉개고 PII 집계를 부풀린다 (코드 리뷰 후속)."""
+    result = mask_pii(text)
 
-    assert result.counts == {PiiType.ACCOUNT: 1}
+    assert result.text == text
+    assert result.counts == {}
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "무효 월 1234-56-78",  # 월 56은 날짜가 될 수 없다
+        "무효 일 2026-08-99",  # 일 99는 날짜가 될 수 없다
+        "계좌 110-234-567890",  # 첫 그룹이 4자리가 아니다
+    ],
+)
+def test_date_shaped_but_invalid_values_are_still_masked(text: str) -> None:
+    """날짜가 될 수 없는 값은 계좌번호 후보로 그대로 남긴다 (누락 최소화 원칙)."""
+    assert mask_pii(text).counts == {PiiType.ACCOUNT: 1}
 
 
 # --- 값·순수성 계약 ----------------------------------------------------------------

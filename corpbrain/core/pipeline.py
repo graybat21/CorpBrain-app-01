@@ -19,6 +19,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from corpbrain.core._progress import (
     FileGenerated,
@@ -52,6 +53,7 @@ from corpbrain.core.llm.base import LLMParseError, Summarizer
 from corpbrain.core.llm.embed import EmbeddingError, embed
 from corpbrain.core.llm.ollama_client import (
     ModelNotAvailableError,
+    OllamaNotAvailableError,
     list_models,
     model_present,
 )
@@ -62,6 +64,7 @@ from corpbrain.core.models import (
     PiiMasking,
     ScanPlan,
     ScanResult,
+    SearchResult,
     SkippedFile,
     SkipReason,
 )
@@ -143,19 +146,30 @@ def run_scan(
         _require_cloud_consent()
         api_key = resolve_api_key()
 
-    # 임베딩은 엔진과 무관하게 항상 로컬이므로(v0.5 §2 비목표) Ollama 데몬과 임베딩 모델은
-    # 두 엔진 모두에서 확인한다. 요약 모델은 로컬 엔진일 때만 의미가 있다.
-    available_models = list_models(config.ollama_url)
-    if not cloud and not model_present(available_models, config.model):
-        raise ModelNotAvailableError(
-            f"대상 모델을 찾지 못했습니다: {config.model} — "
-            f"먼저 `ollama pull {config.model}` 를 실행하세요."
-        )
-    if not model_present(available_models, config.embed_model):
-        raise ModelNotAvailableError(
-            f"대상 모델을 찾지 못했습니다: {config.embed_model} — "
-            f"먼저 `ollama pull {config.embed_model}` 를 실행하세요."
-        )
+    # 임베딩은 엔진과 무관하게 항상 로컬이지만(v0.5 §2 비목표), **cloud에서는 Ollama가 없어도
+    # 진행한다** — 스펙 §1이 대상으로 명시한 "로컬 미가용(Ollama 미설치)" 사용자가 정작
+    # 클라우드 경로에서 막히는 모순을 없앤다. 이때 위키는 정상 생성하고 벡터 인덱싱만
+    # 건너뛴다(`search` 불가). 로컬 엔진에서는 요약 자체가 불가능하므로 종전대로 차단한다.
+    indexing = True
+    try:
+        available_models = list_models(config.ollama_url)
+    except OllamaNotAvailableError:
+        if not cloud:
+            raise
+        indexing = False
+    else:
+        if not cloud and not model_present(available_models, config.model):
+            raise ModelNotAvailableError(
+                f"대상 모델을 찾지 못했습니다: {config.model} — "
+                f"먼저 `ollama pull {config.model}` 를 실행하세요."
+            )
+        if not model_present(available_models, config.embed_model):
+            if not cloud:
+                raise ModelNotAvailableError(
+                    f"대상 모델을 찾지 못했습니다: {config.embed_model} — "
+                    f"먼저 `ollama pull {config.embed_model}` 를 실행하세요."
+                )
+            indexing = False
 
     if api_key is not None:
         preflight(api_key)
@@ -188,7 +202,10 @@ def run_scan(
         return result
 
     run_state = _RunState()
-    store, existing_ids = _open_index(config)
+    store, existing_ids = (
+        _open_index(config) if indexing else (_NoIndexStore(), frozenset())
+    )
+    result.indexing_skipped = not indexing
     valid_ids: set[str] = set()
     try:
         for index, source_path in enumerate(findings.targets, start=1):
@@ -196,6 +213,7 @@ def run_scan(
                 source_path, root, config, result,
                 on_event=on_event, index=index, total=total, run_state=run_state,
                 store=store, existing_ids=existing_ids, summarizer=summarizer,
+                indexing=indexing,
             )
             out_path = output_path_for(source_path, root, config.out_dir)
             if out_path.exists():
@@ -216,6 +234,38 @@ def run_scan(
 
     _emit(on_event, RunFinished(at=time.monotonic()))
     return result
+
+
+class _NoIndexStore:
+    """인덱싱을 건너뛸 때 쓰는 무동작 저장소 — `VectorStore` 계약을 그대로 만족한다.
+
+    `--engine cloud`인데 로컬 Ollama가 없어 임베딩을 계산할 수 없는 경우에만 쓴다
+    (스펙 §1의 "로컬 미가용" 사용자). 파이프라인 곳곳에 `if store is not None` 분기를
+    흩뿌리는 대신 무동작 구현을 끼워 넣어 처리 경로를 하나로 유지한다.
+    """
+
+    #: 아무것도 기록하지 않으므로 모델명도 없다 — `_open_index`의 혼입 검사와 무관하다.
+    model_name: str | None = None
+
+    def upsert(self, doc_id: str, vector: list[float], metadata: dict[str, Any]) -> None:
+        """인덱싱하지 않는다."""
+
+    def delete(self, doc_id: str) -> None:
+        """지울 벡터가 없다."""
+
+    def search(self, query_vector: list[float], top_k: int) -> list[SearchResult]:
+        """검색 대상이 없다 — `search` 명령은 이 저장소를 쓰지 않는다."""
+        return []
+
+    def list_ids(self) -> list[str]:
+        """저장된 문서가 없다 — 고아 벡터 정리도 아무 일을 하지 않는다."""
+        return []
+
+    def set_model_name(self, model_name: str) -> None:
+        """기록할 인덱스가 없다."""
+
+    def close(self) -> None:
+        """쥔 자원이 없다."""
 
 
 def _require_cloud_consent() -> None:
@@ -311,8 +361,14 @@ def _process_one(
     store: VectorStore,
     existing_ids: frozenset[str],
     summarizer: Summarizer,
+    indexing: bool = True,
 ) -> None:
-    """파일 1개를 처리한다 — 어떤 실패도 이 함수 밖으로 새어 나가지 않는다."""
+    """파일 1개를 처리한다 — 어떤 실패도 이 함수 밖으로 새어 나가지 않는다.
+
+    `indexing=False`면 임베딩 호출 자체를 하지 않는다 — 로컬 Ollama가 없어 인덱싱을
+    건너뛰는 경우다(v0.5 §1). 저장소만 무동작으로 바꾸면 임베딩은 그대로 호출되므로
+    여기서 함께 막아야 한다.
+    """
     out_path = output_path_for(source_path, root, config.out_dir)
     path_str = str(source_path)
     size_bytes = safe_size(source_path)
@@ -336,7 +392,7 @@ def _process_one(
         result.skipped.append(SkippedFile(path=source_path, reason=SkipReason.UP_TO_DATE))
         # 위키는 스킵돼도, 인덱스에 이 문서 벡터가 아직 없으면 기존 위키에서 백필한다
         # (v0.4 스펙 §3 항목3 정정 — 재생성 여부가 아니라 인덱스 존재 여부가 기준).
-        if path_str not in existing_ids:
+        if indexing and path_str not in existing_ids:
             _backfill_embedding(source_path, out_path, config, result, store)
         _emit(on_event, FileSkipped(at=time.monotonic(), index=index, total=total,
                                     path=path_str, reason=SkipReason.UP_TO_DATE.value))
@@ -406,9 +462,10 @@ def _process_one(
 
     result.generated.append(GeneratedWiki(source_path=source_path, output_path=out_path))
     # 위키가 재생성됐으므로 벡터도 항상 재계산한다 (v0.4 스펙 §3 항목3).
-    _index_document(
-        source_path, summary_embedding_text(summary), summary.title, config, result, store
-    )
+    if indexing:
+        _index_document(
+            source_path, summary_embedding_text(summary), summary.title, config, result, store
+        )
     _emit(on_event, FileGenerated(at=time.monotonic(), index=index, total=total,
                                   path=path_str, output_path=str(out_path), latency=latency))
 

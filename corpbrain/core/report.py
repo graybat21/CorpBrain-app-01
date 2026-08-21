@@ -59,7 +59,23 @@ def build_detail_lines(result: ScanResult) -> list[str]:
         + (f" — {failure.detail}" if failure.detail else "")
         for failure in result.embedding_failures
     ]
+    # 어느 문서가 무엇을 가린 채 외부로 나갔는지 — 감사(audit) 질문에 답하는 줄이다.
+    # 스펙 §4.5가 치환 건수를 "파일별로" 표시하라고 요구한다 (로컬 엔진이면 항상 비어 있다).
+    lines += [
+        f"[PII 마스킹] {masking.path} — {masking.total}건"
+        + (f" ({_breakdown(masking.counts)})" if masking.counts else "")
+        for masking in result.pii_maskings
+    ]
     return lines
+
+
+def _breakdown(counts: dict[str, int]) -> str:
+    """유형별 건수를 한국어 라벨로, 건수 내림차순으로 조립한다 (결정적 출력)."""
+    ordered = sorted(
+        ((pii_label_for(name), count) for name, count in counts.items()),
+        key=lambda item: (-item[1], item[0]),
+    )
+    return ", ".join(f"{label} {count}건" for label, count in ordered)
 
 
 def build_summary_lines(result: ScanResult) -> list[str]:
@@ -84,6 +100,12 @@ def build_summary_lines(result: ScanResult) -> list[str]:
         lines.append(f"인덱싱 실패 {len(result.embedding_failures)}건 (위키는 생성됨)")
     # 클라우드로 나가기 전 가려진 개인정보 집계 (v0.5 §4.5). 로컬 엔진이면 항상 비어 있다.
     lines.extend(_pii_summary_lines(result))
+    if result.indexing_skipped:
+        # 위키는 정상이지만 `search`가 이 문서들을 찾지 못한다 — 조용히 넘어가면 안 된다.
+        lines.append(
+            "인덱싱 생략 — 로컬 Ollama를 찾지 못해 벡터 인덱스를 만들지 않았습니다. "
+            "위키는 정상 생성됐지만 `corpbrain search`로는 찾을 수 없습니다."
+        )
     lines.append(f"출력 경로: {result.out_dir}")
     return lines
 
@@ -112,13 +134,8 @@ def _pii_summary_lines(result: ScanResult) -> list[str]:
         for name, count in masking.counts.items():
             per_type[name] = per_type.get(name, 0) + count
     total = sum(masking.total for masking in result.pii_maskings)
-    ordered = sorted(
-        ((pii_label_for(name), count) for name, count in per_type.items()),
-        key=lambda item: (-item[1], item[0]),
-    )
-    breakdown = ", ".join(f"{label} {count}건" for label, count in ordered)
     return [
-        f"PII 마스킹 {total}건 (문서 {len(result.pii_maskings)}개) — {breakdown}",
+        f"PII 마스킹 {total}건 (문서 {len(result.pii_maskings)}개) — {_breakdown(per_type)}",
     ]
 
 
