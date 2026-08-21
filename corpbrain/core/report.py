@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from corpbrain.core.llm.anthropic_client import API_KEY_ENV_VAR
+from corpbrain.core.config import API_KEY_ENV_VAR
 from corpbrain.core.models import (
     IndexingSkipReason,
     PlanEntry,

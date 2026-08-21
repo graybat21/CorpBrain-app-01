@@ -77,6 +77,16 @@ _OPENER = urllib.request.build_opener(
 )
 
 
+def host_of(url: str) -> str:
+    """URL에서 호스트만 뽑는다 (문자열 처리 — 네트워크 접촉 없음).
+
+    호출자가 "내가 가려는 곳은 여기뿐"이라고 관문에 선언할 때 쓴다. 예를 들어 로컬 경로는
+    `--ollama-url`의 호스트를 그대로 넘겨, 리버스 프록시·LAN GPU 박스처럼 localhost가 아닌
+    Ollama도 계속 쓰면서(스펙 §4.4) 그 밖의 목적지로는 새지 않게 한다.
+    """
+    return (urlsplit(url).hostname or "").lower()
+
+
 def _guard_destination(
     url: str,
     *,
@@ -131,9 +141,9 @@ def request_json(
     *,
     method: str = "GET",
     payload: Mapping[str, Any] | None = None,
+    allowed_hosts: Sequence[str],
     headers: Mapping[str, str] | None = None,
     timeout: float = 60.0,
-    allowed_hosts: Sequence[str] | None = None,
     require_https: bool = False,
 ) -> Any:
     """외부에 JSON 요청을 보내고 응답 JSON을 파싱해 반환한다 — 프로세스의 유일한 출구.
@@ -146,9 +156,12 @@ def request_json(
         headers: 추가 요청 헤더(선택). 인증 헤더 등 provider 고유 헤더를 싣는 통로다
             (v0.5 스펙 §4.3 — 공식 SDK 없이 raw HTTP로 호출하기 위함). 기본 헤더
             (`Accept`·`Content-Type`)와 키가 겹치면 이 값이 이긴다.
+        allowed_hosts: NetworkGuard 허용 호스트 목록 (v0.5 스펙 §4.4). **필수 인자다** —
+            기본값을 두면 "제한 없음"이 조용한 기본 동작이 되어, 호출부가 잊거나 리팩터링이
+            인자를 흘리는 순간 아무 신호 없이 가드가 사라진다. 관문은 이 프로세스의 유일한
+            출구이므로 목적지 정책을 매 호출이 **명시적으로 선언**하게 한다. 로컬 경로는
+            `host_of(ollama_url)`을, 클라우드 경로는 provider 호스트를 넘긴다.
         timeout: 소켓 타임아웃(초).
-        allowed_hosts: NetworkGuard 허용 호스트 목록 (v0.5 스펙 §4.4). 주어지면 소켓을
-            열기 전에 목적지 호스트를 대소문자 무시 정확 일치로 검사한다.
         require_https: True면 HTTPS 스킴만 허용한다 (클라우드 경로).
 
     Returns:

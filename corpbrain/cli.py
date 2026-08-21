@@ -24,8 +24,8 @@ from corpbrain.core._progress import (
     reduce,
     render_status_line,
 )
+from corpbrain.core.config import API_KEY_ENV_VAR
 from corpbrain.core.errors import PreconditionError, TokenBudgetExceededError
-from corpbrain.core.llm.anthropic_client import API_KEY_ENV_VAR
 from corpbrain.core.report import (
     build_detail_lines,
     build_doctor_lines,

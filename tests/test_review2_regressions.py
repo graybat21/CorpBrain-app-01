@@ -1,4 +1,9 @@
-"""2차 코드 리뷰(A그룹 6건) 회귀 테스트 — 각 수정이 되돌아가지 않게 고정한다."""
+"""2차 코드 리뷰 후속 회귀 테스트 — 각 수정이 되돌아가지 않게 고정한다.
+
+A그룹 6건(감사 누락·생략 사유·게이트 표시·쓰기 예외·경로 이음새·front-matter 범위)과
+B그룹 3건(관문 목적지 필수 선언·재실행 판정 순서)을 다룬다. B그룹의 import 방향 정리는
+동작 변경이 없어 별도 테스트 대신 정적 검사(`test_gateway.py`)로 지킨다.
+"""
 
 from __future__ import annotations
 
@@ -340,3 +345,100 @@ def test_front_matter_value_wins_over_body() -> None:
 def test_missing_front_matter_falls_back_to_local() -> None:
     """front-matter 자체가 없으면 로컬로 본다(v0.4 이전 생성물 하위 호환)."""
     assert read_engine(_wiki("# 제목만 있는 파일\n\n본문\n")) == ENGINE_LOCAL
+
+
+# --- B-1: 관문 목적지 정책은 필수 선언이다 ------------------------------------------
+
+
+def test_local_llm_calls_declare_their_destination(monkeypatch: pytest.MonkeyPatch) -> None:
+    """로컬 요약·임베딩·탐지 호출이 모두 --ollama-url 호스트를 관문에 선언한다 (§4.4)."""
+    seen: list[Any] = []
+
+    def _capture(url: str, *, allowed_hosts: Any, **_: Any) -> Any:
+        seen.append(allowed_hosts)
+        if url.endswith("/api/tags"):
+            return {"models": [{"name": DEFAULT_MODEL}]}
+        if url.endswith("/api/embeddings"):
+            return {"embedding": [0.1]}
+        return {"response": '{"title":"t","one_line_summary":"o","key_points":["k"],'
+                            '"summary":"s","tags":["g"]}'}
+
+    monkeypatch.setattr(gateway, "request_json", _capture)
+
+    from corpbrain.core.llm.embed import embed
+    from corpbrain.core.llm.ollama_client import list_models
+    from corpbrain.core.llm.summarize import summarize
+
+    remote = "http://gpu-box.lan:11434"
+    list_models(remote)
+    summarize("본문", DEFAULT_MODEL, remote)
+    embed("본문", "nomic-embed-text", remote)
+
+    assert len(seen) == 3
+    assert all(hosts == ("gpu-box.lan",) for hosts in seen)
+
+
+def test_remote_ollama_host_passes_the_guard() -> None:
+    """localhost가 아닌 Ollama도 가드를 통과한다 — LAN GPU 박스 사용을 막지 않는다 (C-1 결정)."""
+    url = "http://gpu-box.lan:11434/api/tags"
+
+    # 가드만 직접 확인한다(소켓을 열지 않는다). 예외가 없으면 통과다.
+    gateway._guard_destination(
+        url, allowed_hosts=(gateway.host_of(url),), require_https=False
+    )
+
+
+def test_guard_still_blocks_a_host_the_caller_did_not_declare() -> None:
+    """선언하지 않은 목적지는 여전히 막힌다 — 자기참조 선언이 무제한을 뜻하지 않는다."""
+    with pytest.raises(gateway.NetworkGuardError):
+        gateway._guard_destination(
+            "http://evil.example.com/api/tags",
+            allowed_hosts=("gpu-box.lan",),
+            require_https=False,
+        )
+
+
+def test_host_of_extracts_the_hostname() -> None:
+    """host_of는 포트·경로·대소문자를 제거하고 호스트만 남긴다."""
+    assert gateway.host_of("http://127.0.0.1:11434/api/tags") == "127.0.0.1"
+    assert gateway.host_of("https://API.Anthropic.COM/v1/messages") == "api.anthropic.com"
+
+
+# --- B-3: 값싼 판정이 먼저 온다 -------------------------------------------------------
+
+
+def test_changed_source_does_not_read_the_existing_wiki(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """mtime만으로 재생성이 확정되면 위키를 열어 읽지 않는다 (불필요한 I/O 제거)."""
+    from corpbrain.core import rerun
+
+    source = tmp_path / "a.txt"
+    source.write_text("본문", encoding="utf-8")
+    wiki = tmp_path / "a.txt.md"
+    wiki.write_text('---\nengine: "local"\n---\n', encoding="utf-8")
+    os.utime(wiki, (1, 1))  # 위키를 원문보다 과거로 만든다
+
+    reads: list[Path] = []
+    monkeypatch.setattr(
+        rerun, "read_engine", lambda path: reads.append(path) or ENGINE_LOCAL
+    )
+
+    assert rerun.should_regenerate(source, wiki, engine=ENGINE_LOCAL) is True
+    assert reads == []  # 열지 않았다
+
+
+def test_engine_switch_still_forces_regeneration_when_mtime_is_stale(
+    tmp_path: Path
+) -> None:
+    """원문이 그대로여도 엔진이 다르면 재생성한다 — 순서를 바꿔도 계약은 그대로다 (§3-9)."""
+    from corpbrain.core.rerun import should_regenerate
+
+    source = tmp_path / "a.txt"
+    source.write_text("본문", encoding="utf-8")
+    wiki = tmp_path / "a.txt.md"
+    wiki.write_text('---\nengine: "local"\n---\n', encoding="utf-8")
+    os.utime(source, (1, 1))  # 원문을 위키보다 과거로 만든다
+
+    assert should_regenerate(source, wiki, engine=ENGINE_CLOUD) is True
+    assert should_regenerate(source, wiki, engine=ENGINE_LOCAL) is False

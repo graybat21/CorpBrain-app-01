@@ -21,6 +21,7 @@ from typing import Any
 from urllib.parse import urljoin  # 순수 문자열 유틸 — 네트워크 호출 없음
 
 from corpbrain.core import gateway
+from corpbrain.core.config import API_KEY_ENV_VAR as _API_KEY_ENV_VAR
 from corpbrain.core.config import ENGINE_CLOUD
 from corpbrain.core.errors import CorpBrainError, PreconditionError
 from corpbrain.core.llm.base import LLMParseError, validate_summary_fields
@@ -36,8 +37,9 @@ MODELS_PATH = "/v1/models"
 #: Anthropic API 버전 헤더 (Messages API 안정 버전).
 ANTHROPIC_VERSION = "2023-06-01"
 
-#: API 키를 받는 유일한 통로 — Anthropic 공식 관례와 같은 이름을 재사용한다 (v0.5 §4.1).
-API_KEY_ENV_VAR = "ANTHROPIC_API_KEY"
+#: 이름은 코어 설정(`config.API_KEY_ENV_VAR`)이 소유한다 — 여기서는 재수출만 한다.
+#: 표시 계층(report·cli)이 이 문자열 때문에 전송 모듈을 import 하지 않게 하기 위함이다.
+API_KEY_ENV_VAR = _API_KEY_ENV_VAR
 
 #: 요약 1건의 소켓 타임아웃(초). 같은 성격의 로컬 요약(`summarize.DEFAULT_TIMEOUT`)과 같은 값.
 DEFAULT_TIMEOUT = 300.0

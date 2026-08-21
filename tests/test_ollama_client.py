@@ -44,12 +44,16 @@ def _stub_gateway(
     def fake_request_json(
         url: str,
         *,
+        allowed_hosts: Any,
         method: str = "GET",
         payload: Any = None,
         timeout: float = 60.0,
+        **_: Any,
     ) -> Any:
         assert method == "GET", "헬스체크는 GET이어야 한다"
         assert payload is None, "탐지 호출은 본문을 보내지 않는다"
+        # 관문에 목적지 정책을 선언하지 않고 부르는 경로가 없어야 한다 (스펙 §4.4).
+        assert allowed_hosts, "로컬 호출도 allowed_hosts를 선언해야 한다"
         calls.append((url, timeout))
         if error is not None:
             raise error

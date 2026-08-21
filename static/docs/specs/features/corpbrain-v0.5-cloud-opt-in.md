@@ -229,6 +229,16 @@ corpbrain doctor
   경로는 `api.anthropic.com`만 허용한다. 불일치 시 소켓을 열지 않고 즉시 실패시킨다.
 - `engine=cloud` 요청은 스킴이 반드시 `https`여야 한다. 리다이렉트는 추적하지 않는다(3xx
   응답을 받으면 그대로 실패로 처리한다).
+- **목적지 선언은 필수다** [제안 후 승인 · 2026-08-21 추가]: `gateway.request_json()`의
+  `allowed_hosts`는 **기본값 없는 필수 인자**다. 기본값을 두면 "제한 없음"이 조용한 기본
+  동작이 되어, 호출부가 잊거나 리팩터링이 인자를 흘리는 순간 아무 신호 없이 가드가 사라진다.
+  관문은 프로세스의 유일한 출구이므로 매 호출이 목적지 정책을 명시적으로 선언한다.
+  - 로컬 경로(`ollama_client`·`summarize`·`embed`)는 `host_of(--ollama-url)`을 넘긴다.
+    자기참조처럼 보이지만, 이로써 §4.4의 "local은 `--ollama-url` 호스트만"이 실제로 코드에
+    구현되며, 리버스 프록시·LAN GPU 박스의 Ollama도 계속 쓸 수 있다(localhost로 좁히지 않는다).
+  - 클라우드 경로는 `api.anthropic.com`을 넘긴다.
+  - 회귀 방지: 패키지 안의 모든 `request_json` 호출이 `allowed_hosts`를 넘기는지 AST로
+    정적 검사한다.
 - **구현 방식** [제안 후 승인]: `urllib.parse.urlsplit(url)`로 `(scheme, hostname)`을 추출해
   대소문자 무시 정확 일치로 allowlist와 비교한다(서픽스·와일드카드 매칭 없음). 리다이렉트
   추적 차단은 표준 `urllib.request.HTTPRedirectHandler`를 오버라이드해 3xx 응답 시 무조건

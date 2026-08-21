@@ -31,6 +31,14 @@ ENGINES: tuple[str, ...] = (ENGINE_LOCAL, ENGINE_CLOUD)
 #: `--cloud-model` 기본값 — 빠르고 저렴한 모델 (v0.5 스펙 §4.1).
 DEFAULT_CLOUD_MODEL = "claude-haiku-4-5-20251001"
 
+#: API 키를 받는 유일한 통로 — Anthropic 공식 관례와 같은 이름을 재사용한다 (v0.5 §4.1).
+#:
+#: 이름(설정 키)은 코어 설정이 소유한다. 리포트·CLI 같은 표시 계층이 이 문자열 하나 때문에
+#: 클라우드 전송 모듈(`llm.anthropic_client`)을 import 하면, 표시 계층이 전송 계층에 묶이고
+#: `core/__init__ → environment → anthropic_client → core` 순환 import가 깊어진다.
+#: 값 자체는 어디에도 저장하지 않는다 — 읽기는 `anthropic_client.resolve_api_key()`뿐이다.
+API_KEY_ENV_VAR = "ANTHROPIC_API_KEY"
+
 #: 지원 포맷 4종 (스펙 §4.2 + v0.2 §4.1 `.pdf`). 그 외 확장자는 스킵한다.
 SUPPORTED_EXTENSIONS: frozenset[str] = frozenset({".docx", ".txt", ".md", ".pdf"})
 

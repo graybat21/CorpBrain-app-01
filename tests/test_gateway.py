@@ -23,6 +23,8 @@ from corpbrain.core import gateway
 from corpbrain.core.errors import CorpBrainError
 
 OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
+#: 로컬 호출도 목적지 정책을 선언해야 한다 — `allowed_hosts`는 기본값 없는 필수 인자다 (§4.4).
+LOCAL_HOSTS = ("127.0.0.1", "localhost")
 
 
 class _FakeResponse:
@@ -82,7 +84,7 @@ def test_get_request_returns_parsed_json(monkeypatch: pytest.MonkeyPatch) -> Non
     """본문 없는 기본 호출은 GET으로 나가고 응답 JSON이 파싱돼 돌아온다."""
     calls = _stub_urlopen(monkeypatch, body=b'{"models": [{"name": "qwen2.5"}]}')
 
-    result = gateway.request_json(OLLAMA_URL)
+    result = gateway.request_json(OLLAMA_URL, allowed_hosts=LOCAL_HOSTS)
 
     assert result == {"models": [{"name": "qwen2.5"}]}
     request, _timeout = calls[0]
@@ -96,7 +98,10 @@ def test_payload_is_json_encoded_and_sent(monkeypatch: pytest.MonkeyPatch) -> No
     calls = _stub_urlopen(monkeypatch, body=b'{"response": "ok"}')
 
     result = gateway.request_json(
-        OLLAMA_URL, method="POST", payload={"model": "qwen2.5", "stream": False}
+        OLLAMA_URL,
+        method="POST",
+        payload={"model": "qwen2.5", "stream": False},
+        allowed_hosts=LOCAL_HOSTS,
     )
 
     assert result == {"response": "ok"}
@@ -110,8 +115,8 @@ def test_timeout_is_passed_through(monkeypatch: pytest.MonkeyPatch) -> None:
     """타임아웃은 기본값(60초)과 명시값 모두 소켓 계층으로 전달된다."""
     calls = _stub_urlopen(monkeypatch)
 
-    gateway.request_json(OLLAMA_URL)
-    gateway.request_json(OLLAMA_URL, timeout=1.5)
+    gateway.request_json(OLLAMA_URL, allowed_hosts=LOCAL_HOSTS)
+    gateway.request_json(OLLAMA_URL, allowed_hosts=LOCAL_HOSTS, timeout=1.5)
 
     assert [timeout for _request, timeout in calls] == [60.0, 1.5]
 
@@ -122,7 +127,7 @@ def test_http_error_is_wrapped(monkeypatch: pytest.MonkeyPatch) -> None:
     _stub_urlopen(monkeypatch, error=error)
 
     with pytest.raises(gateway.GatewayError) as excinfo:
-        gateway.request_json(OLLAMA_URL)
+        gateway.request_json(OLLAMA_URL, allowed_hosts=LOCAL_HOSTS)
 
     assert excinfo.value.url == OLLAMA_URL
     assert excinfo.value.__cause__ is error
@@ -135,7 +140,7 @@ def test_http_error_json_body_is_surfaced(monkeypatch: pytest.MonkeyPatch) -> No
     _stub_urlopen(monkeypatch, error=error)
 
     with pytest.raises(gateway.GatewayError) as excinfo:
-        gateway.request_json(OLLAMA_URL)
+        gateway.request_json(OLLAMA_URL, allowed_hosts=LOCAL_HOSTS)
 
     message = str(excinfo.value)
     assert "500" in message
@@ -150,7 +155,7 @@ def test_http_error_plaintext_body_is_surfaced(monkeypatch: pytest.MonkeyPatch) 
     _stub_urlopen(monkeypatch, error=error)
 
     with pytest.raises(gateway.GatewayError) as excinfo:
-        gateway.request_json(OLLAMA_URL)
+        gateway.request_json(OLLAMA_URL, allowed_hosts=LOCAL_HOSTS)
 
     assert "upstream boom" in str(excinfo.value)
 
@@ -161,7 +166,7 @@ def test_http_error_without_body_still_wraps(monkeypatch: pytest.MonkeyPatch) ->
     _stub_urlopen(monkeypatch, error=error)
 
     with pytest.raises(gateway.GatewayError) as excinfo:
-        gateway.request_json(OLLAMA_URL)
+        gateway.request_json(OLLAMA_URL, allowed_hosts=LOCAL_HOSTS)
 
     assert "500" in str(excinfo.value)
 
@@ -171,7 +176,7 @@ def test_connection_failure_is_wrapped(monkeypatch: pytest.MonkeyPatch) -> None:
     _stub_urlopen(monkeypatch, error=urllib.error.URLError(ConnectionRefusedError(61)))
 
     with pytest.raises(gateway.GatewayError):
-        gateway.request_json(OLLAMA_URL)
+        gateway.request_json(OLLAMA_URL, allowed_hosts=LOCAL_HOSTS)
 
 
 def test_timeout_is_wrapped(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -179,7 +184,7 @@ def test_timeout_is_wrapped(monkeypatch: pytest.MonkeyPatch) -> None:
     _stub_urlopen(monkeypatch, error=TimeoutError("timed out"))
 
     with pytest.raises(gateway.GatewayError):
-        gateway.request_json(OLLAMA_URL)
+        gateway.request_json(OLLAMA_URL, allowed_hosts=LOCAL_HOSTS)
 
 
 def test_invalid_json_response_is_wrapped(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -187,7 +192,7 @@ def test_invalid_json_response_is_wrapped(monkeypatch: pytest.MonkeyPatch) -> No
     _stub_urlopen(monkeypatch, body=b"not json at all")
 
     with pytest.raises(gateway.GatewayError):
-        gateway.request_json(OLLAMA_URL)
+        gateway.request_json(OLLAMA_URL, allowed_hosts=LOCAL_HOSTS)
 
 
 def test_unserializable_payload_fails_before_any_call(
@@ -197,7 +202,12 @@ def test_unserializable_payload_fails_before_any_call(
     calls = _stub_urlopen(monkeypatch)
 
     with pytest.raises(gateway.GatewayError):
-        gateway.request_json(OLLAMA_URL, method="POST", payload={"fp": object()})
+        gateway.request_json(
+            OLLAMA_URL,
+            method="POST",
+            payload={"fp": object()},
+            allowed_hosts=LOCAL_HOSTS,
+        )
 
     assert calls == []
 
@@ -213,11 +223,13 @@ def test_gateway_error_is_a_corpbrain_error() -> None:
 def test_requested_urls_records_every_attempt(monkeypatch: pytest.MonkeyPatch) -> None:
     """성공·실패를 가리지 않고 시도한 목적지가 순서대로 기록된다."""
     _stub_urlopen(monkeypatch, body=b"{}")
-    gateway.request_json(OLLAMA_URL)
+    gateway.request_json(OLLAMA_URL, allowed_hosts=LOCAL_HOSTS)
 
     _stub_urlopen(monkeypatch, error=TimeoutError("timed out"))
     with pytest.raises(gateway.GatewayError):
-        gateway.request_json("http://localhost:11434/api/tags")
+        gateway.request_json(
+            "http://localhost:11434/api/tags", allowed_hosts=LOCAL_HOSTS
+        )
 
     assert gateway.requested_urls() == (OLLAMA_URL, "http://localhost:11434/api/tags")
 
@@ -231,8 +243,8 @@ def test_observation_hook_supports_localhost_only_assertion(
     """완료의 정의 6번: 관문 기록만 보고 'localhost 외 연결 없음'을 단언할 수 있다."""
     _stub_urlopen(monkeypatch)
 
-    gateway.request_json(OLLAMA_URL)
-    gateway.request_json("http://localhost:11434/api/tags")
+    gateway.request_json(OLLAMA_URL, allowed_hosts=LOCAL_HOSTS)
+    gateway.request_json("http://localhost:11434/api/tags", allowed_hosts=LOCAL_HOSTS)
 
     hosts = {urlsplit(url).hostname for url in gateway.requested_urls()}
     assert hosts <= {"127.0.0.1", "localhost", "::1"}
@@ -309,11 +321,39 @@ def test_require_https_rejects_plain_http(monkeypatch: pytest.MonkeyPatch) -> No
     assert calls == []
 
 
-def test_local_path_without_allowlist_is_unrestricted(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`allowed_hosts=None`이면 호스트를 제한하지 않는다 (기존 로컬 호출 하위 호환)."""
+def test_allowed_hosts_is_required(monkeypatch: pytest.MonkeyPatch) -> None:
+    """목적지 정책을 선언하지 않고는 관문을 부를 수 없다 (v0.5 §4.4).
+
+    기본값을 두면 "제한 없음"이 조용한 기본 동작이 되어, 호출부가 잊거나 리팩터링이 인자를
+    흘리는 순간 아무 신호 없이 가드가 사라진다. 관문은 이 프로세스의 유일한 출구이므로
+    누락이 **호출 시점에 즉시 드러나야** 한다.
+    """
     _stub_urlopen(monkeypatch, body=b"{}")
 
-    assert gateway.request_json(OLLAMA_URL) == {}
+    with pytest.raises(TypeError):
+        gateway.request_json(OLLAMA_URL)  # type: ignore[call-arg]
+
+
+def test_every_gateway_call_in_the_package_declares_a_destination() -> None:
+    """패키지 안의 모든 관문 호출이 `allowed_hosts`를 넘긴다 (회귀 방지 정적 검사)."""
+    package_root = Path(gateway.__file__).resolve().parents[1]
+    offenders: list[str] = []
+
+    for source_path in sorted(package_root.rglob("*.py")):
+        tree = ast.parse(source_path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            target = node.func
+            is_gateway_call = (
+                isinstance(target, ast.Attribute) and target.attr == "request_json"
+            )
+            if not is_gateway_call:
+                continue
+            if not any(kw.arg == "allowed_hosts" for kw in node.keywords):
+                offenders.append(f"{source_path.relative_to(package_root)}:{node.lineno}")
+
+    assert offenders == [], f"목적지를 선언하지 않은 관문 호출: {offenders}"
 
 
 def test_network_guard_error_is_a_gateway_error() -> None:

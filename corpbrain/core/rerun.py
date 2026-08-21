@@ -52,9 +52,12 @@ def should_regenerate(
         return True
     if not out_path.exists():
         return True
-    if engine is not None and read_engine(out_path) != engine:
+    # 값싼 판정(stat 두 번)을 먼저 본다 — 어차피 재생성이면 위키를 열어 읽을 이유가 없다.
+    # 두 조건은 OR이라 순서를 바꿔도 결과가 같고, 로컬 경로에서는 사실상 매번 mtime만으로
+    # 결론이 난다(엔진이 늘 `local`이므로). 50개 파일 재스캔에서 파일 열기 50번을 아낀다.
+    if source_path.stat().st_mtime > out_path.stat().st_mtime:
         return True
-    return source_path.stat().st_mtime > out_path.stat().st_mtime
+    return engine is not None and read_engine(out_path) != engine
 
 
 def read_engine(out_path: Path) -> str:
