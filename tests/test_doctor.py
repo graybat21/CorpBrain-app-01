@@ -202,3 +202,72 @@ def test_dry_run_shows_gate_and_creates_no_wiki(
     assert code == cli.EXIT_OK
     assert "게이트:" in out
     assert not out_dir.exists()
+
+
+# --- 동의 설정 경로 이음새 (코드 리뷰 후속) ------------------------------------------
+
+
+def test_diagnose_reads_the_injected_config_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`config_path`를 주면 그 파일만 본다 — 개발자의 실제 `~/.corpbrain`을 읽지 않는다."""
+    from corpbrain.core.consent import grant_cloud_consent
+
+    monkeypatch.setattr(
+        Path, "home", classmethod(lambda _cls: tmp_path / "절대-없는-홈")
+    )
+    config = tmp_path / "config.json"
+    grant_cloud_consent(config_path=config)
+
+    report = environment.diagnose(model="m", config_path=config)
+
+    assert report.cloud_consent is True
+
+
+def test_diagnose_without_consent_file_reports_not_granted(tmp_path: Path) -> None:
+    """주입한 경로에 파일이 없으면 '동의 없음'이다 (기본 상태)."""
+    report = environment.diagnose(model="m", config_path=tmp_path / "none.json")
+
+    assert report.cloud_consent is False
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [("sk-test", True), ("  ", False), (None, False)],
+)
+def test_api_key_presence_matches_scan_behaviour(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str | None, expected: bool
+) -> None:
+    """doctor의 '키 설정됨' 판정이 scan의 실제 판정과 같은 규칙을 쓴다.
+
+    doctor가 "설정됨"이라 했는데 scan이 "미설정"으로 막히면 사용자가 원인을 못 찾는다.
+    공백만 든 값은 양쪽 모두 '미설정'이어야 한다.
+    """
+    from corpbrain.core.llm.anthropic_client import API_KEY_ENV_VAR
+
+    if value is None:
+        monkeypatch.delenv(API_KEY_ENV_VAR, raising=False)
+    else:
+        monkeypatch.setenv(API_KEY_ENV_VAR, value)
+
+    report = environment.diagnose(model="m", config_path=tmp_path / "none.json")
+
+    assert report.cloud_api_key is expected
+
+
+def test_cloud_state_does_not_affect_readiness(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """클라우드 준비 상태는 `ready`(종료 코드)에 영향을 주지 않는다 (v0.5 §3 항목10)."""
+    from corpbrain.core.consent import grant_cloud_consent
+    from corpbrain.core.llm.anthropic_client import API_KEY_ENV_VAR
+
+    config = tmp_path / "config.json"
+    grant_cloud_consent(config_path=config)
+    monkeypatch.setenv(API_KEY_ENV_VAR, "sk-test")
+
+    granted = environment.diagnose(model="m", config_path=config)
+    absent = environment.diagnose(model="m", config_path=tmp_path / "none.json")
+
+    assert granted.cloud_ready is True
+    assert granted.ready == absent.ready  # 클라우드 상태와 무관하게 동일

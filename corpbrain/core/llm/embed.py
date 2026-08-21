@@ -46,7 +46,14 @@ def embed(
     url = _embed_url(ollama_url)
     payload = {"model": model, "prompt": text}
     try:
-        envelope = gateway.request_json(url, method="POST", payload=payload, timeout=timeout)
+        # 목적지는 `--ollama-url` 호스트 하나뿐이라고 선언한다 (스펙 §4.4).
+        envelope = gateway.request_json(
+            url,
+            method="POST",
+            payload=payload,
+            allowed_hosts=(gateway.host_of(ollama_url),),
+            timeout=timeout,
+        )
     except gateway.GatewayError as exc:
         raise EmbeddingError(f"임베딩 요청에 실패했습니다: {url} ({exc})") from exc
     return _parse_embedding(envelope)

@@ -96,7 +96,10 @@ def list_models(ollama_url: str = DEFAULT_OLLAMA_URL, *, timeout: float = 5.0) -
     """
     url = _health_url(ollama_url)
     try:
-        response = gateway.request_json(url, timeout=timeout)
+        # 목적지는 `--ollama-url`이 가리키는 호스트 하나뿐이라고 관문에 선언한다 (스펙 §4.4).
+        response = gateway.request_json(
+            url, allowed_hosts=(gateway.host_of(ollama_url),), timeout=timeout
+        )
     except gateway.GatewayError as exc:
         raise OllamaNotAvailableError(
             f"구동 중인 로컬 Ollama를 찾지 못했습니다: {url} ({exc})"

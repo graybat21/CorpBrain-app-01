@@ -23,6 +23,7 @@ CLI(`corpbrain.cli`)와 후속 UI 어댑터는 모두 이 패키지의 공개 AP
 from __future__ import annotations
 
 from corpbrain.core.config import (
+    DEFAULT_CLOUD_MODEL,
     DEFAULT_EMBED_MODEL,
     DEFAULT_MAX_CHARS,
     DEFAULT_MAX_FILE_SIZE,
@@ -31,9 +32,20 @@ from corpbrain.core.config import (
     DEFAULT_MODEL,
     DEFAULT_OLLAMA_URL,
     DEFAULT_OUT_DIR,
+    ENGINE_CLOUD,
+    ENGINE_LOCAL,
+    ENGINES,
     MAX_PATH_LENGTH,
     SUPPORTED_EXTENSIONS,
     ScanConfig,
+)
+from corpbrain.core.consent import (
+    default_config_path as consent_path,
+)
+from corpbrain.core.consent import (
+    grant_cloud_consent,
+    is_cloud_consent_granted,
+    revoke_cloud_consent,
 )
 from corpbrain.core.environment import DoctorReport, diagnose
 from corpbrain.core.errors import (
@@ -47,6 +59,7 @@ from corpbrain.core.models import (
     GateVerdict,
     GeneratedWiki,
     HardwareInfo,
+    PiiMasking,
     PlanEntry,
     ScanPlan,
     ScanResult,
@@ -61,6 +74,7 @@ from corpbrain.core.search import IndexNotFoundError, search_index
 from corpbrain.core.vectorstore import index_path_for
 
 __all__ = [
+    "DEFAULT_CLOUD_MODEL",
     "DEFAULT_EMBED_MODEL",
     "DEFAULT_MAX_CHARS",
     "DEFAULT_MAX_FILES",
@@ -69,6 +83,9 @@ __all__ = [
     "DEFAULT_MODEL",
     "DEFAULT_OLLAMA_URL",
     "DEFAULT_OUT_DIR",
+    "ENGINES",
+    "ENGINE_CLOUD",
+    "ENGINE_LOCAL",
     "MAX_PATH_LENGTH",
     "SUPPORTED_EXTENSIONS",
     "CorpBrainError",
@@ -79,6 +96,7 @@ __all__ = [
     "GpuGateError",
     "HardwareInfo",
     "IndexNotFoundError",
+    "PiiMasking",
     "PlanEntry",
     "PreconditionError",
     "ScanConfig",
@@ -89,9 +107,13 @@ __all__ = [
     "SkippedFile",
     "SummaryResult",
     "TokenBudgetExceededError",
+    "consent_path",
     "diagnose",
+    "grant_cloud_consent",
     "index_path_for",
+    "is_cloud_consent_granted",
     "plan_scan",
+    "revoke_cloud_consent",
     "run_scan",
     "search_index",
 ]

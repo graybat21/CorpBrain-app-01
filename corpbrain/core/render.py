@@ -6,10 +6,17 @@
 
 from __future__ import annotations
 
+from corpbrain.core.config import ENGINE_LOCAL
 from corpbrain.core.models import SummaryResult
 
-#: 생성물이 반드시 포함해야 하는 front-matter 키 (스펙 §3 완료의 정의 2번).
-FRONT_MATTER_KEYS: tuple[str, ...] = ("source_path", "generated_at", "model", "source_bytes")
+#: 생성물이 반드시 포함해야 하는 front-matter 키 (스펙 §3 완료의 정의 2번 · v0.5 §4.6 `engine`).
+FRONT_MATTER_KEYS: tuple[str, ...] = (
+    "source_path",
+    "generated_at",
+    "model",
+    "engine",
+    "source_bytes",
+)
 
 #: 생성물이 반드시 포함해야 하는 본문 섹션 헤더 (스펙 §4.4, 순서 고정).
 SECTION_HEADERS: tuple[str, ...] = (
@@ -27,6 +34,7 @@ def render_markdown(
     model: str,
     source_bytes: int,
     generated_at: str,
+    engine: str = ENGINE_LOCAL,
 ) -> str:
     """요약 결과를 스펙 §4.4 템플릿으로 렌더한다.
 
@@ -36,12 +44,15 @@ def render_markdown(
         model: 요약에 사용한 모델 이름.
         source_bytes: 원문 바이트 크기.
         generated_at: ISO8601 생성 시각 (렌더러는 시각을 자체 생성하지 않는다).
+        engine: 요약에 사용한 엔진 (`"local"`·`"cloud"`) — 생성물만 보고도 이 문서가
+            외부로 나갔는지 구별할 수 있게 front-matter에 남긴다 (v0.5 §4.6).
     """
     lines: list[str] = [
         "---",
         f'source_path: "{_quote(source_path)}"',
         f'generated_at: "{_quote(generated_at)}"',
         f'model: "{_quote(model)}"',
+        f'engine: "{_quote(engine)}"',
         f"source_bytes: {source_bytes}",
         "---",
         "",

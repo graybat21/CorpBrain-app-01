@@ -16,8 +16,8 @@ from typing import Any
 from urllib.parse import urljoin  # 순수 문자열 유틸 — 네트워크 호출 없음
 
 from corpbrain.core import gateway
-from corpbrain.core.config import DEFAULT_MODEL, DEFAULT_OLLAMA_URL
-from corpbrain.core.errors import CorpBrainError
+from corpbrain.core.config import DEFAULT_MODEL, DEFAULT_OLLAMA_URL, ENGINE_LOCAL
+from corpbrain.core.llm.base import LLMParseError, validate_summary_fields
 from corpbrain.core.models import SummaryResult
 
 #: 단일 프롬프트 생성 엔드포인트.
@@ -25,10 +25,6 @@ GENERATE_PATH = "/api/generate"
 
 #: 요약 1건의 소켓 타임아웃(초). 로컬 7B 모델이 12,000자를 처리할 여유를 둔다.
 DEFAULT_TIMEOUT = 300.0
-
-#: 문자열 필드와 문자열 배열 필드 (스펙 §4.3의 고정 필드).
-_TEXT_FIELDS = ("title", "one_line_summary", "summary")
-_LIST_FIELDS = ("key_points", "tags")
 
 PROMPT_TEMPLATE = """당신은 사내 문서를 정리하는 한국어 지식 관리 도우미입니다.
 아래 문서를 읽고 JSON 객체 하나만 출력하세요. 설명·코드블록·군더더기 없이 JSON만 출력합니다.
@@ -52,10 +48,6 @@ JSON 스키마:
 {document}
 \"\"\"
 """
-
-
-class LLMParseError(CorpBrainError):
-    """LLM 응답을 고정 필드 JSON으로 해석하지 못함 — 해당 파일만 스킵된다."""
 
 
 def build_prompt(text: str) -> str:
@@ -91,7 +83,14 @@ def summarize(
     }
 
     try:
-        envelope = gateway.request_json(url, method="POST", payload=payload, timeout=timeout)
+        # 목적지는 `--ollama-url` 호스트 하나뿐이라고 선언한다 (스펙 §4.4).
+        envelope = gateway.request_json(
+            url,
+            method="POST",
+            payload=payload,
+            allowed_hosts=(gateway.host_of(ollama_url),),
+            timeout=timeout,
+        )
     except gateway.GatewayError as exc:
         raise LLMParseError(f"요약 요청에 실패했습니다: {url} ({exc})") from exc
 
@@ -99,35 +98,36 @@ def summarize(
 
 
 def parse_summary(raw: str) -> SummaryResult:
-    """모델이 낸 JSON 문자열을 검증해 `SummaryResult`로 만든다."""
+    """모델이 낸 JSON 문자열을 검증해 `SummaryResult`로 만든다.
+
+    필드 검증 규칙 자체는 클라우드 백엔드와 공유한다 (`llm.base.validate_summary_fields`) —
+    엔진에 따라 위키 품질 기준이 달라지지 않게 한다 (v0.5 스펙 §4.3).
+    """
     try:
         parsed = json.loads(raw)
     except (TypeError, ValueError) as exc:
         raise LLMParseError(f"응답이 유효한 JSON이 아닙니다: {raw[:200]!r}") from exc
 
-    if not isinstance(parsed, dict):
-        raise LLMParseError(f"응답 JSON이 객체가 아닙니다: {type(parsed).__name__}")
+    return validate_summary_fields(parsed)
 
-    values: dict[str, Any] = {}
-    for field in _TEXT_FIELDS:
-        value = parsed.get(field)
-        if not isinstance(value, str) or not value.strip():
-            raise LLMParseError(f"필수 문자열 필드가 없거나 비어 있습니다: {field}")
-        values[field] = value.strip()
 
-    for field in _LIST_FIELDS:
-        value = parsed.get(field)
-        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-            raise LLMParseError(f"필수 배열 필드가 문자열 배열이 아닙니다: {field}")
-        values[field] = [item.strip() for item in value if item.strip()]
+class OllamaSummarizer:
+    """로컬 요약 백엔드 — `llm.base.Summarizer` 프로토콜 구현 (v0.5 스펙 §4.3)."""
 
-    return SummaryResult(
-        title=values["title"],
-        one_line_summary=values["one_line_summary"],
-        key_points=values["key_points"],
-        summary=values["summary"],
-        tags=values["tags"],
-    )
+    engine = ENGINE_LOCAL
+    #: 로컬 백엔드는 외부로 나가지 않으므로 마스킹 대상이 아니다 — 항상 `None` (v0.5 §4.5).
+    last_mask = None
+
+    def __init__(
+        self, model: str, ollama_url: str, *, timeout: float = DEFAULT_TIMEOUT
+    ) -> None:
+        self.model = model
+        self._ollama_url = ollama_url
+        self._timeout = timeout
+
+    def summarize(self, text: str) -> SummaryResult:
+        """문서 텍스트를 로컬 Ollama로 요약한다 (외부 전송 없음 — PII 마스킹 대상 아님)."""
+        return summarize(text, self.model, self._ollama_url, timeout=self._timeout)
 
 
 def _response_text(envelope: Any) -> str:

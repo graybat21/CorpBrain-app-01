@@ -8,13 +8,16 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from corpbrain.core.config import API_KEY_ENV_VAR
 from corpbrain.core.models import (
+    IndexingSkipReason,
     PlanEntry,
     ScanPlan,
     ScanResult,
     SearchResult,
     SkipReason,
 )
+from corpbrain.core.pii import PiiType
 
 if TYPE_CHECKING:
     from corpbrain.core.environment import DoctorReport
@@ -34,6 +37,21 @@ SKIP_REASON_LABELS: dict[SkipReason, str] = {
     SkipReason.SUMMARY_FAILED: "LLM JSON 파싱 실패",
     SkipReason.UP_TO_DATE: "최신 상태(재생성 불필요)",
     SkipReason.FILE_TOO_LARGE: "파일 크기 초과",
+    SkipReason.CLOUD_RATE_LIMITED: "클라우드 레이트리밋(429)",
+    SkipReason.CLOUD_API_ERROR: "클라우드 호출 실패",
+}
+
+#: 인덱싱 생략 사유별 안내 — **해결 조치까지 함께** 낸다 (v0.5 §4.8).
+#: 데몬을 띄우는 것과 모델을 받는 것은 다른 일이므로 문구가 갈라져야 한다.
+INDEXING_SKIP_LABELS: dict[IndexingSkipReason, str] = {
+    IndexingSkipReason.OLLAMA_UNAVAILABLE: (
+        "로컬 Ollama 데몬이 응답하지 않아 벡터 인덱스를 만들지 않았습니다 "
+        "(`ollama serve` 실행 후 --force 로 재스캔하면 채워집니다)."
+    ),
+    IndexingSkipReason.EMBED_MODEL_MISSING: (
+        "임베딩 모델이 설치돼 있지 않아 벡터 인덱스를 만들지 않았습니다 "
+        "(`ollama pull <embed-model>` 후 --force 로 재스캔하면 채워집니다)."
+    ),
 }
 
 
@@ -55,7 +73,23 @@ def build_detail_lines(result: ScanResult) -> list[str]:
         + (f" — {failure.detail}" if failure.detail else "")
         for failure in result.embedding_failures
     ]
+    # 어느 문서가 무엇을 가린 채 외부로 나갔는지 — 감사(audit) 질문에 답하는 줄이다.
+    # 스펙 §4.5가 치환 건수를 "파일별로" 표시하라고 요구한다 (로컬 엔진이면 항상 비어 있다).
+    lines += [
+        f"[PII 마스킹] {masking.path} — {masking.total}건"
+        + (f" ({_breakdown(masking.counts)})" if masking.counts else "")
+        for masking in result.pii_maskings
+    ]
     return lines
+
+
+def _breakdown(counts: dict[str, int]) -> str:
+    """유형별 건수를 한국어 라벨로, 건수 내림차순으로 조립한다 (결정적 출력)."""
+    ordered = sorted(
+        ((pii_label_for(name), count) for name, count in counts.items()),
+        key=lambda item: (-item[1], item[0]),
+    )
+    return ", ".join(f"{label} {count}건" for label, count in ordered)
 
 
 def build_summary_lines(result: ScanResult) -> list[str]:
@@ -78,8 +112,46 @@ def build_summary_lines(result: ScanResult) -> list[str]:
     # 위키는 생성됐지만 인덱싱만 실패한 문서 — 스킵과 구분되는 별도 집계 (v0.4 §4.3).
     if result.embedding_failures:
         lines.append(f"인덱싱 실패 {len(result.embedding_failures)}건 (위키는 생성됨)")
+    # 클라우드로 나가기 전 가려진 개인정보 집계 (v0.5 §4.5). 로컬 엔진이면 항상 비어 있다.
+    lines.extend(_pii_summary_lines(result))
+    if result.indexing_skip_reason is not None:
+        # 위키는 정상이지만 `search`가 이 문서들을 찾지 못한다 — 조용히 넘어가면 안 된다.
+        # 사유마다 해결 조치가 다르므로 안내도 갈라진다 (v0.5 §4.8).
+        lines.append(
+            f"인덱싱 생략 — {INDEXING_SKIP_LABELS[result.indexing_skip_reason]} "
+            "위키는 정상 생성됐지만 `corpbrain search`로는 찾을 수 없습니다."
+        )
     lines.append(f"출력 경로: {result.out_dir}")
     return lines
+
+
+def pii_label_for(name: str) -> str:
+    """PII 유형 토큰(`RRN` 등)을 한국어 유형명으로 바꾼다 (스펙 §4.5 표의 '유형' 열).
+
+    출력 언어는 항상 한국어이므로(스펙 §4.3) 리포트에 내부 토큰을 그대로 노출하지 않는다.
+    알 수 없는 값이면 원시 토큰을 그대로 쓴다 — 표시가 실패를 가리지 않게 한다.
+    """
+    try:
+        return PiiType(name).label
+    except ValueError:
+        return name
+
+
+def _pii_summary_lines(result: ScanResult) -> list[str]:
+    """마스킹된 PII를 문서 수·총 건수·유형별로 요약한다 (v0.5 §4.5).
+
+    유형은 건수 내림차순으로, 같은 건수면 한국어 유형명 순으로 낸다(결정적 출력).
+    """
+    if not result.pii_maskings:
+        return []
+    per_type: dict[str, int] = {}
+    for masking in result.pii_maskings:
+        for name, count in masking.counts.items():
+            per_type[name] = per_type.get(name, 0) + count
+    total = sum(masking.total for masking in result.pii_maskings)
+    return [
+        f"PII 마스킹 {total}건 (문서 {len(result.pii_maskings)}개) — {_breakdown(per_type)}",
+    ]
 
 
 def build_search_lines(results: list[SearchResult]) -> list[str]:
@@ -155,11 +227,15 @@ def _gate_report_lines(plan: ScanPlan) -> list[str]:
     gate = plan.gate
     if gate is None:
         return []
-    gpu = (
-        "OK (GPU 감지)"
-        if gate.gpu_ok
-        else "차단 (GPU 미탐지 — scan은 --force-gates 필요)"
-    )
+    if gate.gpu_ok:
+        gpu = "OK (GPU 감지)"
+    elif gate.gpu_enforced:
+        gpu = "차단 (GPU 미탐지 — scan은 --force-gates 필요)"
+    else:
+        # 클라우드 요약은 로컬 GPU를 쓰지 않아 차단 사유가 아니다 (§4.7).
+        # "차단"이라고 표시해 놓고 그냥 진행하면 사용자가 불필요한 --force-gates를 붙이게 되고,
+        # 그러면 cloud에도 유지돼야 할 토큰(비용) 게이트까지 함께 꺼진다.
+        gpu = "미탐지 (cloud 엔진이라 차단하지 않음)"
     tokens = (
         "OK"
         if gate.tokens_ok
@@ -188,7 +264,10 @@ def build_scan_banner_lines(plan: ScanPlan) -> list[str]:
     ]
     gate = plan.gate
     if gate is not None:
-        gpu = "GPU" if gate.gpu_ok else "CPU(차단)"
+        if gate.gpu_ok:
+            gpu = "GPU"
+        else:
+            gpu = "CPU(차단)" if gate.gpu_enforced else "CPU(cloud — 차단 안 함)"
         tok = "OK" if gate.tokens_ok else "예산초과"
         summary = (
             f"게이트: {gpu} · 토큰 {plan.total_est_tokens:,}/{gate.max_total_tokens:,} {tok}"
@@ -196,6 +275,28 @@ def build_scan_banner_lines(plan: ScanPlan) -> list[str]:
         if gate.oversized_count > 0:
             summary += f" · 대용량 {gate.oversized_count}건"
         lines.append(summary)
+    return lines
+
+
+def _cloud_doctor_lines(report: DoctorReport) -> list[str]:
+    """클라우드 옵트인 상태 줄 — GPU와 같은 경고성 표시다 (v0.5 §4.1·§3 항목10).
+
+    동의·API 키는 옵트인이라 없는 것이 기본 상태이므로 [실패]가 아닌 [경고]로 내고,
+    `report.ready`(종료 코드)에는 영향을 주지 않는다.
+    """
+    if report.cloud_ready:
+        return ["  [OK] Cloud(Anthropic): 사용 준비됨"]
+    lines: list[str] = []
+    if report.cloud_consent:
+        lines.append("  [OK] Cloud 동의: 기록됨")
+    else:
+        lines.append(
+            "  [경고] Cloud 동의: 없음 — `corpbrain consent cloud --grant` 로 동의"
+        )
+    if report.cloud_api_key:
+        lines.append(f"  [OK] {API_KEY_ENV_VAR}: 설정됨")
+    else:
+        lines.append(f"  [경고] {API_KEY_ENV_VAR}: 미설정 — 환경변수로 설정 필요")
     return lines
 
 
@@ -234,6 +335,8 @@ def build_doctor_lines(report: DoctorReport) -> list[str]:
         lines.append(f"  [OK] {report.hardware.label}")
     else:
         lines.append(f"  [경고] {report.hardware.label} — scan은 GPU 없이 --force-gates 필요")
+
+    lines.extend(_cloud_doctor_lines(report))
 
     lines.append(
         f"  [정보] 게이트 임계: 파일 {report.max_file_size:,} bytes · "

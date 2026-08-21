@@ -23,6 +23,23 @@ class SkipReason(StrEnum):
     UP_TO_DATE = "up_to_date"
     #: 개별 파일 크기가 `max_file_size`를 초과해 스킵 (v0.3 스펙 §4.2 파일 크기 게이트).
     FILE_TOO_LARGE = "file_too_large"
+    #: 클라우드 요약이 레이트리밋(429)에 걸림 — 재시도 없이 스킵 (v0.5 스펙 §3 항목8).
+    CLOUD_RATE_LIMITED = "cloud_rate_limited"
+    #: 429 외 모든 클라우드 호출 실패(5xx·타임아웃·연결오류·400/404 등) (v0.5 §3 항목8).
+    CLOUD_API_ERROR = "cloud_api_error"
+
+
+class IndexingSkipReason(StrEnum):
+    """`--engine cloud`에서 벡터 인덱싱을 건너뛴 사유 (v0.5 스펙 §4.8).
+
+    두 사유는 해결 방법이 다르다 — 하나는 데몬을 띄워야 하고 하나는 모델을 받아야 한다.
+    단일 bool로 뭉개면 안내가 엉뚱한 곳을 가리킨다.
+    """
+
+    #: Ollama 데몬이 응답하지 않음 → `ollama serve`.
+    OLLAMA_UNAVAILABLE = "ollama_unavailable"
+    #: 데몬은 살아 있으나 임베딩 모델이 설치되지 않음 → `ollama pull <embed-model>`.
+    EMBED_MODEL_MISSING = "embed_model_missing"
 
 
 @dataclass(frozen=True)
@@ -54,6 +71,21 @@ class EmbeddingFailure:
 
 
 @dataclass(frozen=True)
+class PiiMasking:
+    """클라우드로 보내기 전 문서 1건에서 마스킹한 PII 집계 (v0.5 스펙 §4.5).
+
+    `EmbeddingFailure`와 같은 성격의 파일별 부가 기록이다 — 위키는 정상 생성되며,
+    이 값은 "무엇이 얼마나 가려져 나갔는지"를 리포트에 표시하는 데만 쓴다.
+    """
+
+    path: Path
+    #: 마스킹된 총 건수.
+    total: int
+    #: 유형 이름(`PiiType` 값 문자열) → 치환 건수. 1건 이상인 유형만 담는다.
+    counts: dict[str, int] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class SearchResult:
     """벡터 검색 결과 1건 (v0.4 스펙 §4.3) — `VectorStore.search()`가 돌려준다."""
 
@@ -82,10 +114,21 @@ class ScanResult:
     skipped: list[SkippedFile] = field(default_factory=list)
     #: 프리플라이트 통과 후 개별 문서의 임베딩 런타임 실패 (위키는 유지, 인덱싱만 실패) (v0.4 §4.3).
     embedding_failures: list[EmbeddingFailure] = field(default_factory=list)
+    #: 클라우드로 보내기 전 마스킹한 PII 집계 (파일별). `engine="local"`이면 항상 빈 목록이다 (v0.5 §4.5).
+    pii_maskings: list[PiiMasking] = field(default_factory=list)
+    #: 벡터 인덱싱을 건너뛴 **사유** (`--engine cloud` 전용, v0.5 §4.8). `None`이면 정상 인덱싱.
+    #: 사유를 구분해 두는 이유는 해결 방법이 다르기 때문이다 — 데몬을 띄우는 것과
+    #: 모델을 받는 것은 서로 다른 조치이므로 안내가 갈라져야 한다.
+    indexing_skip_reason: IndexingSkipReason | None = None
     #: 스캔 대상이 상한(`ScanConfig.max_files`)을 넘어 처리를 중단했는가.
     limit_exceeded: bool = False
     #: 상한 판정에 사용된 발견 파일 수.
     discovered_count: int = 0
+
+    @property
+    def indexing_skipped(self) -> bool:
+        """벡터 인덱싱을 건너뛰었는가 — 사유가 있으면 건너뛴 것이다 (v0.5 §4.8)."""
+        return self.indexing_skip_reason is not None
 
 
 @dataclass(frozen=True)
@@ -123,7 +166,7 @@ class GateVerdict:
     에코해 두어 리포트가 별도 조회 없이 "무엇 대비 초과인지"를 보여줄 수 있다.
     """
 
-    #: GPU가 감지됐는가 (False면 GPU 게이트가 scan을 차단한다 — `--force-gates`로만 강행).
+    #: GPU가 감지됐는가.
     gpu_ok: bool
     #: `total_est_tokens <= max_total_tokens` 인가 (False면 토큰 게이트가 scan을 차단, exit 3).
     tokens_ok: bool
@@ -132,6 +175,12 @@ class GateVerdict:
     #: 판정에 쓰인 유효 임계값 (에코).
     max_file_size: int
     max_total_tokens: int
+    #: GPU 게이트가 **이번 실행에서 실제로 차단력을 갖는가** (v0.5 §4.7).
+    #:
+    #: `--engine cloud`는 로컬 GPU를 쓰지 않으므로 GPU 미탐지가 차단 사유가 되지 않는다.
+    #: 판정을 여기 한 번만 담아 `_enforce_gates`와 리포트 렌더러가 같은 값을 본다 —
+    #: 따로 계산하면 "차단됨"이라고 표시해 놓고 그냥 진행하는 불일치가 생긴다.
+    gpu_enforced: bool = True
 
 
 @dataclass(frozen=True)

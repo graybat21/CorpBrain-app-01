@@ -19,6 +19,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from corpbrain.core._progress import (
     FileGenerated,
@@ -32,7 +33,8 @@ from corpbrain.core._progress import (
     RunStarted,
     Stage,
 )
-from corpbrain.core.config import ScanConfig
+from corpbrain.core.config import ENGINE_CLOUD, ScanConfig
+from corpbrain.core.consent import is_cloud_consent_granted
 from corpbrain.core.embedding_text import parse_wiki_markdown, summary_embedding_text
 from corpbrain.core.errors import (
     GpuGateError,
@@ -40,18 +42,30 @@ from corpbrain.core.errors import (
     TokenBudgetExceededError,
 )
 from corpbrain.core.extract import prepare_summary_input
+from corpbrain.core.llm.anthropic_client import (
+    AnthropicSummarizer,
+    CloudApiError,
+    CloudRateLimitedError,
+    preflight,
+    resolve_api_key,
+)
+from corpbrain.core.llm.base import LLMParseError, Summarizer
 from corpbrain.core.llm.embed import EmbeddingError, embed
 from corpbrain.core.llm.ollama_client import (
     ModelNotAvailableError,
+    OllamaNotAvailableError,
     list_models,
     model_present,
 )
-from corpbrain.core.llm.summarize import LLMParseError, summarize
+from corpbrain.core.llm.summarize import OllamaSummarizer
 from corpbrain.core.models import (
     EmbeddingFailure,
     GeneratedWiki,
+    IndexingSkipReason,
+    PiiMasking,
     ScanPlan,
     ScanResult,
+    SearchResult,
     SkippedFile,
     SkipReason,
 )
@@ -96,6 +110,7 @@ def run_scan(
     on_event: EventSink | None = None,
     findings: ScanFindings | None = None,
     plan: ScanPlan | None = None,
+    consent_path: Path | None = None,
 ) -> ScanResult:
     """폴더를 스캔해 문서마다 위키 마크다운 1개를 생성하고 결과를 반환한다.
 
@@ -111,6 +126,10 @@ def run_scan(
             감지·stat 패스)을 두 번 돌지 않는다. 위 `findings`·같은 `config`로 계산된 것이어야
             한다 — findings와 파일 수가 어긋나면(절단·다른 스캔) 신뢰하지 않고 재계산해 오게이팅을
             막는다. `None`이면 `findings`로 새로 계산한다.
+        consent_path: 클라우드 동의 설정 파일 경로(선택). `consent` 모듈의 경로 주입 이음새를
+            코어 진입점까지 이어 준다 — 테스트나 후속 UI 어댑터가 사용자의 실제
+            `~/.corpbrain/config.json`을 건드리지 않고 격리할 수 있다. `None`(기본)이면 실제
+            사용자 설정 경로를 쓴다. `engine="local"`이면 읽지 않는다.
 
     Returns:
         생성·스킵 목록을 담은 `ScanResult`. 개별 파일 실패는 스킵으로 담고 예외로 올리지 않는다.
@@ -124,17 +143,42 @@ def run_scan(
     # 확정하고, 첫 위반에서 즉시 예외로 종료한다. ①~④는 --force-gates로 우회 불가.
     # 모델 목록은 한 번만 조회해 두 모델(요약·임베딩)을 함께 확인한다(왕복 절반으로 줄임).
     root = validated_root(config.folder)
-    available_models = list_models(config.ollama_url)
-    if not model_present(available_models, config.model):
-        raise ModelNotAvailableError(
-            f"대상 모델을 찾지 못했습니다: {config.model} — "
-            f"먼저 `ollama pull {config.model}` 를 실행하세요."
-        )
-    if not model_present(available_models, config.embed_model):
-        raise ModelNotAvailableError(
-            f"대상 모델을 찾지 못했습니다: {config.embed_model} — "
-            f"먼저 `ollama pull {config.embed_model}` 를 실행하세요."
-        )
+    cloud = config.engine == ENGINE_CLOUD
+
+    # 클라우드 선행 조건(동의 → API 키 → 인증 프리플라이트)을 네트워크보다 먼저 확정한다
+    # (v0.5 §4.3 · §3 항목2·4). 동의 확인은 로컬 파일 읽기라 가장 값싸므로 맨 앞에 둔다.
+    api_key: str | None = None
+    if cloud:
+        _require_cloud_consent(consent_path)
+        api_key = resolve_api_key()
+
+    # 임베딩은 엔진과 무관하게 항상 로컬이지만(v0.5 §2 비목표), **cloud에서는 Ollama가 없어도
+    # 진행한다** — 스펙 §1이 대상으로 명시한 "로컬 미가용(Ollama 미설치)" 사용자가 정작
+    # 클라우드 경로에서 막히는 모순을 없앤다. 이때 위키는 정상 생성하고 벡터 인덱싱만
+    # 건너뛴다(`search` 불가). 로컬 엔진에서는 요약 자체가 불가능하므로 종전대로 차단한다.
+    skip_indexing: IndexingSkipReason | None = None
+    try:
+        available_models = list_models(config.ollama_url)
+    except OllamaNotAvailableError:
+        if not cloud:
+            raise
+        skip_indexing = IndexingSkipReason.OLLAMA_UNAVAILABLE
+    else:
+        if not cloud and not model_present(available_models, config.model):
+            raise ModelNotAvailableError(
+                f"대상 모델을 찾지 못했습니다: {config.model} — "
+                f"먼저 `ollama pull {config.model}` 를 실행하세요."
+            )
+        if not model_present(available_models, config.embed_model):
+            if not cloud:
+                raise ModelNotAvailableError(
+                    f"대상 모델을 찾지 못했습니다: {config.embed_model} — "
+                    f"먼저 `ollama pull {config.embed_model}` 를 실행하세요."
+                )
+            skip_indexing = IndexingSkipReason.EMBED_MODEL_MISSING
+
+    if api_key is not None:
+        preflight(api_key)
 
     # 게이트 판정은 상한(`--max`) 절단 이전의 발견 집합으로 계산한다(플랜은 순수·로컬).
     # 어댑터가 배너용으로 이미 계산한 plan을 넘기면 재사용해 하드웨어 감지·stat 패스를 아끼는다.
@@ -154,22 +198,29 @@ def run_scan(
         discovered_count=findings.discovered_count,
     )
 
+    summarizer = _build_summarizer(config, api_key)
+
     total = len(findings.targets)
-    _emit(on_event, RunStarted(at=time.monotonic(), model=config.model, total=total))
+    _emit(on_event, RunStarted(at=time.monotonic(), model=summarizer.model, total=total))
 
     if findings.limit_exceeded:
         _emit(on_event, RunFinished(at=time.monotonic()))
         return result
 
     run_state = _RunState()
-    store, existing_ids = _open_index(config)
+    indexing = skip_indexing is None
+    store, existing_ids = (
+        _open_index(config) if indexing else (_NoIndexStore(), frozenset())
+    )
+    result.indexing_skip_reason = skip_indexing
     valid_ids: set[str] = set()
     try:
         for index, source_path in enumerate(findings.targets, start=1):
             _process_one(
                 source_path, root, config, result,
                 on_event=on_event, index=index, total=total, run_state=run_state,
-                store=store, existing_ids=existing_ids,
+                store=store, existing_ids=existing_ids, summarizer=summarizer,
+                indexing=indexing,
             )
             out_path = output_path_for(source_path, root, config.out_dir)
             if out_path.exists():
@@ -192,16 +243,77 @@ def run_scan(
     return result
 
 
+class _NoIndexStore:
+    """인덱싱을 건너뛸 때 쓰는 무동작 저장소 — `VectorStore` 계약을 그대로 만족한다.
+
+    `--engine cloud`인데 로컬 Ollama가 없어 임베딩을 계산할 수 없는 경우에만 쓴다
+    (스펙 §1의 "로컬 미가용" 사용자). 파이프라인 곳곳에 `if store is not None` 분기를
+    흩뿌리는 대신 무동작 구현을 끼워 넣어 처리 경로를 하나로 유지한다.
+    """
+
+    #: 아무것도 기록하지 않으므로 모델명도 없다 — `_open_index`의 혼입 검사와 무관하다.
+    model_name: str | None = None
+
+    def upsert(self, doc_id: str, vector: list[float], metadata: dict[str, Any]) -> None:
+        """인덱싱하지 않는다."""
+
+    def delete(self, doc_id: str) -> None:
+        """지울 벡터가 없다."""
+
+    def search(self, query_vector: list[float], top_k: int) -> list[SearchResult]:
+        """검색 대상이 없다 — `search` 명령은 이 저장소를 쓰지 않는다."""
+        return []
+
+    def list_ids(self) -> list[str]:
+        """저장된 문서가 없다 — 고아 벡터 정리도 아무 일을 하지 않는다."""
+        return []
+
+    def set_model_name(self, model_name: str) -> None:
+        """기록할 인덱스가 없다."""
+
+    def close(self) -> None:
+        """쥔 자원이 없다."""
+
+
+def _require_cloud_consent(config_path: Path | None = None) -> None:
+    """클라우드 엔진 사용 동의를 확인한다 — 없으면 선행 조건 실패 (v0.5 §3 항목2).
+
+    `config_path`는 `consent` 모듈이 마련한 경로 주입 이음새를 코어 진입점까지 이어 준다.
+    이 인자가 없으면 `run_scan`을 직접 호출하는 테스트나 후속 UI 어댑터가 개발자의 실제
+    `~/.corpbrain/config.json`을 읽게 되어, 수동 스모크로 동의를 한 번 켜는 순간 조용히
+    다른 분기를 타게 된다.
+    """
+    if is_cloud_consent_granted(config_path=config_path):
+        return
+    raise PreconditionError(
+        "cloud 엔진 사용 동의가 필요합니다 — 문서 내용이 외부(Anthropic)로 전송됩니다. "
+        "먼저 `corpbrain consent cloud --grant` 를 실행하세요."
+    )
+
+
+def _build_summarizer(config: ScanConfig, api_key: str | None) -> Summarizer:
+    """`config.engine`으로 요약 백엔드를 고른다 — 파이프라인은 이후 백엔드를 알지 못한다."""
+    if config.engine == ENGINE_CLOUD:
+        # 프리플라이트에서 이미 확정돼 있지만, 코어 API를 직접 호출하는 경로(어댑터 없이
+        # run_scan을 부르는 UI 등)를 위해 여기서도 방어적으로 해소한다.
+        return AnthropicSummarizer(config.cloud_model, api_key or resolve_api_key())
+    return OllamaSummarizer(config.model, config.ollama_url)
+
+
 def _enforce_gates(config: ScanConfig, plan: ScanPlan) -> None:
     """차단 게이트(GPU·토큰)를 강제한다 — 첫 위반에서 예외로 종료 (v0.3 스펙 §4.2).
 
     `--force-gates`면 두 차단 게이트를 모두 무시한다(단 `file_too_large` 스킵은 별개다).
     개별 파일 크기 게이트는 여기서 다루지 않고 파일 처리 단계에서 스킵으로 처리한다.
+
+    v0.5: `engine="cloud"`면 GPU 게이트를 건너뛴다 — 클라우드 요약은 로컬 GPU를 전혀 쓰지
+    않으므로 GPU 미탐지가 차단 사유가 될 수 없다 (§4.7). 토큰 게이트는 비용 보호 목적이라
+    엔진과 무관하게 그대로 적용한다.
     """
     gate = plan.gate
     if config.force_gates or gate is None:
         return
-    if not gate.gpu_ok:
+    if gate.gpu_enforced and not gate.gpu_ok:
         raise GpuGateError(
             "GPU를 감지하지 못했습니다 — CPU로 강행하려면 --force-gates 를 쓰세요 "
             f"(감지: {plan.hardware.label})."
@@ -261,8 +373,15 @@ def _process_one(
     run_state: _RunState,
     store: VectorStore,
     existing_ids: frozenset[str],
+    summarizer: Summarizer,
+    indexing: bool = True,
 ) -> None:
-    """파일 1개를 처리한다 — 어떤 실패도 이 함수 밖으로 새어 나가지 않는다."""
+    """파일 1개를 처리한다 — 어떤 실패도 이 함수 밖으로 새어 나가지 않는다.
+
+    `indexing=False`면 임베딩 호출 자체를 하지 않는다 — 로컬 Ollama가 없어 인덱싱을
+    건너뛰는 경우다(v0.5 §1). 저장소만 무동작으로 바꾸면 임베딩은 그대로 호출되므로
+    여기서 함께 막아야 한다.
+    """
     out_path = output_path_for(source_path, root, config.out_dir)
     path_str = str(source_path)
     size_bytes = safe_size(source_path)
@@ -282,11 +401,11 @@ def _process_one(
                                     detail=detail))
         return
 
-    if not should_regenerate(source_path, out_path, config.force):
+    if not should_regenerate(source_path, out_path, config.force, engine=summarizer.engine):
         result.skipped.append(SkippedFile(path=source_path, reason=SkipReason.UP_TO_DATE))
         # 위키는 스킵돼도, 인덱스에 이 문서 벡터가 아직 없으면 기존 위키에서 백필한다
         # (v0.4 스펙 §3 항목3 정정 — 재생성 여부가 아니라 인덱스 존재 여부가 기준).
-        if path_str not in existing_ids:
+        if indexing and path_str not in existing_ids:
             _backfill_embedding(source_path, out_path, config, result, store)
         _emit(on_event, FileSkipped(at=time.monotonic(), index=index, total=total,
                                     path=path_str, reason=SkipReason.UP_TO_DATE.value))
@@ -307,32 +426,38 @@ def _process_one(
     _emit(on_event, FileStage(at=time.monotonic(), index=index, total=total,
                               path=path_str, stage=Stage.SUMMARIZE))
     if not run_state.model_loaded:
-        _emit(on_event, ModelLoading(at=time.monotonic(), model=config.model))
+        _emit(on_event, ModelLoading(at=time.monotonic(), model=summarizer.model))
     started = time.monotonic()
     try:
-        summary = summarize(prepared.text, config.model, config.ollama_url)
-    except LLMParseError as exc:
+        summary = summarizer.summarize(prepared.text)
+    except (LLMParseError, CloudRateLimitedError, CloudApiError) as exc:
         run_state.model_loaded = True
+        # 실패해도 마스킹 기록은 남긴다 — 응답 파싱 실패·레이트리밋은 **이미 전송된 뒤**라
+        # 여기서 빠뜨리면 외부로 나간 문서가 감사 기록에서 통째로 사라진다 (§4.5).
+        _record_masking(source_path, summarizer, result)
+        reason = _summary_failure_reason(exc)
         result.skipped.append(
-            SkippedFile(path=source_path, reason=SkipReason.SUMMARY_FAILED, detail=str(exc))
+            SkippedFile(path=source_path, reason=reason, detail=str(exc))
         )
         _emit(on_event, FileSkipped(at=time.monotonic(), index=index, total=total,
-                                    path=path_str, reason=SkipReason.SUMMARY_FAILED.value,
+                                    path=path_str, reason=reason.value,
                                     detail=str(exc)))
         return
     latency = time.monotonic() - started
     if not run_state.model_loaded:
         run_state.model_loaded = True
-        _emit(on_event, ModelReady(at=time.monotonic(), model=config.model, latency=latency))
+        _emit(on_event, ModelReady(at=time.monotonic(), model=summarizer.model, latency=latency))
+    _record_masking(source_path, summarizer, result)
 
     _emit(on_event, FileStage(at=time.monotonic(), index=index, total=total,
                               path=path_str, stage=Stage.RENDER))
     markdown = render_markdown(
         summary,
         source_path=path_str,
-        model=config.model,
+        model=summarizer.model,
         source_bytes=size_bytes,
         generated_at=datetime.now().astimezone().isoformat(),
+        engine=summarizer.engine,
     )
 
     _emit(on_event, FileStage(at=time.monotonic(), index=index, total=total,
@@ -353,11 +478,38 @@ def _process_one(
 
     result.generated.append(GeneratedWiki(source_path=source_path, output_path=out_path))
     # 위키가 재생성됐으므로 벡터도 항상 재계산한다 (v0.4 스펙 §3 항목3).
-    _index_document(
-        source_path, summary_embedding_text(summary), summary.title, config, result, store
-    )
+    if indexing:
+        _index_document(
+            source_path, summary_embedding_text(summary), summary.title, config, result, store
+        )
     _emit(on_event, FileGenerated(at=time.monotonic(), index=index, total=total,
                                   path=path_str, output_path=str(out_path), latency=latency))
+
+
+def _summary_failure_reason(exc: Exception) -> SkipReason:
+    """요약 실패를 스킵 사유로 매핑한다 — 429만 별도, 나머지 클라우드 실패는 한 사유 (v0.5 §3 항목8)."""
+    if isinstance(exc, CloudRateLimitedError):
+        return SkipReason.CLOUD_RATE_LIMITED
+    if isinstance(exc, CloudApiError):
+        return SkipReason.CLOUD_API_ERROR
+    return SkipReason.SUMMARY_FAILED
+
+
+def _record_masking(source_path: Path, summarizer: Summarizer, result: ScanResult) -> None:
+    """직전 요약에서 마스킹된 PII 건수를 결과에 남긴다 (v0.5 §4.5).
+
+    로컬 백엔드는 마스킹을 하지 않으므로(외부로 나가지 않는다) 남길 것이 없다.
+    """
+    masked = summarizer.last_mask
+    if masked is None or not masked.counts:
+        return
+    result.pii_maskings.append(
+        PiiMasking(
+            path=source_path,
+            total=masked.total,
+            counts={pii_type.value: count for pii_type, count in masked.counts.items()},
+        )
+    )
 
 
 def _backfill_embedding(

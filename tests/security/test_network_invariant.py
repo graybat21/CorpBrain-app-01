@@ -157,3 +157,96 @@ def test_plan_scan_opens_no_sockets_and_bypasses_gateway(
 
     assert watch_sockets.addresses == []  # localhost 포함 0건
     assert gateway.requested_urls() == ()
+
+
+# --- v0.5: 엔진별 목적지 불변식 (스펙 §3 항목7) --------------------------------
+
+ANTHROPIC_HOSTS = frozenset({"api.anthropic.com"})
+
+
+def test_cloud_run_reaches_only_the_allowlisted_host(
+    watch_sockets: SocketWatcher, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """v0.5 항목7: `--engine cloud` 실행 중 목적지는 localhost(임베딩)와 allowlist 호스트뿐이다.
+
+    임베딩은 엔진과 무관하게 로컬이므로(§2 비목표) localhost도 정상 목적지다. 여기서 잡고자
+    하는 것은 "그 둘 외의 어떤 목적지도 없다"는 불변식이다.
+    """
+    from corpbrain.core.config import ENGINE_CLOUD
+    from corpbrain.core.consent import grant_cloud_consent
+    from corpbrain.core.llm.anthropic_client import API_KEY_ENV_VAR, SUMMARY_TOOL_NAME
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda _cls: home))
+    monkeypatch.setenv(API_KEY_ENV_VAR, "sk-test")
+    grant_cloud_consent()
+
+    calls: list[str] = []
+
+    def _request_json(url: str, *, method: str = "GET", payload: Any = None, **_: Any) -> Any:
+        calls.append(url)
+        if url.endswith("/api/tags"):
+            return {"models": [{"name": DEFAULT_MODEL}, {"name": DEFAULT_EMBED_MODEL}]}
+        if url.endswith("/api/embeddings"):
+            return {"embedding": [0.1, 0.2, 0.3]}
+        if url.endswith("/v1/models"):
+            return {"data": []}
+        return {
+            "stop_reason": "tool_use",
+            "content": [
+                {"type": "tool_use", "name": SUMMARY_TOOL_NAME, "input": SUMMARY_JSON}
+            ],
+        }
+
+    monkeypatch.setattr(gateway, "request_json", _request_json)
+
+    run_scan(
+        ScanConfig(
+            folder=FIXTURE_CORPUS,
+            out_dir=tmp_path / "wiki",
+            engine=ENGINE_CLOUD,
+            force_gates=True,
+        )
+    )
+
+    assert watch_sockets.offenders(LOCALHOST_HOSTS | ANTHROPIC_HOSTS) == []
+    # 클라우드 경로가 실제로 돌았음을 확인 — 불변식이 공허하게 통과하지 않게 한다.
+    assert any(url.endswith("/v1/messages") for url in calls)
+    assert all(_host_of(url) in LOCALHOST_HOSTS | ANTHROPIC_HOSTS for url in calls)
+
+
+def test_local_run_never_reaches_the_cloud_host(
+    watch_sockets: SocketWatcher, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """v0.5 항목7: 기본(`--engine` 미지정) 실행은 v0.4까지와 동일하게 localhost 외 연결이 없다."""
+    calls: list[str] = []
+
+    def _request_json(url: str, *, method: str = "GET", payload: Any = None, **_: Any) -> Any:
+        calls.append(url)
+        if url.endswith("/api/tags"):
+            return {"models": [{"name": DEFAULT_MODEL}, {"name": DEFAULT_EMBED_MODEL}]}
+        if url.endswith("/api/embeddings"):
+            return {"embedding": [0.1, 0.2, 0.3]}
+        return {"response": json.dumps(SUMMARY_JSON, ensure_ascii=False)}
+
+    monkeypatch.setattr(gateway, "request_json", _request_json)
+
+    run_scan(
+        ScanConfig(folder=FIXTURE_CORPUS, out_dir=tmp_path / "wiki", force_gates=True)
+    )
+
+    assert watch_sockets.offenders(LOCALHOST_HOSTS) == []
+    assert all(_host_of(url) in LOCALHOST_HOSTS for url in calls)
+
+
+def test_gateway_blocks_a_cloud_call_to_a_wrong_host(watch_sockets: SocketWatcher) -> None:
+    """NetworkGuard가 allowlist 밖 목적지를 소켓 이전에 막는다 (자기검증)."""
+    with pytest.raises(gateway.NetworkGuardError):
+        gateway.request_json(
+            "https://evil.example.com/v1/messages",
+            allowed_hosts=("api.anthropic.com",),
+            require_https=True,
+        )
+
+    assert watch_sockets.addresses == []  # 소켓을 아예 열지 않았다
