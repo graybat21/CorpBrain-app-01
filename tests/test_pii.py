@@ -311,3 +311,34 @@ def test_ipv4_does_not_leave_a_trailing_octet() -> None:
     result = mask_pii("주소 192.168.0.1.5 입니다")
 
     assert "192.168" not in result.text
+
+
+# --- 문장 끝 PII 회귀 (2026-08-21 코드 리뷰 검출) --------------------------------
+
+#: 마침표로 끝나는 문장의 이메일·IP. 오른쪽 경계에서 `.`를 막았더니 통째로 빠져나갔던
+#: 케이스다 — 한글 인접 수정이 만든 회귀라 두 방향을 함께 고정한다.
+SENTENCE_FINAL_CASES = [
+    ("문의는 hong@corp.co.kr.", "hong@corp.co.kr", PiiType.EMAIL),
+    ("e-mail: kim.min-su@corp.co.kr.", "kim.min-su@corp.co.kr", PiiType.EMAIL),
+    ("서버 주소 192.168.0.1.", "192.168.0.1", PiiType.IP),
+    ("IP: 10.0.0.5.", "10.0.0.5", PiiType.IP),
+]
+
+
+@pytest.mark.parametrize(("text", "raw", "expected"), SENTENCE_FINAL_CASES)
+def test_sentence_final_pii_is_masked(text: str, raw: str, expected: PiiType) -> None:
+    """마침표로 끝나도 마스킹된다 — 문장 끝은 한국어 산문에서 가장 흔한 형태다."""
+    result = mask_pii(text)
+
+    assert raw not in result.text, f"원문 PII가 전송본에 남았다: {raw}"
+    assert expected.placeholder in result.text
+
+
+def test_multiple_sentence_final_items_all_masked() -> None:
+    """한 줄에 여러 건이 마침표로 끝나도 전부 잡는다(첫 건만 잡히지 않는다)."""
+    result = mask_pii("ip 192.168.0.1, 10.0.0.2. 메일 a@b.com. c@d.com.")
+
+    for raw in ("192.168.0.1", "10.0.0.2", "a@b.com", "c@d.com"):
+        assert raw not in result.text, f"원문 PII가 전송본에 남았다: {raw}"
+    assert result.counts[PiiType.IP] == 2
+    assert result.counts[PiiType.EMAIL] == 2
