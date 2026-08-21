@@ -23,6 +23,10 @@ class SkipReason(StrEnum):
     UP_TO_DATE = "up_to_date"
     #: 개별 파일 크기가 `max_file_size`를 초과해 스킵 (v0.3 스펙 §4.2 파일 크기 게이트).
     FILE_TOO_LARGE = "file_too_large"
+    #: 클라우드 요약이 레이트리밋(429)에 걸림 — 재시도 없이 스킵 (v0.5 스펙 §3 항목8).
+    CLOUD_RATE_LIMITED = "cloud_rate_limited"
+    #: 429 외 모든 클라우드 호출 실패(5xx·타임아웃·연결오류·400/404 등) (v0.5 §3 항목8).
+    CLOUD_API_ERROR = "cloud_api_error"
 
 
 @dataclass(frozen=True)
@@ -54,6 +58,21 @@ class EmbeddingFailure:
 
 
 @dataclass(frozen=True)
+class PiiMasking:
+    """클라우드로 보내기 전 문서 1건에서 마스킹한 PII 집계 (v0.5 스펙 §4.5).
+
+    `EmbeddingFailure`와 같은 성격의 파일별 부가 기록이다 — 위키는 정상 생성되며,
+    이 값은 "무엇이 얼마나 가려져 나갔는지"를 리포트에 표시하는 데만 쓴다.
+    """
+
+    path: Path
+    #: 마스킹된 총 건수.
+    total: int
+    #: 유형 이름(`PiiType` 값 문자열) → 치환 건수. 1건 이상인 유형만 담는다.
+    counts: dict[str, int] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class SearchResult:
     """벡터 검색 결과 1건 (v0.4 스펙 §4.3) — `VectorStore.search()`가 돌려준다."""
 
@@ -82,6 +101,8 @@ class ScanResult:
     skipped: list[SkippedFile] = field(default_factory=list)
     #: 프리플라이트 통과 후 개별 문서의 임베딩 런타임 실패 (위키는 유지, 인덱싱만 실패) (v0.4 §4.3).
     embedding_failures: list[EmbeddingFailure] = field(default_factory=list)
+    #: 클라우드로 보내기 전 마스킹한 PII 집계 (파일별). `engine="local"`이면 항상 빈 목록이다 (v0.5 §4.5).
+    pii_maskings: list[PiiMasking] = field(default_factory=list)
     #: 스캔 대상이 상한(`ScanConfig.max_files`)을 넘어 처리를 중단했는가.
     limit_exceeded: bool = False
     #: 상한 판정에 사용된 발견 파일 수.

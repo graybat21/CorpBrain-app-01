@@ -23,6 +23,14 @@ DEFAULT_MAX_FILE_SIZE = 20_000_000
 #: 스캔 전체 예상 토큰 예산 — 초과 시 차단한다 (v0.3 스펙 §4.4).
 DEFAULT_MAX_TOTAL_TOKENS = 200_000
 
+#: 요약 엔진 (v0.5 스펙 §4.1). 기본은 로컬이며, 클라우드는 사용자가 명시적으로 켤 때만 쓴다.
+ENGINE_LOCAL = "local"
+ENGINE_CLOUD = "cloud"
+ENGINES: tuple[str, ...] = (ENGINE_LOCAL, ENGINE_CLOUD)
+
+#: `--cloud-model` 기본값 — 빠르고 저렴한 모델 (v0.5 스펙 §4.1).
+DEFAULT_CLOUD_MODEL = "claude-haiku-4-5-20251001"
+
 #: 지원 포맷 4종 (스펙 §4.2 + v0.2 §4.1 `.pdf`). 그 외 확장자는 스킵한다.
 SUPPORTED_EXTENSIONS: frozenset[str] = frozenset({".docx", ".txt", ".md", ".pdf"})
 
@@ -49,3 +57,10 @@ class ScanConfig:
     max_total_tokens: int = DEFAULT_MAX_TOTAL_TOKENS
     #: 차단 게이트(GPU·토큰)를 무시하고 강행한다 — `file_too_large` 스킵에는 영향 없음 (v0.3 §4.2).
     force_gates: bool = False
+    #: 요약 엔진 — `"local"`(기본, v0.4까지와 동일) 또는 `"cloud"` (v0.5 §4.1).
+    #: `"cloud"`는 사용자 동의와 `ANTHROPIC_API_KEY`가 모두 있어야 하며, 임베딩은 엔진과
+    #: 무관하게 항상 로컬이다 (v0.5 §2 비목표).
+    engine: str = ENGINE_LOCAL
+    #: `engine="cloud"`일 때 쓸 Anthropic 모델 (v0.5 §4.1). API 키는 여기 담지 않는다 —
+    #: 자격증명은 `llm.anthropic_client`가 호출 시점에 환경변수에서 직접 읽는다.
+    cloud_model: str = DEFAULT_CLOUD_MODEL

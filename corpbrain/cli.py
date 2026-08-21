@@ -25,6 +25,7 @@ from corpbrain.core._progress import (
     render_status_line,
 )
 from corpbrain.core.errors import PreconditionError, TokenBudgetExceededError
+from corpbrain.core.llm.anthropic_client import API_KEY_ENV_VAR
 from corpbrain.core.report import (
     build_detail_lines,
     build_doctor_lines,
@@ -190,6 +191,48 @@ def build_parser() -> argparse.ArgumentParser:
             f"scan은 항상 인덱싱까지 수행하며 이 모델이 없으면 exit 1로 종료한다."
         ),
     )
+    scan.add_argument(
+        "--engine",
+        dest="engine",
+        choices=core.ENGINES,
+        default=core.ENGINE_LOCAL,
+        help=(
+            f"요약 엔진 (기본 {core.ENGINE_LOCAL}). "
+            f"{core.ENGINE_CLOUD}는 `corpbrain consent cloud --grant` 동의와 "
+            f"{API_KEY_ENV_VAR} 환경변수가 모두 있어야 한다. 임베딩은 언제나 로컬이다."
+        ),
+    )
+    scan.add_argument(
+        "--cloud-model",
+        dest="cloud_model",
+        default=core.DEFAULT_CLOUD_MODEL,
+        metavar="NAME",
+        help=(
+            f"--engine {core.ENGINE_CLOUD}일 때 쓸 Anthropic 모델 "
+            f"(기본 {core.DEFAULT_CLOUD_MODEL})."
+        ),
+    )
+
+    consent = subparsers.add_parser(
+        "consent",
+        help="클라우드 엔진 사용 동의를 기록·철회한다 (로컬 설정 파일에 저장).",
+    )
+    consent.add_argument(
+        "provider",
+        choices=["cloud"],
+        help="동의 대상. 현재는 cloud(Anthropic API)뿐이다.",
+    )
+    consent_action = consent.add_mutually_exclusive_group(required=True)
+    consent_action.add_argument(
+        "--grant",
+        action="store_true",
+        help="클라우드 엔진 사용에 동의하고 그 사실을 로컬 설정 파일에 기록한다.",
+    )
+    consent_action.add_argument(
+        "--revoke",
+        action="store_true",
+        help="기록된 동의를 철회한다. 이후 --engine cloud 는 다시 차단된다.",
+    )
 
     search = subparsers.add_parser(
         "search",
@@ -312,6 +355,8 @@ def build_config(args: argparse.Namespace) -> core.ScanConfig:
         max_file_size=args.max_file_size_mb * BYTES_PER_MB,
         max_total_tokens=args.max_total_tokens,
         force_gates=args.force_gates,
+        engine=args.engine,
+        cloud_model=args.cloud_model,
     )
 
 
@@ -342,7 +387,30 @@ def main(argv: list[str] | None = None) -> int:
         return _run_doctor(args)
     if args.command == "search":
         return _run_search(args)
+    if args.command == "consent":
+        return _run_consent(args)
     return _run_scan(args)
+
+
+def _run_consent(args: argparse.Namespace) -> int:
+    """`consent cloud --grant|--revoke` — 클라우드 사용 동의를 기록·철회한다 (v0.5 §4.1).
+
+    동의는 로컬 설정 파일에만 남고 API 키는 저장하지 않는다. 쓰기 실패는 코어가
+    `PreconditionError` 하위로 올리므로 기존 exit 1 매핑을 그대로 쓴다.
+    """
+    try:
+        if args.grant:
+            core.grant_cloud_consent()
+            print(f"cloud 엔진(Anthropic API) 사용에 동의했습니다 — {core.consent_path()}")
+            print("- 문서 내용이 외부(Anthropic)로 전송됩니다 (PII 7종은 자동 마스킹).")
+            print(f"- API 키는 {API_KEY_ENV_VAR} 환경변수로 지정하세요 (파일에 저장되지 않습니다).")
+        else:
+            core.revoke_cloud_consent()
+            print(f"cloud 엔진 사용 동의를 철회했습니다 — {core.consent_path()}")
+    except PreconditionError as exc:
+        _log(f"선행 조건 실패: {exc}")
+        return EXIT_PRECONDITION_FAILED
+    return EXIT_OK
 
 
 def _force_utf8_output() -> None:

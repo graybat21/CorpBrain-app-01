@@ -32,7 +32,8 @@ from corpbrain.core._progress import (
     RunStarted,
     Stage,
 )
-from corpbrain.core.config import ScanConfig
+from corpbrain.core.config import ENGINE_CLOUD, ScanConfig
+from corpbrain.core.consent import is_cloud_consent_granted
 from corpbrain.core.embedding_text import parse_wiki_markdown, summary_embedding_text
 from corpbrain.core.errors import (
     GpuGateError,
@@ -40,16 +41,25 @@ from corpbrain.core.errors import (
     TokenBudgetExceededError,
 )
 from corpbrain.core.extract import prepare_summary_input
+from corpbrain.core.llm.anthropic_client import (
+    AnthropicSummarizer,
+    CloudApiError,
+    CloudRateLimitedError,
+    preflight,
+    resolve_api_key,
+)
+from corpbrain.core.llm.base import LLMParseError, Summarizer
 from corpbrain.core.llm.embed import EmbeddingError, embed
 from corpbrain.core.llm.ollama_client import (
     ModelNotAvailableError,
     list_models,
     model_present,
 )
-from corpbrain.core.llm.summarize import LLMParseError, summarize
+from corpbrain.core.llm.summarize import OllamaSummarizer
 from corpbrain.core.models import (
     EmbeddingFailure,
     GeneratedWiki,
+    PiiMasking,
     ScanPlan,
     ScanResult,
     SkippedFile,
@@ -124,8 +134,19 @@ def run_scan(
     # 확정하고, 첫 위반에서 즉시 예외로 종료한다. ①~④는 --force-gates로 우회 불가.
     # 모델 목록은 한 번만 조회해 두 모델(요약·임베딩)을 함께 확인한다(왕복 절반으로 줄임).
     root = validated_root(config.folder)
+    cloud = config.engine == ENGINE_CLOUD
+
+    # 클라우드 선행 조건(동의 → API 키 → 인증 프리플라이트)을 네트워크보다 먼저 확정한다
+    # (v0.5 §4.3 · §3 항목2·4). 동의 확인은 로컬 파일 읽기라 가장 값싸므로 맨 앞에 둔다.
+    api_key: str | None = None
+    if cloud:
+        _require_cloud_consent()
+        api_key = resolve_api_key()
+
+    # 임베딩은 엔진과 무관하게 항상 로컬이므로(v0.5 §2 비목표) Ollama 데몬과 임베딩 모델은
+    # 두 엔진 모두에서 확인한다. 요약 모델은 로컬 엔진일 때만 의미가 있다.
     available_models = list_models(config.ollama_url)
-    if not model_present(available_models, config.model):
+    if not cloud and not model_present(available_models, config.model):
         raise ModelNotAvailableError(
             f"대상 모델을 찾지 못했습니다: {config.model} — "
             f"먼저 `ollama pull {config.model}` 를 실행하세요."
@@ -135,6 +156,9 @@ def run_scan(
             f"대상 모델을 찾지 못했습니다: {config.embed_model} — "
             f"먼저 `ollama pull {config.embed_model}` 를 실행하세요."
         )
+
+    if api_key is not None:
+        preflight(api_key)
 
     # 게이트 판정은 상한(`--max`) 절단 이전의 발견 집합으로 계산한다(플랜은 순수·로컬).
     # 어댑터가 배너용으로 이미 계산한 plan을 넘기면 재사용해 하드웨어 감지·stat 패스를 아끼는다.
@@ -154,8 +178,10 @@ def run_scan(
         discovered_count=findings.discovered_count,
     )
 
+    summarizer = _build_summarizer(config, api_key)
+
     total = len(findings.targets)
-    _emit(on_event, RunStarted(at=time.monotonic(), model=config.model, total=total))
+    _emit(on_event, RunStarted(at=time.monotonic(), model=summarizer.model, total=total))
 
     if findings.limit_exceeded:
         _emit(on_event, RunFinished(at=time.monotonic()))
@@ -169,7 +195,7 @@ def run_scan(
             _process_one(
                 source_path, root, config, result,
                 on_event=on_event, index=index, total=total, run_state=run_state,
-                store=store, existing_ids=existing_ids,
+                store=store, existing_ids=existing_ids, summarizer=summarizer,
             )
             out_path = output_path_for(source_path, root, config.out_dir)
             if out_path.exists():
@@ -192,16 +218,39 @@ def run_scan(
     return result
 
 
+def _require_cloud_consent() -> None:
+    """클라우드 엔진 사용 동의를 확인한다 — 없으면 선행 조건 실패 (v0.5 §3 항목2)."""
+    if is_cloud_consent_granted():
+        return
+    raise PreconditionError(
+        "cloud 엔진 사용 동의가 필요합니다 — 문서 내용이 외부(Anthropic)로 전송됩니다. "
+        "먼저 `corpbrain consent cloud --grant` 를 실행하세요."
+    )
+
+
+def _build_summarizer(config: ScanConfig, api_key: str | None) -> Summarizer:
+    """`config.engine`으로 요약 백엔드를 고른다 — 파이프라인은 이후 백엔드를 알지 못한다."""
+    if config.engine == ENGINE_CLOUD:
+        # 프리플라이트에서 이미 확정돼 있지만, 코어 API를 직접 호출하는 경로(어댑터 없이
+        # run_scan을 부르는 UI 등)를 위해 여기서도 방어적으로 해소한다.
+        return AnthropicSummarizer(config.cloud_model, api_key or resolve_api_key())
+    return OllamaSummarizer(config.model, config.ollama_url)
+
+
 def _enforce_gates(config: ScanConfig, plan: ScanPlan) -> None:
     """차단 게이트(GPU·토큰)를 강제한다 — 첫 위반에서 예외로 종료 (v0.3 스펙 §4.2).
 
     `--force-gates`면 두 차단 게이트를 모두 무시한다(단 `file_too_large` 스킵은 별개다).
     개별 파일 크기 게이트는 여기서 다루지 않고 파일 처리 단계에서 스킵으로 처리한다.
+
+    v0.5: `engine="cloud"`면 GPU 게이트를 건너뛴다 — 클라우드 요약은 로컬 GPU를 전혀 쓰지
+    않으므로 GPU 미탐지가 차단 사유가 될 수 없다 (§4.7). 토큰 게이트는 비용 보호 목적이라
+    엔진과 무관하게 그대로 적용한다.
     """
     gate = plan.gate
     if config.force_gates or gate is None:
         return
-    if not gate.gpu_ok:
+    if config.engine != ENGINE_CLOUD and not gate.gpu_ok:
         raise GpuGateError(
             "GPU를 감지하지 못했습니다 — CPU로 강행하려면 --force-gates 를 쓰세요 "
             f"(감지: {plan.hardware.label})."
@@ -261,6 +310,7 @@ def _process_one(
     run_state: _RunState,
     store: VectorStore,
     existing_ids: frozenset[str],
+    summarizer: Summarizer,
 ) -> None:
     """파일 1개를 처리한다 — 어떤 실패도 이 함수 밖으로 새어 나가지 않는다."""
     out_path = output_path_for(source_path, root, config.out_dir)
@@ -282,7 +332,7 @@ def _process_one(
                                     detail=detail))
         return
 
-    if not should_regenerate(source_path, out_path, config.force):
+    if not should_regenerate(source_path, out_path, config.force, engine=summarizer.engine):
         result.skipped.append(SkippedFile(path=source_path, reason=SkipReason.UP_TO_DATE))
         # 위키는 스킵돼도, 인덱스에 이 문서 벡터가 아직 없으면 기존 위키에서 백필한다
         # (v0.4 스펙 §3 항목3 정정 — 재생성 여부가 아니라 인덱스 존재 여부가 기준).
@@ -307,32 +357,35 @@ def _process_one(
     _emit(on_event, FileStage(at=time.monotonic(), index=index, total=total,
                               path=path_str, stage=Stage.SUMMARIZE))
     if not run_state.model_loaded:
-        _emit(on_event, ModelLoading(at=time.monotonic(), model=config.model))
+        _emit(on_event, ModelLoading(at=time.monotonic(), model=summarizer.model))
     started = time.monotonic()
     try:
-        summary = summarize(prepared.text, config.model, config.ollama_url)
-    except LLMParseError as exc:
+        summary = summarizer.summarize(prepared.text)
+    except (LLMParseError, CloudRateLimitedError, CloudApiError) as exc:
         run_state.model_loaded = True
+        reason = _summary_failure_reason(exc)
         result.skipped.append(
-            SkippedFile(path=source_path, reason=SkipReason.SUMMARY_FAILED, detail=str(exc))
+            SkippedFile(path=source_path, reason=reason, detail=str(exc))
         )
         _emit(on_event, FileSkipped(at=time.monotonic(), index=index, total=total,
-                                    path=path_str, reason=SkipReason.SUMMARY_FAILED.value,
+                                    path=path_str, reason=reason.value,
                                     detail=str(exc)))
         return
     latency = time.monotonic() - started
     if not run_state.model_loaded:
         run_state.model_loaded = True
-        _emit(on_event, ModelReady(at=time.monotonic(), model=config.model, latency=latency))
+        _emit(on_event, ModelReady(at=time.monotonic(), model=summarizer.model, latency=latency))
+    _record_masking(source_path, summarizer, result)
 
     _emit(on_event, FileStage(at=time.monotonic(), index=index, total=total,
                               path=path_str, stage=Stage.RENDER))
     markdown = render_markdown(
         summary,
         source_path=path_str,
-        model=config.model,
+        model=summarizer.model,
         source_bytes=size_bytes,
         generated_at=datetime.now().astimezone().isoformat(),
+        engine=summarizer.engine,
     )
 
     _emit(on_event, FileStage(at=time.monotonic(), index=index, total=total,
@@ -358,6 +411,32 @@ def _process_one(
     )
     _emit(on_event, FileGenerated(at=time.monotonic(), index=index, total=total,
                                   path=path_str, output_path=str(out_path), latency=latency))
+
+
+def _summary_failure_reason(exc: Exception) -> SkipReason:
+    """요약 실패를 스킵 사유로 매핑한다 — 429만 별도, 나머지 클라우드 실패는 한 사유 (v0.5 §3 항목8)."""
+    if isinstance(exc, CloudRateLimitedError):
+        return SkipReason.CLOUD_RATE_LIMITED
+    if isinstance(exc, CloudApiError):
+        return SkipReason.CLOUD_API_ERROR
+    return SkipReason.SUMMARY_FAILED
+
+
+def _record_masking(source_path: Path, summarizer: Summarizer, result: ScanResult) -> None:
+    """직전 요약에서 마스킹된 PII 건수를 결과에 남긴다 (v0.5 §4.5).
+
+    로컬 백엔드는 마스킹을 하지 않으므로(외부로 나가지 않는다) 남길 것이 없다.
+    """
+    masked = getattr(summarizer, "last_mask", None)
+    if masked is None or not masked.counts:
+        return
+    result.pii_maskings.append(
+        PiiMasking(
+            path=source_path,
+            total=masked.total,
+            counts={pii_type.value: count for pii_type, count in masked.counts.items()},
+        )
+    )
 
 
 def _backfill_embedding(

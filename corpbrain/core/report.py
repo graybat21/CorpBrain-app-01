@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from corpbrain.core.llm.anthropic_client import API_KEY_ENV_VAR
 from corpbrain.core.models import (
     PlanEntry,
     ScanPlan,
@@ -34,6 +35,8 @@ SKIP_REASON_LABELS: dict[SkipReason, str] = {
     SkipReason.SUMMARY_FAILED: "LLM JSON 파싱 실패",
     SkipReason.UP_TO_DATE: "최신 상태(재생성 불필요)",
     SkipReason.FILE_TOO_LARGE: "파일 크기 초과",
+    SkipReason.CLOUD_RATE_LIMITED: "클라우드 레이트리밋(429)",
+    SkipReason.CLOUD_API_ERROR: "클라우드 호출 실패",
 }
 
 
@@ -78,8 +81,27 @@ def build_summary_lines(result: ScanResult) -> list[str]:
     # 위키는 생성됐지만 인덱싱만 실패한 문서 — 스킵과 구분되는 별도 집계 (v0.4 §4.3).
     if result.embedding_failures:
         lines.append(f"인덱싱 실패 {len(result.embedding_failures)}건 (위키는 생성됨)")
+    # 클라우드로 나가기 전 가려진 개인정보 집계 (v0.5 §4.5). 로컬 엔진이면 항상 비어 있다.
+    lines.extend(_pii_summary_lines(result))
     lines.append(f"출력 경로: {result.out_dir}")
     return lines
+
+
+def _pii_summary_lines(result: ScanResult) -> list[str]:
+    """마스킹된 PII를 문서 수·총 건수·유형별로 요약한다 (v0.5 §4.5)."""
+    if not result.pii_maskings:
+        return []
+    per_type: dict[str, int] = {}
+    for masking in result.pii_maskings:
+        for name, count in masking.counts.items():
+            per_type[name] = per_type.get(name, 0) + count
+    total = sum(masking.total for masking in result.pii_maskings)
+    breakdown = ", ".join(
+        f"{name} {count}건" for name, count in sorted(per_type.items())
+    )
+    return [
+        f"PII 마스킹 {total}건 (문서 {len(result.pii_maskings)}개) — {breakdown}",
+    ]
 
 
 def build_search_lines(results: list[SearchResult]) -> list[str]:
@@ -199,6 +221,28 @@ def build_scan_banner_lines(plan: ScanPlan) -> list[str]:
     return lines
 
 
+def _cloud_doctor_lines(report: DoctorReport) -> list[str]:
+    """클라우드 옵트인 상태 줄 — GPU와 같은 경고성 표시다 (v0.5 §4.1·§3 항목10).
+
+    동의·API 키는 옵트인이라 없는 것이 기본 상태이므로 [실패]가 아닌 [경고]로 내고,
+    `report.ready`(종료 코드)에는 영향을 주지 않는다.
+    """
+    if report.cloud_ready:
+        return ["  [OK] Cloud(Anthropic): 사용 준비됨"]
+    lines: list[str] = []
+    if report.cloud_consent:
+        lines.append("  [OK] Cloud 동의: 기록됨")
+    else:
+        lines.append(
+            "  [경고] Cloud 동의: 없음 — `corpbrain consent cloud --grant` 로 동의"
+        )
+    if report.cloud_api_key:
+        lines.append(f"  [OK] {API_KEY_ENV_VAR}: 설정됨")
+    else:
+        lines.append(f"  [경고] {API_KEY_ENV_VAR}: 미설정 — 환경변수로 설정 필요")
+    return lines
+
+
 def build_doctor_lines(report: DoctorReport) -> list[str]:
     """`doctor`가 stdout에 낼 한국어 체크리스트 — 실패 항목에 해결 명령을 함께 낸다 (v0.4 §4.3).
 
@@ -234,6 +278,8 @@ def build_doctor_lines(report: DoctorReport) -> list[str]:
         lines.append(f"  [OK] {report.hardware.label}")
     else:
         lines.append(f"  [경고] {report.hardware.label} — scan은 GPU 없이 --force-gates 필요")
+
+    lines.extend(_cloud_doctor_lines(report))
 
     lines.append(
         f"  [정보] 게이트 임계: 파일 {report.max_file_size:,} bytes · "

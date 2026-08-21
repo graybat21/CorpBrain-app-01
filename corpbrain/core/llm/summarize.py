@@ -16,7 +16,7 @@ from typing import Any
 from urllib.parse import urljoin  # 순수 문자열 유틸 — 네트워크 호출 없음
 
 from corpbrain.core import gateway
-from corpbrain.core.config import DEFAULT_MODEL, DEFAULT_OLLAMA_URL
+from corpbrain.core.config import DEFAULT_MODEL, DEFAULT_OLLAMA_URL, ENGINE_LOCAL
 from corpbrain.core.llm.base import LLMParseError, validate_summary_fields
 from corpbrain.core.models import SummaryResult
 
@@ -102,6 +102,23 @@ def parse_summary(raw: str) -> SummaryResult:
         raise LLMParseError(f"응답이 유효한 JSON이 아닙니다: {raw[:200]!r}") from exc
 
     return validate_summary_fields(parsed)
+
+
+class OllamaSummarizer:
+    """로컬 요약 백엔드 — `llm.base.Summarizer` 프로토콜 구현 (v0.5 스펙 §4.3)."""
+
+    engine = ENGINE_LOCAL
+
+    def __init__(
+        self, model: str, ollama_url: str, *, timeout: float = DEFAULT_TIMEOUT
+    ) -> None:
+        self.model = model
+        self._ollama_url = ollama_url
+        self._timeout = timeout
+
+    def summarize(self, text: str) -> SummaryResult:
+        """문서 텍스트를 로컬 Ollama로 요약한다 (외부 전송 없음 — PII 마스킹 대상 아님)."""
+        return summarize(text, self.model, self._ollama_url, timeout=self._timeout)
 
 
 def _response_text(envelope: Any) -> str:

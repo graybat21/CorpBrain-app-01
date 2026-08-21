@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 from dataclasses import dataclass
 
@@ -20,7 +21,9 @@ from corpbrain.core.config import (
     DEFAULT_MODEL,
     DEFAULT_OLLAMA_URL,
 )
+from corpbrain.core.consent import is_cloud_consent_granted
 from corpbrain.core.llm import ollama_client
+from corpbrain.core.llm.anthropic_client import API_KEY_ENV_VAR
 from corpbrain.core.llm.ollama_client import OllamaNotAvailableError
 from corpbrain.core.models import HardwareInfo
 from corpbrain.core.plan import detect_hardware
@@ -54,12 +57,25 @@ class DoctorReport:
     #: 현재 게이트 임계값 (정보 표시).
     max_file_size: int
     max_total_tokens: int
+    #: 클라우드 엔진 사용 동의가 기록돼 있는가 (v0.5 §3 항목10). 경고성 정보다.
+    cloud_consent: bool = False
+    #: `ANTHROPIC_API_KEY` 환경변수가 설정돼 있는가 (값 자체는 담지 않는다) (v0.5 §3 항목10).
+    cloud_api_key: bool = False
+
+    @property
+    def cloud_ready(self) -> bool:
+        """`--engine cloud` 를 바로 쓸 수 있는 상태인가 (동의 + API 키).
+
+        `ready`(종료 코드 판정)에는 영향을 주지 않는다 — 클라우드는 옵트인이라 준비되지
+        않은 것이 기본 상태이며, 로컬만 쓰는 사용자에게 doctor가 실패로 보이면 안 된다.
+        """
+        return self.cloud_consent and self.cloud_api_key
 
     @property
     def ready(self) -> bool:
         """필수 조건(설치·구동·대상 모델·임베딩 모델)이 모두 충족됐는가.
 
-        GPU 없음은 준비 판정과 무관하다.
+        GPU 없음과 클라우드 준비 상태는 준비 판정과 무관하다 (v0.5 §3 항목10 — GPU 선례).
         """
         return (
             self.installed
@@ -110,4 +126,6 @@ def diagnose(
         hardware=hardware,
         max_file_size=max_file_size,
         max_total_tokens=max_total_tokens,
+        cloud_consent=is_cloud_consent_granted(),
+        cloud_api_key=bool(os.environ.get(API_KEY_ENV_VAR, "").strip()),
     )
