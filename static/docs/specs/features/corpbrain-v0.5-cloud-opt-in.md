@@ -93,8 +93,12 @@ Anthropic HTTP를 mock으로 스텁한 통합테스트로 검증하고, 네트�
       차단됨을 확인.
 12. 신규 `corpbrain/core/llm/anthropic_client.py`는 `corpbrain.core.gateway.request_json()`만
     경유하며 `urllib`/`socket`/`http`/`requests`/`httpx` 등 네트워크 모듈을 직접 import하지
-    않는다. 기존 AST 기반 단일 관문 정적 테스트(`tests/test_gateway.py`)가 수정 없이 통과한다.
-    - 검증: 기존 정적 테스트 재실행(무수정 통과 확인).
+    않는다. AST 기반 단일 관문 정적 검사가 **약화 없이** 통과한다 — 차단 목록·검사 범위·판정
+    로직을 완화하지 않고, 예외를 추가하지 않는다. (검사가 담긴 `tests/test_gateway.py` 파일
+    자체는 관문의 스텁 지점 이동·신규 NetworkGuard 테스트로 변경될 수 있다. 판정 기준은
+    "파일 무수정"이 아니라 "가드 무약화"다.) [2026-08-21 정정]
+    - 검증: `test_gateway_is_the_only_module_touching_the_network` 통과 + 해당 함수와
+      `_NETWORK_MODULES`·`_is_network_module`·`_imported_module_names`에 diff가 없음을 확인.
 13. `ruff check .` · `pytest`가 모두 통과하고, PR 생성 전 실행한 `/security-review`에 API 키
     유출·PII 마스킹 우회·NetworkGuard allowlist 우회로 분류되는 미해결 고위험 발견사항이 없다.
     - 검증: CI 통과 + 리뷰 리포트를 PR 설명에 링크.
@@ -163,6 +167,11 @@ corpbrain doctor
 - `consent cloud --revoke`는 `cloud_consent.anthropic.granted`를 `false`로 남기거나 키 자체를
   제거한다(둘 중 무엇이든 이후 `granted`가 `true`가 아니면 동의 없음으로 취급).
 - API 키는 이 파일에 절대 쓰지 않는다.
+- **경로 주입 이음새** [2026-08-21 추가]: 동의 조회·기록 함수는 설정 파일 경로를 키워드 인자로
+  받고, 이 이음새를 **코어 진입점까지** 잇는다 — `run_scan(consent_path=...)`,
+  `diagnose(config_path=...)`. 이음새가 코어에 없으면 테스트나 후속 UI 어댑터가 `Path.home`을
+  프로세스 전역으로 패치해야 하고, 그 패치를 잊는 순간 개발자의 실제 `~/.corpbrain/config.json`을
+  읽어 수동 스모크 한 번으로 조용히 다른 분기를 타게 된다. `None`(기본)이면 실제 사용자 경로를 쓴다.
 - **쓰기 방식** [제안 후 승인]: 원자적 쓰기(임시 파일에 쓴 뒤 `os.replace`로 교체)를 사용한다.
   보안 상태를 담는 유일한 영속 파일이므로, 쓰기 도중 중단되어도 기존 파일이 깨진 JSON으로
   남지 않도록 한다.
@@ -191,6 +200,15 @@ corpbrain doctor
 - 코드 구조: `Summarizer` 공통 인터페이스(프로토콜)를 먼저 정의하고 `OllamaSummarizer`·
   `AnthropicSummarizer` 두 구현체를 둔다. `pipeline.py`가 `config.engine` 값으로 둘 중 하나를
   선택해 호출한다(복수 provider 지원은 비목표이므로 구현체는 지금은 이 둘뿐이다). [제안 후 승인]
+- **프로토콜 구성** [2026-08-21 추가]: `Summarizer`는 `engine`·`model`·`last_mask` 세 속성과
+  `summarize(text)` 한 메서드를 갖는다. `last_mask`(직전 호출의 마스킹 집계, 로컬은 항상
+  `None`)를 계약에 포함하는 이유는, 파이프라인이 `getattr`로 속성을 더듬으면 이름이 바뀌거나
+  새 백엔드가 다르게 부를 때 **PII 리포트가 아무 오류 없이 사라지기** 때문이다.
+- **마스킹과 전송을 분리한다** [2026-08-21 추가]: 마스킹은 전송을 시도하기 **전에** 확정하고
+  기록한다(`AnthropicSummarizer.summarize`가 `mask_pii` → `last_mask` 기록 → `summarize_masked`
+  순으로 진행). 요약이 성공한 뒤에 기록하면 응답이 스키마를 어겼을 때 **이미 외부로 나간
+  문서가 감사 기록에서 통째로 빠진다**. 파이프라인도 실패 경로(429·API 오류·파싱 실패)에서
+  마스킹 집계를 남긴다 — 그 시점엔 이미 전송된 뒤이기 때문이다.
 - **인증 프리플라이트** [제안 후 승인]: `engine=cloud`일 때 파일 루프 진입 전
   `GET https://api.anthropic.com/v1/models`를 1회 호출해 `ANTHROPIC_API_KEY` 유효성과
   연결성을 확인한다(토큰 비용 없음). 실패하면 파일을 하나도 처리하지 않고 즉시 선행조건
@@ -223,6 +241,9 @@ corpbrain doctor
   관례를 따른다). 값 자체는 로컬과 동일하므로 "새 정책을 만들지 않는다"는 제약은 지켜진다.
 
 ### 4.4 NetworkGuard [사용자 결정]
+> 관문의 **오류 계약**(`GatewayError.status` — HTTP 상태코드를 계약의 일부로 노출)은 그 값을
+> 쓰는 분류 규칙과 함께 §4.3에 있다. 이 절은 **목적지 정책**만 다룬다.
+
 - allowlist는 하드코딩 단일 호스트 `api.anthropic.com`이며 CLI로 override할 수 없다.
 - `gateway.request_json()` 진입부(MVP 스펙 §4.5에서 예약해 둔 확장 지점)에서 소켓을 열기 전
   목적지 호스트를 검사한다: `engine=local` 경로는 `--ollama-url`의 호스트만, `engine=cloud`
@@ -311,6 +332,11 @@ corpbrain doctor
 ### 4.7 게이트 상호작용 [사용자 결정]
 - `--engine cloud`일 때 v0.3 GPU 게이트(§4.2, v0.3 스펙)는 preflight에서 건너뛴다(로컬 GPU
   자원과 무관하므로).
+- **판정은 값으로 한 번만 내린다** [2026-08-21 추가]: `GateVerdict`에 `gpu_enforced: bool`을
+  두고 `plan_scan`이 `config.engine`으로 채운다. 게이트 강제(`_enforce_gates`)와 리포트
+  렌더러(plan 리포트·scan 배너)가 **같은 값**을 본다. 각자 엔진을 따로 판단하면 "차단됨"이라
+  표시해 놓고 그냥 진행하는 불일치가 생기고, 사용자가 불필요한 `--force-gates`를 붙이게 되며,
+  그러면 cloud에도 유지돼야 할 토큰(비용) 게이트까지 함께 꺼진다.
 - `--max-total-tokens` 토큰 게이트는 `engine`과 무관하게 v0.3과 동일한 임계·판정 로직을
   적용한다(비용 보호 목적으로 유지).
 - `--force-gates`는 기존과 동일하게 GPU·토큰 게이트만 우회하며, 동의·API 키 선행조건에는
