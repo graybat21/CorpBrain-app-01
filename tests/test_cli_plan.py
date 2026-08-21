@@ -101,6 +101,37 @@ def test_scan_dry_run_reports_without_processing(
 # --- scan 시작 배너 (stderr, stdout은 빔) ---------------------------------------
 
 
+def test_scan_warns_when_out_dir_is_nested_inside_folder(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--out이 스캔 대상 폴더 안에 있으면 stderr에 자동 제외 안내가 뜬다."""
+    _corpus(tmp_path)
+    monkeypatch.setattr(
+        core, "run_scan", lambda config, **_: core.ScanResult(out_dir=config.out_dir)
+    )
+
+    code = cli.main(["scan", str(tmp_path), "--out", str(tmp_path / "wiki")])
+
+    captured = capsys.readouterr()
+    assert code == cli.EXIT_OK
+    assert "자동으로 제외합니다" in captured.err
+
+
+def test_scan_does_not_warn_when_out_dir_is_a_sibling(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _corpus(tmp_path)
+    monkeypatch.setattr(
+        core, "run_scan", lambda config, **_: core.ScanResult(out_dir=config.out_dir)
+    )
+
+    code = cli.main(["scan", str(tmp_path), "--out", str(tmp_path.parent / "wiki")])
+
+    captured = capsys.readouterr()
+    assert code == cli.EXIT_OK
+    assert "자동으로 제외합니다" not in captured.err
+
+
 def test_scan_banner_goes_to_stderr_and_stdout_stays_empty(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:

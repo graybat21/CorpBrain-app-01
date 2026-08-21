@@ -233,6 +233,28 @@ def test_limit_exceeded_stops_processing(tmp_path: Path, stub_ollama: list[str])
     assert not out_dir.exists()
 
 
+def test_rerun_with_out_dir_nested_inside_folder_does_not_reprocess_own_output(
+    tmp_path: Path, stub_ollama: list[str]
+) -> None:
+    """--out이 스캔 대상 폴더 안에 있으면, 재실행 시 직전 위키 산출물(.md)이 새 입력으로
+    재처리되지 않는다 — 그러지 않으면 인덱스 오염·산출물 무한 중첩으로 이어진다.
+    """
+    root = tmp_path / "docs"
+    root.mkdir()
+    (root / "note.txt").write_text("본문", encoding="utf-8")
+    out_dir = root / "wiki"  # --out이 스캔 대상(root) 안에 중첩됨
+
+    first = run_scan(_config(root, out_dir))
+    assert {w.source_path.name for w in first.generated} == {"note.txt"}
+    assert (out_dir / "note.txt.md").exists()
+
+    second = run_scan(_config(root, out_dir, force=True))
+
+    generated_names = {w.source_path.name for w in second.generated}
+    assert generated_names == {"note.txt"}  # wiki\note.txt.md가 새 입력으로 잡히지 않음
+    assert not (out_dir / "wiki").exists()  # 중첩 산출물이 생기지 않음
+
+
 def test_missing_folder_is_precondition_failure(tmp_path: Path, stub_ollama: list[str]) -> None:
     with pytest.raises(PreconditionError):
         run_scan(_config(tmp_path / "없는폴더", tmp_path / "wiki"))

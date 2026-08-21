@@ -165,6 +165,19 @@ def test_plan_scan_counts_all_files_ignoring_max(tmp_path: Path) -> None:
     assert plan.file_count == 5
 
 
+def test_plan_scan_excludes_nested_out_dir(tmp_path: Path) -> None:
+    """out_dir이 folder 안에 중첩돼 있으면 그 안의 위키 산출물(.md)은 계량 대상에서 빠진다."""
+    (tmp_path / "note.txt").write_text("본문", encoding="utf-8")
+    out_dir = tmp_path / "wiki"
+    out_dir.mkdir()
+    (out_dir / "note.txt.md").write_text("# 제목", encoding="utf-8")
+
+    plan = plan_scan(ScanConfig(folder=tmp_path, out_dir=out_dir))
+
+    assert plan.file_count == 1
+    assert {entry.path.name for entry in plan.entries} == {"note.txt"}
+
+
 def test_plan_scan_is_deterministic(tmp_path: Path) -> None:
     _make_corpus(tmp_path)
 

@@ -70,7 +70,7 @@ def plan_scan(config: ScanConfig, *, findings: ScanFindings | None = None) -> Sc
     """
     root = validated_root(config.folder)
     if findings is None:
-        findings = scan_folder(root, max_files=None)
+        findings = scan_folder(root, max_files=None, out_dir=config.out_dir)
     hardware = detect_hardware()
 
     entries: list[PlanEntry] = []

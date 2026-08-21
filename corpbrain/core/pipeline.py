@@ -139,7 +139,7 @@ def run_scan(
     # 게이트 판정은 상한(`--max`) 절단 이전의 발견 집합으로 계산한다(플랜은 순수·로컬).
     # 어댑터가 배너용으로 이미 계산한 plan을 넘기면 재사용해 하드웨어 감지·stat 패스를 아끼는다.
     if findings is None:
-        findings = scan_folder(root, max_files=None)
+        findings = scan_folder(root, max_files=None, out_dir=config.out_dir)
     if plan is None or plan.file_count != len(findings.targets):
         # 넘어온 plan이 이 findings와 불일치(절단·다른 스캔)면 신뢰하지 않고 재계산해
         # 오게이팅(막아야 할 스캔이 통과하거나 그 반대)을 막는다.
