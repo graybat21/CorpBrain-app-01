@@ -8,7 +8,6 @@ Anthropic·Ollama HTTP는 단일 관문(`gateway.request_json`)을 스텁하고,
 from __future__ import annotations
 
 import json
-import urllib.error
 from pathlib import Path
 from typing import Any
 
@@ -323,12 +322,9 @@ def test_cloud_failures_map_to_skip_reasons(
 ) -> None:
     """항목8: 429만 rate_limited, 나머지는 전부 api_error로 스킵되고 실행은 계속된다."""
     grant_cloud_consent()
-    http_error = urllib.error.HTTPError(
-        "https://api.anthropic.com/v1/messages", status, "err", {}, None  # type: ignore[arg-type]
+    cloud_gateway.messages_error = gateway.GatewayError(
+        "실패", url="https://api.anthropic.com/v1/messages", status=status
     )
-    wrapped = gateway.GatewayError("실패", url="https://api.anthropic.com/v1/messages")
-    wrapped.__cause__ = http_error
-    cloud_gateway.messages_error = wrapped
 
     result = run_scan(_cloud_config(corpus, tmp_path))
 

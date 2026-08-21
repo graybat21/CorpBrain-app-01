@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-import urllib.error
 from typing import Any
 
 import pytest
@@ -184,12 +183,10 @@ def test_schema_violation_is_a_parse_error(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 def _gateway_error_with_status(status: int | None) -> gateway.GatewayError:
-    error = gateway.GatewayError("실패", url="https://api.anthropic.com/v1/messages")
-    if status is not None:
-        error.__cause__ = urllib.error.HTTPError(
-            "https://api.anthropic.com/v1/messages", status, "err", {}, None  # type: ignore[arg-type]
-        )
-    return error
+    """관문이 계약으로 노출하는 `status`를 그대로 실어 만든다 (`__cause__`를 흉내내지 않는다)."""
+    return gateway.GatewayError(
+        "실패", url="https://api.anthropic.com/v1/messages", status=status
+    )
 
 
 @pytest.mark.parametrize(
@@ -235,19 +232,65 @@ def test_preflight_calls_models_endpoint(calls: list[dict[str, Any]]) -> None:
     assert calls[0].get("payload") is None
 
 
-def test_preflight_failure_is_a_precondition_failure(
-    monkeypatch: pytest.MonkeyPatch,
+def _stub_preflight_failure(
+    monkeypatch: pytest.MonkeyPatch, status: int | None
 ) -> None:
-    """프리플라이트 실패는 선행 조건 실패라 파일을 하나도 처리하지 않게 만든다 (§3 항목4)."""
+    """프리플라이트가 주어진 HTTP 상태로 실패하도록 관문을 스텁한다."""
     def _boom(url: str, **_: Any) -> Any:
-        raise gateway.GatewayError("HTTP 401", url=url)
+        raise gateway.GatewayError(f"실패 {status}", url=url, status=status)
 
     monkeypatch.setattr(gateway, "request_json", _boom)
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_credential_rejection_is_an_auth_error(
+    monkeypatch: pytest.MonkeyPatch, status: int
+) -> None:
+    """자격증명 거부(401·403)만 인증 실패로 분류한다 (§3 항목4)."""
+    _stub_preflight_failure(monkeypatch, status)
 
     with pytest.raises(ac.CloudAuthError) as excinfo:
         ac.preflight("sk-bad")
 
     assert isinstance(excinfo.value, PreconditionError)
+    assert ac.API_KEY_ENV_VAR in str(excinfo.value)  # 손댈 곳을 정확히 가리킨다
+
+
+@pytest.mark.parametrize("status", [500, 502, 503, 529, 404, None])
+def test_non_credential_failures_are_unavailable_not_auth(
+    monkeypatch: pytest.MonkeyPatch, status: int | None
+) -> None:
+    """5xx·타임아웃(status=None) 등은 인증 실패로 뭉개지 않는다 — 엉뚱한 안내를 막는다."""
+    _stub_preflight_failure(monkeypatch, status)
+
+    with pytest.raises(ac.CloudUnavailableError) as excinfo:
+        ac.preflight("sk-test")
+
+    assert not isinstance(excinfo.value, ac.CloudAuthError)
+    assert isinstance(excinfo.value, PreconditionError)  # 여전히 exit 1
+    assert ac.API_KEY_ENV_VAR not in str(excinfo.value)  # API 키를 탓하지 않는다
+
+
+def test_transient_failure_message_does_not_blame_the_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """일시적 5xx에 '키를 확인하라'고 안내하지 않는다 (코드 리뷰 검출 회귀)."""
+    _stub_preflight_failure(monkeypatch, 503)
+
+    with pytest.raises(ac.CloudUnavailableError) as excinfo:
+        ac.preflight("sk-valid")
+
+    message = str(excinfo.value)
+    assert "네트워크" in message
+    assert "API 키 문제는 아닙니다" in message
+
+
+def test_both_preflight_errors_map_to_exit_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    """두 실패 유형 모두 선행 조건 실패라 파일을 하나도 처리하지 않는다 (신규 종료 코드 없음)."""
+    for status in (401, 503):
+        _stub_preflight_failure(monkeypatch, status)
+        with pytest.raises(PreconditionError):
+            ac.preflight("sk-test")
 
 
 # --- Summarizer 프로토콜 (§4.3) ---------------------------------------------------

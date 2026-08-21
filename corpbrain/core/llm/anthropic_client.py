@@ -82,16 +82,31 @@ __all__ = [
     "CloudApiError",
     "CloudAuthError",
     "CloudRateLimitedError",
+    "CloudUnavailableError",
     "preflight",
     "resolve_api_key",
     "summarize_cloud",
 ]
 
 
+#: 자격증명 문제로 보는 HTTP 상태 — 401(키가 틀림)·403(키는 유효하나 권한 없음).
+_CREDENTIAL_STATUSES = frozenset({401, 403})
+
+
 class CloudAuthError(PreconditionError):
-    """API 키 부재 또는 인증 실패(401) — 선행 조건 실패라 파일을 하나도 처리하지 않는다.
+    """API 키 부재 또는 자격증명 거부(401·403) — 선행 조건 실패라 파일을 하나도 처리하지 않는다.
 
     v0.5 스펙 §3 항목4: 프리플라이트에서 걸러 exit 1로 즉시 종료한다.
+    """
+
+
+class CloudUnavailableError(PreconditionError):
+    """자격증명 외의 이유로 클라우드에 닿지 못함 — 5xx·타임아웃·연결 거부·DNS 등.
+
+    `CloudAuthError`와 마찬가지로 선행 조건 실패(exit 1)지만 사용자가 손댈 곳이 다르므로
+    타입과 안내 문구를 분리한다. 프리플라이트 단계에서 서비스에 닿지 못한다는 것이 이미
+    확인됐으므로 파일 루프를 돌지 않는다 — 50개 파일에 대해 같은 실패를 반복하며
+    타임아웃을 쌓는 것보다 즉시 알리는 편이 낫다.
     """
 
 
@@ -158,16 +173,26 @@ def preflight(api_key: str, *, timeout: float = PREFLIGHT_TIMEOUT) -> None:
     `GET /v1/models`는 토큰 비용이 없다. 기존 v0.3의 Ollama 모델 존재 확인과 같은 자리 —
     "환경/인증을 자원 처리보다 먼저 확정한다"는 fail-fast 관례를 따른다.
 
+    실패 원인을 **자격증명 문제와 그 밖의 문제로 구분**한다. 둘 다 파일을 하나도 처리하지
+    않고 종료하는 선행 조건 실패지만(스펙 §3 항목4의 fail-fast 자리), 사용자가 손대야 할
+    곳이 전혀 다르다 — 일시적인 5xx나 네트워크 끊김에 "API 키를 확인하라"고 안내하면
+    엉뚱한 곳을 뒤지게 만든다.
+
     Raises:
-        CloudAuthError: 인증 실패(401) 또는 그 밖의 연결·응답 실패. 어느 쪽이든 파일을
-            하나도 처리하지 않고 종료해야 하는 선행 조건 실패다.
+        CloudAuthError: 자격증명 거부(401 인증 실패·403 권한 없음).
+        CloudUnavailableError: 그 밖의 모든 실패(5xx·타임아웃·연결 거부·DNS·응답 파싱 등).
     """
     try:
         _request(MODELS_PATH, api_key, timeout=timeout)
     except gateway.GatewayError as exc:
-        raise CloudAuthError(
-            f"Anthropic API 프리플라이트에 실패했습니다: {exc} — "
-            f"{API_KEY_ENV_VAR} 값과 네트워크 연결을 확인하세요."
+        if exc.status in _CREDENTIAL_STATUSES:
+            raise CloudAuthError(
+                f"Anthropic API가 자격증명을 거부했습니다(HTTP {exc.status}): {exc} — "
+                f"{API_KEY_ENV_VAR} 값이 올바른지 확인하세요."
+            ) from exc
+        raise CloudUnavailableError(
+            f"Anthropic API에 연결하지 못했습니다: {exc} — 네트워크 연결과 "
+            f"서비스 상태를 확인한 뒤 다시 실행하세요. (API 키 문제는 아닙니다.)"
         ) from exc
 
 
@@ -249,9 +274,13 @@ def _classify_call_failure(exc: gateway.GatewayError) -> CorpBrainError:
 
 
 def _is_rate_limited(exc: gateway.GatewayError) -> bool:
-    """관문이 감싼 원인 예외에서 HTTP 429를 판별한다 (상태코드는 원인에만 남아 있다)."""
-    cause = exc.__cause__
-    return getattr(cause, "code", None) == 429
+    """HTTP 429인지 판별한다 — 관문이 계약으로 노출하는 `status`만 본다.
+
+    원인 예외(`__cause__`)의 비공개 구조에 기대지 않는다. 관문이 예외를 감싸는 방식이
+    바뀌어도(`from None`, 재시도 래퍼 추가 등) 레이트리밋 판정이 조용히 죽지 않게 하기
+    위함이다 — 죽으면 `cloud_rate_limited` 스킵 사유(스펙 §3 항목8)가 통째로 사문화된다.
+    """
+    return exc.status == 429
 
 
 def _tool_input(envelope: Any) -> Any:

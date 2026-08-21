@@ -33,11 +33,16 @@ class GatewayError(CorpBrainError):
 
     Attributes:
         url: 실패한 호출의 대상 URL.
+        status: HTTP 상태코드. 응답을 받지 못한 실패(연결 거부·타임아웃·DNS·직렬화·파싱)는
+            `None`이다. 호출자가 상태별로 다르게 대응(401은 선행 조건 실패, 429는 파일 스킵
+            등)할 수 있도록 관문이 **계약의 일부로** 노출한다 — 원인 예외(`__cause__`)의
+            비공개 구조를 들여다보지 않게 하기 위함이다.
     """
 
-    def __init__(self, message: str, *, url: str) -> None:
+    def __init__(self, message: str, *, url: str, status: int | None = None) -> None:
         super().__init__(message)
         self.url = url
+        self.status = status
 
 
 class NetworkGuardError(GatewayError):
@@ -182,7 +187,7 @@ def request_json(
         message = f"외부 호출이 HTTP {exc.code}로 실패했습니다: {url}"
         if detail:
             message = f"{message} — {detail}"
-        raise GatewayError(message, url=url) from exc
+        raise GatewayError(message, url=url, status=exc.code) from exc
     except urllib.error.URLError as exc:
         raise GatewayError(
             f"외부 호출에 연결하지 못했습니다: {url} ({exc.reason})", url=url
