@@ -222,7 +222,7 @@ def build_prompt(document: str) -> str:
     스키마 강제는 `tool_choice`가 담당하므로 "JSON만 출력하라" 류의 문구가 필요 없다
     (v0.5 §4.3). 한국어 출력·5필드 의미·환각 금지 등 provider 무관한 제품 규칙은 그대로 둔다.
     """
-    return PROMPT_TEMPLATE.format(document=document)
+    return PROMPT_TEMPLATE.format(tool_name=SUMMARY_TOOL_NAME, document=document)
 
 
 PROMPT_TEMPLATE = """당신은 사내 문서를 정리하는 한국어 지식 관리 도우미입니다.
@@ -236,9 +236,9 @@ PROMPT_TEMPLATE = """당신은 사내 문서를 정리하는 한국어 지식 �
 
 문서:
 \"\"\"
-{{document}}
+{document}
 \"\"\"
-""".replace("{tool_name}", SUMMARY_TOOL_NAME)
+"""
 
 
 def _classify_call_failure(exc: gateway.GatewayError) -> CorpBrainError:
