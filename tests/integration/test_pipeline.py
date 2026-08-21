@@ -15,13 +15,14 @@ import pytest
 
 from corpbrain import cli
 from corpbrain.core import _progress, gateway, run_scan
-from corpbrain.core.config import DEFAULT_MODEL, ScanConfig
+from corpbrain.core.config import DEFAULT_EMBED_MODEL, DEFAULT_MODEL, ScanConfig
 from corpbrain.core.render import FRONT_MATTER_KEYS, SECTION_HEADERS
 
 FIXTURE_CORPUS = Path(__file__).resolve().parents[1] / "fixtures" / "sample_corpus"
 
-#: 구동 중이며 대상 모델이 설치된 Ollama의 `/api/tags` 정상 응답 (v0.3 모델 선점검 통과용).
-TAGS_RESPONSE = {"models": [{"name": DEFAULT_MODEL}]}
+#: 구동 중이며 요약·임베딩 대상 모델이 모두 설치된 `/api/tags` 정상 응답 (v0.3·v0.4 선점검 통과용).
+TAGS_RESPONSE = {"models": [{"name": DEFAULT_MODEL}, {"name": DEFAULT_EMBED_MODEL}]}
+EMBEDDING_RESPONSE = {"embedding": [0.1, 0.2, 0.3]}
 
 SUMMARY_JSON = {
     "title": "통합 테스트 제목",
@@ -53,6 +54,8 @@ def _ok_gateway(monkeypatch: pytest.MonkeyPatch) -> None:
     def _request_json(url: str, *, method: str = "GET", payload: Any = None, **_: Any) -> Any:
         if url.endswith("/api/tags"):
             return TAGS_RESPONSE
+        if url.endswith("/api/embeddings"):
+            return EMBEDDING_RESPONSE
         return {"response": json.dumps(SUMMARY_JSON, ensure_ascii=False)}
 
     monkeypatch.setattr(gateway, "request_json", _request_json)
@@ -178,6 +181,8 @@ def test_broken_json_skips_only_that_file(
     def _request_json(url: str, *, method: str = "GET", payload: Any = None, **_: Any) -> Any:
         if url.endswith("/api/tags"):
             return TAGS_RESPONSE
+        if url.endswith("/api/embeddings"):
+            return EMBEDDING_RESPONSE
         if payload is not None and "마크다운 제목" in payload["prompt"]:
             return {"response": "이건 JSON이 아님"}
         return {"response": json.dumps(SUMMARY_JSON, ensure_ascii=False)}

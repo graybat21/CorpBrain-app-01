@@ -8,7 +8,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from corpbrain.core.models import PlanEntry, ScanPlan, ScanResult, SkipReason
+from corpbrain.core.models import (
+    PlanEntry,
+    ScanPlan,
+    ScanResult,
+    SearchResult,
+    SkipReason,
+)
 
 if TYPE_CHECKING:
     from corpbrain.core.environment import DoctorReport
@@ -37,18 +43,23 @@ def label_for(reason: SkipReason) -> str:
 
 
 def build_detail_lines(result: ScanResult) -> list[str]:
-    """파일 단위 결과 줄 — 생성물과 스킵 사유를 발견 순서대로 나열한다."""
+    """파일 단위 결과 줄 — 생성물·스킵·인덱싱 실패 사유를 발견 순서대로 나열한다."""
     lines = [f"[생성] {wiki.source_path} → {wiki.output_path}" for wiki in result.generated]
     lines += [
         f"[스킵] {skip.path} — {label_for(skip.reason)}"
         + (f" ({skip.detail})" if skip.detail else "")
         for skip in result.skipped
     ]
+    lines += [
+        f"[인덱싱 실패] {failure.path}"
+        + (f" — {failure.detail}" if failure.detail else "")
+        for failure in result.embedding_failures
+    ]
     return lines
 
 
 def build_summary_lines(result: ScanResult) -> list[str]:
-    """종료 요약 — 처리 N건 / 스킵 M건(+사유별 집계) / 출력 경로 (스펙 §4.1)."""
+    """종료 요약 — 처리 N건 / 스킵 M건(+사유별 집계) / 인덱싱 실패 K건 / 출력 경로 (스펙 §4.1, v0.4 §4.3)."""
     if result.limit_exceeded:
         return [
             f"스캔 대상이 상한을 초과했습니다: {result.discovered_count}건 발견 — 처리를 중단했습니다.",
@@ -64,7 +75,25 @@ def build_summary_lines(result: ScanResult) -> list[str]:
         f"  - {label_for(reason)}: {count}건"
         for reason, count in sorted(counts.items(), key=lambda item: item[0].value)
     ]
+    # 위키는 생성됐지만 인덱싱만 실패한 문서 — 스킵과 구분되는 별도 집계 (v0.4 §4.3).
+    if result.embedding_failures:
+        lines.append(f"인덱싱 실패 {len(result.embedding_failures)}건 (위키는 생성됨)")
     lines.append(f"출력 경로: {result.out_dir}")
+    return lines
+
+
+def build_search_lines(results: list[SearchResult]) -> list[str]:
+    """`search`가 stdout에 낼 결과 줄 — 점수 내림차순 제목·경로 (v0.4 스펙 §3 항목6)."""
+    if not results:
+        return ["일치하는 문서가 없습니다."]
+    lines = [f"검색 결과 {len(results)}건"]
+    lines += [
+        f"  {rank}. [{result.score:.3f}] "
+        # 키가 없을 때뿐 아니라 빈 문자열(제목 없는 손상·수기 편집 위키)일 때도 대체 문구를 쓴다.
+        f"{result.metadata.get('title') or '(제목 없음)'} — "
+        f"{result.metadata.get('source_path') or result.doc_id}"
+        for rank, result in enumerate(results, start=1)
+    ]
     return lines
 
 
@@ -171,10 +200,10 @@ def build_scan_banner_lines(plan: ScanPlan) -> list[str]:
 
 
 def build_doctor_lines(report: DoctorReport) -> list[str]:
-    """`doctor`가 stdout에 낼 한국어 체크리스트 — 실패 항목에 해결 명령을 함께 낸다 (v0.3 §4.3).
+    """`doctor`가 stdout에 낼 한국어 체크리스트 — 실패 항목에 해결 명령을 함께 낸다 (v0.4 §4.3).
 
-    순서 = Ollama 설치 → 구동 → 대상 모델 → GPU → 게이트 임계값(정보) → 종합. GPU 없음은
-    경고일 뿐 종합 판정(`ready`)에 영향을 주지 않는다. 안내 문자열·URL은 평문 출력이다.
+    순서 = Ollama 설치 → 구동 → 대상 모델 → 임베딩 모델 → GPU → 게이트 임계값(정보) → 종합.
+    GPU 없음은 경고일 뿐 종합 판정(`ready`)에 영향을 주지 않는다. 안내 문자열·URL은 평문 출력이다.
     """
     lines = ["CorpBrain doctor — 환경 점검"]
 
@@ -192,6 +221,14 @@ def build_doctor_lines(report: DoctorReport) -> list[str]:
         lines.append(f"  [OK] 모델 설치됨: {report.model}")
     else:
         lines.append(f"  [실패] 모델 없음: {report.model} — `ollama pull {report.model}`")
+
+    if report.embed_model_present:
+        lines.append(f"  [OK] 임베딩 모델 설치됨: {report.embed_model}")
+    else:
+        lines.append(
+            f"  [실패] 임베딩 모델 없음: {report.embed_model} — "
+            f"`ollama pull {report.embed_model}`"
+        )
 
     if report.hardware.gpu:
         lines.append(f"  [OK] {report.hardware.label}")

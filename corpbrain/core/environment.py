@@ -14,6 +14,7 @@ import shutil
 from dataclasses import dataclass
 
 from corpbrain.core.config import (
+    DEFAULT_EMBED_MODEL,
     DEFAULT_MAX_FILE_SIZE,
     DEFAULT_MAX_TOTAL_TOKENS,
     DEFAULT_MODEL,
@@ -42,6 +43,10 @@ class DoctorReport:
     model: str
     #: 대상 모델이 설치돼 있는가 (데몬 미구동이면 False).
     model_present: bool
+    #: 점검 대상 임베딩 모델 이름 (v0.4 §4.3).
+    embed_model: str
+    #: 대상 임베딩 모델이 설치돼 있는가 (데몬 미구동이면 False).
+    embed_model_present: bool
     #: 데몬이 보고한 설치 모델 목록 (미구동이면 빈 목록).
     available_models: list[str]
     #: 감지 하드웨어 (GPU 없음은 경고일 뿐 준비 판정에 영향 없음).
@@ -52,13 +57,22 @@ class DoctorReport:
 
     @property
     def ready(self) -> bool:
-        """필수 조건(설치·구동·대상 모델)이 모두 충족됐는가. GPU 없음은 준비 판정과 무관."""
-        return self.installed and self.running and self.model_present
+        """필수 조건(설치·구동·대상 모델·임베딩 모델)이 모두 충족됐는가.
+
+        GPU 없음은 준비 판정과 무관하다.
+        """
+        return (
+            self.installed
+            and self.running
+            and self.model_present
+            and self.embed_model_present
+        )
 
 
 def diagnose(
     *,
     model: str = DEFAULT_MODEL,
+    embed_model: str = DEFAULT_EMBED_MODEL,
     ollama_url: str = DEFAULT_OLLAMA_URL,
     timeout: float = 5.0,
     max_file_size: int = DEFAULT_MAX_FILE_SIZE,
@@ -67,7 +81,8 @@ def diagnose(
     """환경을 점검해 `DoctorReport`를 조립한다 (전 항목 점검, fail-fast 아님).
 
     설치 감지는 로컬 PATH 조회(`shutil.which`)뿐이고, 데몬·모델은 단일 관문을 경유한다.
-    데몬 미구동이면 모델 목록을 알 수 없으므로 `running=False`·`model_present=False`로 둔다.
+    데몬 미구동이면 모델 목록을 알 수 없으므로 `running=False`·`model_present=False`·
+    `embed_model_present=False`로 둔다.
     """
     installed = shutil.which(OLLAMA_BINARY) is not None
     hardware = detect_hardware()
@@ -75,10 +90,12 @@ def diagnose(
     running = False
     available: list[str] = []
     present = False
+    embed_present = False
     try:
         available = ollama_client.list_models(ollama_url, timeout=timeout)
         running = True
         present = ollama_client.model_present(available, model)
+        embed_present = ollama_client.model_present(available, embed_model)
     except OllamaNotAvailableError:
         running = False
 
@@ -87,6 +104,8 @@ def diagnose(
         running=running,
         model=model,
         model_present=present,
+        embed_model=embed_model,
+        embed_model_present=embed_present,
         available_models=available,
         hardware=hardware,
         max_file_size=max_file_size,

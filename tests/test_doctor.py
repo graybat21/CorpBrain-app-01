@@ -14,7 +14,7 @@ import pytest
 
 from corpbrain import cli
 from corpbrain.core import environment, gateway
-from corpbrain.core.config import DEFAULT_MODEL
+from corpbrain.core.config import DEFAULT_EMBED_MODEL, DEFAULT_MODEL
 from corpbrain.core.llm import ollama_client
 from corpbrain.core.llm.ollama_client import OllamaNotAvailableError
 from corpbrain.core.models import HardwareInfo
@@ -72,17 +72,39 @@ def test_diagnose_model_missing(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_diagnose_ready(monkeypatch: pytest.MonkeyPatch) -> None:
-    _stub_env(monkeypatch, installed=True, models=["qwen2.5:7b-instruct"])
+    _stub_env(monkeypatch, installed=True, models=["qwen2.5:7b-instruct", DEFAULT_EMBED_MODEL])
     report = environment.diagnose(model="qwen2.5:7b-instruct")
     assert report.ready is True
 
 
 def test_gpu_absence_does_not_affect_ready(monkeypatch: pytest.MonkeyPatch) -> None:
     """GPU 없음은 경고일 뿐 준비 판정(ready)에 영향을 주지 않는다 (완료의 정의 6)."""
-    _stub_env(monkeypatch, installed=True, models=["m"], gpu=False)
+    _stub_env(monkeypatch, installed=True, models=["m", DEFAULT_EMBED_MODEL], gpu=False)
     report = environment.diagnose(model="m")
     assert report.hardware.gpu is False
     assert report.ready is True
+
+
+# --- 임베딩 모델 점검 (v0.4 스펙 §3 항목8) --------------------------------------
+
+
+def test_diagnose_embed_model_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """대상 모델은 있지만 임베딩 모델이 없으면 ready는 False다 (v0.4 §3 항목8)."""
+    _stub_env(monkeypatch, installed=True, models=[DEFAULT_MODEL])
+    report = environment.diagnose(model=DEFAULT_MODEL, embed_model=DEFAULT_EMBED_MODEL)
+    assert report.model_present is True
+    assert report.embed_model_present is False
+    assert report.ready is False
+
+
+def test_cli_doctor_embed_model_missing_exit_1(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _stub_env(monkeypatch, installed=True, models=[DEFAULT_MODEL])
+    code = cli.main(["doctor"])
+    out = capsys.readouterr().out
+    assert code == cli.EXIT_PRECONDITION_FAILED
+    assert f"ollama pull {DEFAULT_EMBED_MODEL}" in out
 
 
 # --- CLI doctor 종료 코드 (완료의 정의 6) --------------------------------------
@@ -91,7 +113,7 @@ def test_gpu_absence_does_not_affect_ready(monkeypatch: pytest.MonkeyPatch) -> N
 def test_cli_doctor_ready_exit_0(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    _stub_env(monkeypatch, installed=True, models=[DEFAULT_MODEL])
+    _stub_env(monkeypatch, installed=True, models=[DEFAULT_MODEL, DEFAULT_EMBED_MODEL])
     code = cli.main(["doctor"])
     out = capsys.readouterr().out
     assert code == cli.EXIT_OK
