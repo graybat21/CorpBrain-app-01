@@ -15,8 +15,14 @@ from pathlib import Path
 
 from corpbrain.core.config import ENGINE_LOCAL
 
-#: front-matter의 `engine: "..."` 한 줄. 값의 따옴표는 있어도 없어도 읽는다.
-_ENGINE_LINE = re.compile(r'^engine:\s*"?([^"\r\n]*)"?\s*$', re.MULTILINE)
+#: front-matter 블록 — 파일 맨 앞의 `---` 부터 다음 `---` 까지.
+#: **본문까지 뒤지지 않기 위해** 블록을 먼저 잘라낸다. 본문에는 요약문이 그대로 들어가는데,
+#: 그 문단이 우연히 `engine:` 으로 시작하면(설정 파일을 요약한 문서 등) 그 줄을 기록된
+#: 엔진으로 잘못 읽어 재생성 판정이 어긋난다.
+_FRONT_MATTER = re.compile(r"\A---\r?\n(.*?)\r?\n---\s*$", re.DOTALL | re.MULTILINE)
+
+#: front-matter 안의 `engine: "..."` 한 줄. 값의 따옴표는 있어도 없어도 읽는다.
+_ENGINE_LINE = re.compile(r'^engine:\s*"?([^"\r\n]*?)"?\s*$', re.MULTILINE)
 
 #: front-matter를 찾기 위해 읽어들이는 앞부분 크기(바이트). 템플릿상 front-matter는
 #: 200바이트 안팎이라 넉넉하며, 위키 전체를 메모리에 올리지 않기 위한 상한이다.
@@ -66,7 +72,10 @@ def read_engine(out_path: Path) -> str:
             head = handle.read(_FRONT_MATTER_PEEK)
     except OSError:
         return ENGINE_LOCAL
-    match = _ENGINE_LINE.search(head)
+    block = _FRONT_MATTER.search(head)
+    if block is None:
+        return ENGINE_LOCAL  # front-matter가 없거나 잘렸다 — 본문은 보지 않는다
+    match = _ENGINE_LINE.search(block.group(1))
     if match is None:
         return ENGINE_LOCAL
     return match.group(1).strip() or ENGINE_LOCAL

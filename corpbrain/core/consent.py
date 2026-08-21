@@ -217,6 +217,10 @@ def _write_document(path: Path, document: dict[str, Any]) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(tmp_path, path)
-    except OSError as exc:
+    except Exception as exc:
+        # `OSError`만 잡으면 인코딩 실패(`UnicodeEncodeError`는 `ValueError` 계열) 같은
+        # 비-OSError가 그대로 빠져나가 ① 임시본이 잔여물로 남고 ② `ConsentStoreError`가
+        # 아니라서 어댑터의 exit 1 매핑을 비켜 트레이스백이 그대로 노출된다.
+        # 어떤 원인이든 임시본을 지우고 도메인 예외로 감싼다.
         tmp_path.unlink(missing_ok=True)
         raise ConsentStoreError(f"설정 파일을 기록하지 못했습니다: {path} ({exc})") from exc

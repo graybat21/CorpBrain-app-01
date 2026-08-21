@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 
 from corpbrain.core.llm.anthropic_client import API_KEY_ENV_VAR
 from corpbrain.core.models import (
+    IndexingSkipReason,
     PlanEntry,
     ScanPlan,
     ScanResult,
@@ -38,6 +39,19 @@ SKIP_REASON_LABELS: dict[SkipReason, str] = {
     SkipReason.FILE_TOO_LARGE: "파일 크기 초과",
     SkipReason.CLOUD_RATE_LIMITED: "클라우드 레이트리밋(429)",
     SkipReason.CLOUD_API_ERROR: "클라우드 호출 실패",
+}
+
+#: 인덱싱 생략 사유별 안내 — **해결 조치까지 함께** 낸다 (v0.5 §4.8).
+#: 데몬을 띄우는 것과 모델을 받는 것은 다른 일이므로 문구가 갈라져야 한다.
+INDEXING_SKIP_LABELS: dict[IndexingSkipReason, str] = {
+    IndexingSkipReason.OLLAMA_UNAVAILABLE: (
+        "로컬 Ollama 데몬이 응답하지 않아 벡터 인덱스를 만들지 않았습니다 "
+        "(`ollama serve` 실행 후 --force 로 재스캔하면 채워집니다)."
+    ),
+    IndexingSkipReason.EMBED_MODEL_MISSING: (
+        "임베딩 모델이 설치돼 있지 않아 벡터 인덱스를 만들지 않았습니다 "
+        "(`ollama pull <embed-model>` 후 --force 로 재스캔하면 채워집니다)."
+    ),
 }
 
 
@@ -100,10 +114,11 @@ def build_summary_lines(result: ScanResult) -> list[str]:
         lines.append(f"인덱싱 실패 {len(result.embedding_failures)}건 (위키는 생성됨)")
     # 클라우드로 나가기 전 가려진 개인정보 집계 (v0.5 §4.5). 로컬 엔진이면 항상 비어 있다.
     lines.extend(_pii_summary_lines(result))
-    if result.indexing_skipped:
+    if result.indexing_skip_reason is not None:
         # 위키는 정상이지만 `search`가 이 문서들을 찾지 못한다 — 조용히 넘어가면 안 된다.
+        # 사유마다 해결 조치가 다르므로 안내도 갈라진다 (v0.5 §4.8).
         lines.append(
-            "인덱싱 생략 — 로컬 Ollama를 찾지 못해 벡터 인덱스를 만들지 않았습니다. "
+            f"인덱싱 생략 — {INDEXING_SKIP_LABELS[result.indexing_skip_reason]} "
             "위키는 정상 생성됐지만 `corpbrain search`로는 찾을 수 없습니다."
         )
     lines.append(f"출력 경로: {result.out_dir}")
@@ -212,11 +227,15 @@ def _gate_report_lines(plan: ScanPlan) -> list[str]:
     gate = plan.gate
     if gate is None:
         return []
-    gpu = (
-        "OK (GPU 감지)"
-        if gate.gpu_ok
-        else "차단 (GPU 미탐지 — scan은 --force-gates 필요)"
-    )
+    if gate.gpu_ok:
+        gpu = "OK (GPU 감지)"
+    elif gate.gpu_enforced:
+        gpu = "차단 (GPU 미탐지 — scan은 --force-gates 필요)"
+    else:
+        # 클라우드 요약은 로컬 GPU를 쓰지 않아 차단 사유가 아니다 (§4.7).
+        # "차단"이라고 표시해 놓고 그냥 진행하면 사용자가 불필요한 --force-gates를 붙이게 되고,
+        # 그러면 cloud에도 유지돼야 할 토큰(비용) 게이트까지 함께 꺼진다.
+        gpu = "미탐지 (cloud 엔진이라 차단하지 않음)"
     tokens = (
         "OK"
         if gate.tokens_ok
@@ -245,7 +264,10 @@ def build_scan_banner_lines(plan: ScanPlan) -> list[str]:
     ]
     gate = plan.gate
     if gate is not None:
-        gpu = "GPU" if gate.gpu_ok else "CPU(차단)"
+        if gate.gpu_ok:
+            gpu = "GPU"
+        else:
+            gpu = "CPU(차단)" if gate.gpu_enforced else "CPU(cloud — 차단 안 함)"
         tok = "OK" if gate.tokens_ok else "예산초과"
         summary = (
             f"게이트: {gpu} · 토큰 {plan.total_est_tokens:,}/{gate.max_total_tokens:,} {tok}"

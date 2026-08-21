@@ -223,13 +223,38 @@ def summarize_cloud(
         LLMParseError: 응답이 tool use 스키마를 어겨 5필드를 얻지 못함.
     """
     masked = mask_pii(text)
+    return summarize_masked(masked.text, model, api_key, timeout=timeout), masked
+
+
+def summarize_masked(
+    masked_text: str,
+    model: str,
+    api_key: str,
+    *,
+    timeout: float = DEFAULT_TIMEOUT,
+) -> SummaryResult:
+    """**이미 마스킹된** 텍스트를 클라우드에서 요약한다 — 전송·파싱만 담당한다.
+
+    마스킹과 전송을 분리해 두는 이유는 감사 기록 때문이다. 마스킹 결과를 요약 성공 시점에
+    받아 기록하면, 응답이 스키마를 어겨 파싱에 실패했을 때 **이미 외부로 나간 문서가 기록에서
+    통째로 빠진다**. 호출자는 이 함수를 부르기 전에 마스킹 결과를 먼저 확보해 둔다
+    (`AnthropicSummarizer.summarize` 참조).
+
+    Args:
+        masked_text: `mask_pii()`를 이미 통과한 전송본.
+
+    Raises:
+        CloudRateLimitedError: 레이트리밋(429).
+        CloudApiError: 그 밖의 호출 실패(5xx·타임아웃·연결오류·400/404 등).
+        LLMParseError: 응답이 tool use 스키마를 어겨 5필드를 얻지 못함.
+    """
     payload: dict[str, Any] = {
         "model": model,
         "max_tokens": MAX_TOKENS,
         "temperature": 0,
         "tools": [SUMMARY_TOOL_SCHEMA],
         "tool_choice": {"type": "tool", "name": SUMMARY_TOOL_NAME},
-        "messages": [{"role": "user", "content": build_prompt(masked.text)}],
+        "messages": [{"role": "user", "content": build_prompt(masked_text)}],
     }
 
     try:
@@ -239,7 +264,7 @@ def summarize_cloud(
     except gateway.GatewayError as exc:
         raise _classify_call_failure(exc) from exc
 
-    return validate_summary_fields(_tool_input(envelope)), masked
+    return validate_summary_fields(_tool_input(envelope))
 
 
 def build_prompt(document: str) -> str:
@@ -319,9 +344,14 @@ class AnthropicSummarizer:
         self.last_mask: MaskingResult | None = None
 
     def summarize(self, text: str) -> SummaryResult:
-        """문서 텍스트를 클라우드에서 요약한다 (전송 직전 PII 마스킹)."""
-        summary, masked = summarize_cloud(
-            text, self.model, self._api_key, timeout=self._timeout
-        )
+        """문서 텍스트를 클라우드에서 요약한다 (전송 직전 PII 마스킹).
+
+        마스킹 결과는 **전송을 시도하기 전에** 기록한다 — 요약이 성공한 뒤에 기록하면
+        응답 파싱에 실패했을 때 이미 외부로 나간 문서가 감사 기록에서 빠진다
+        (스펙 §4.5·§3-16이 요구하는 "어느 문서가 무엇을 가린 채 나갔는지").
+        """
+        masked = mask_pii(text)
         self.last_mask = masked
-        return summary
+        return summarize_masked(
+            masked.text, self.model, self._api_key, timeout=self._timeout
+        )

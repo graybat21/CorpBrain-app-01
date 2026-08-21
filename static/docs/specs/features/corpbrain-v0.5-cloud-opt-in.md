@@ -315,6 +315,11 @@ corpbrain doctor
   생성하고 벡터 인덱싱을 건너뛴다. 임베딩 API를 호출하지 않으며 인덱스 파일도 만들지
   않는다. 종료 요약에 "인덱싱 생략 — `search`로 찾을 수 없습니다"를 낸다. 종료 코드는
   **0**(정상)이다 — 실패가 아니라 의도된 축소 동작이다.
+- **생략 사유를 구분해 기록·안내한다** [2026-08-21 추가]: 두 원인은 해결 조치가 달라서
+  단일 플래그로 뭉개면 안내가 엉뚱한 곳을 가리킨다(데몬이 멀쩡한데 재설치를 시도하게 된다).
+  `ScanResult.indexing_skip_reason`에 사유를 담고 안내 문구를 갈라 낸다.
+  - `ollama_unavailable` — 데몬 미응답 → `ollama serve` 안내
+  - `embed_model_missing` — 데몬은 살아 있으나 모델 부재 → `ollama pull <embed-model>` 안내
 - `engine=local`은 요약 자체가 불가능하므로 **종전대로 차단**한다(exit 1).
 - `engine=cloud`인데 Ollama가 정상이면 기존과 동일하게 인덱싱한다(기능 후퇴 없음).
 - 나중에 Ollama를 설치하고 `--force`로 재스캔하면 인덱스가 채워진다.

@@ -15,7 +15,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from corpbrain.core.config import ScanConfig
+from corpbrain.core.config import ENGINE_CLOUD, ScanConfig
 from corpbrain.core.models import GateVerdict, HardwareInfo, PlanEntry, ScanPlan
 from corpbrain.core.scanner import ScanFindings, safe_size, scan_folder, validated_root
 
@@ -100,6 +100,8 @@ def plan_scan(config: ScanConfig, *, findings: ScanFindings | None = None) -> Sc
     rate = GPU_RATE if hardware.gpu else CPU_RATE
     gate = GateVerdict(
         gpu_ok=hardware.gpu,
+        # 클라우드 요약은 로컬 GPU를 쓰지 않으므로 GPU 게이트가 차단력을 갖지 않는다 (§4.7).
+        gpu_enforced=config.engine != ENGINE_CLOUD,
         tokens_ok=total_est_tokens <= config.max_total_tokens,
         oversized_count=oversized_count,
         max_file_size=config.max_file_size,

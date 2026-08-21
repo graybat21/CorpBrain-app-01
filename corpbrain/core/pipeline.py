@@ -61,6 +61,7 @@ from corpbrain.core.llm.summarize import OllamaSummarizer
 from corpbrain.core.models import (
     EmbeddingFailure,
     GeneratedWiki,
+    IndexingSkipReason,
     PiiMasking,
     ScanPlan,
     ScanResult,
@@ -109,6 +110,7 @@ def run_scan(
     on_event: EventSink | None = None,
     findings: ScanFindings | None = None,
     plan: ScanPlan | None = None,
+    consent_path: Path | None = None,
 ) -> ScanResult:
     """폴더를 스캔해 문서마다 위키 마크다운 1개를 생성하고 결과를 반환한다.
 
@@ -124,6 +126,10 @@ def run_scan(
             감지·stat 패스)을 두 번 돌지 않는다. 위 `findings`·같은 `config`로 계산된 것이어야
             한다 — findings와 파일 수가 어긋나면(절단·다른 스캔) 신뢰하지 않고 재계산해 오게이팅을
             막는다. `None`이면 `findings`로 새로 계산한다.
+        consent_path: 클라우드 동의 설정 파일 경로(선택). `consent` 모듈의 경로 주입 이음새를
+            코어 진입점까지 이어 준다 — 테스트나 후속 UI 어댑터가 사용자의 실제
+            `~/.corpbrain/config.json`을 건드리지 않고 격리할 수 있다. `None`(기본)이면 실제
+            사용자 설정 경로를 쓴다. `engine="local"`이면 읽지 않는다.
 
     Returns:
         생성·스킵 목록을 담은 `ScanResult`. 개별 파일 실패는 스킵으로 담고 예외로 올리지 않는다.
@@ -143,20 +149,20 @@ def run_scan(
     # (v0.5 §4.3 · §3 항목2·4). 동의 확인은 로컬 파일 읽기라 가장 값싸므로 맨 앞에 둔다.
     api_key: str | None = None
     if cloud:
-        _require_cloud_consent()
+        _require_cloud_consent(consent_path)
         api_key = resolve_api_key()
 
     # 임베딩은 엔진과 무관하게 항상 로컬이지만(v0.5 §2 비목표), **cloud에서는 Ollama가 없어도
     # 진행한다** — 스펙 §1이 대상으로 명시한 "로컬 미가용(Ollama 미설치)" 사용자가 정작
     # 클라우드 경로에서 막히는 모순을 없앤다. 이때 위키는 정상 생성하고 벡터 인덱싱만
     # 건너뛴다(`search` 불가). 로컬 엔진에서는 요약 자체가 불가능하므로 종전대로 차단한다.
-    indexing = True
+    skip_indexing: IndexingSkipReason | None = None
     try:
         available_models = list_models(config.ollama_url)
     except OllamaNotAvailableError:
         if not cloud:
             raise
-        indexing = False
+        skip_indexing = IndexingSkipReason.OLLAMA_UNAVAILABLE
     else:
         if not cloud and not model_present(available_models, config.model):
             raise ModelNotAvailableError(
@@ -169,7 +175,7 @@ def run_scan(
                     f"대상 모델을 찾지 못했습니다: {config.embed_model} — "
                     f"먼저 `ollama pull {config.embed_model}` 를 실행하세요."
                 )
-            indexing = False
+            skip_indexing = IndexingSkipReason.EMBED_MODEL_MISSING
 
     if api_key is not None:
         preflight(api_key)
@@ -202,10 +208,11 @@ def run_scan(
         return result
 
     run_state = _RunState()
+    indexing = skip_indexing is None
     store, existing_ids = (
         _open_index(config) if indexing else (_NoIndexStore(), frozenset())
     )
-    result.indexing_skipped = not indexing
+    result.indexing_skip_reason = skip_indexing
     valid_ids: set[str] = set()
     try:
         for index, source_path in enumerate(findings.targets, start=1):
@@ -268,9 +275,15 @@ class _NoIndexStore:
         """쥔 자원이 없다."""
 
 
-def _require_cloud_consent() -> None:
-    """클라우드 엔진 사용 동의를 확인한다 — 없으면 선행 조건 실패 (v0.5 §3 항목2)."""
-    if is_cloud_consent_granted():
+def _require_cloud_consent(config_path: Path | None = None) -> None:
+    """클라우드 엔진 사용 동의를 확인한다 — 없으면 선행 조건 실패 (v0.5 §3 항목2).
+
+    `config_path`는 `consent` 모듈이 마련한 경로 주입 이음새를 코어 진입점까지 이어 준다.
+    이 인자가 없으면 `run_scan`을 직접 호출하는 테스트나 후속 UI 어댑터가 개발자의 실제
+    `~/.corpbrain/config.json`을 읽게 되어, 수동 스모크로 동의를 한 번 켜는 순간 조용히
+    다른 분기를 타게 된다.
+    """
+    if is_cloud_consent_granted(config_path=config_path):
         return
     raise PreconditionError(
         "cloud 엔진 사용 동의가 필요합니다 — 문서 내용이 외부(Anthropic)로 전송됩니다. "
@@ -300,7 +313,7 @@ def _enforce_gates(config: ScanConfig, plan: ScanPlan) -> None:
     gate = plan.gate
     if config.force_gates or gate is None:
         return
-    if config.engine != ENGINE_CLOUD and not gate.gpu_ok:
+    if gate.gpu_enforced and not gate.gpu_ok:
         raise GpuGateError(
             "GPU를 감지하지 못했습니다 — CPU로 강행하려면 --force-gates 를 쓰세요 "
             f"(감지: {plan.hardware.label})."
@@ -419,6 +432,9 @@ def _process_one(
         summary = summarizer.summarize(prepared.text)
     except (LLMParseError, CloudRateLimitedError, CloudApiError) as exc:
         run_state.model_loaded = True
+        # 실패해도 마스킹 기록은 남긴다 — 응답 파싱 실패·레이트리밋은 **이미 전송된 뒤**라
+        # 여기서 빠뜨리면 외부로 나간 문서가 감사 기록에서 통째로 사라진다 (§4.5).
+        _record_masking(source_path, summarizer, result)
         reason = _summary_failure_reason(exc)
         result.skipped.append(
             SkippedFile(path=source_path, reason=reason, detail=str(exc))
