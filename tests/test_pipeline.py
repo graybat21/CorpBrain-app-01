@@ -270,3 +270,45 @@ def test_ollama_not_detected_is_precondition_failure(
 
     with pytest.raises(PreconditionError):
         run_scan(_config(corpus, tmp_path / "wiki"))
+
+
+def test_graph_store_open_failure_closes_the_vector_index(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """그래프 DB 개봉이 실패해도 이미 연 벡터 인덱스 연결을 닫는다 (v0.6 §4.8).
+
+    스키마 버전 불일치·손상·권한 거부는 §5가 설계한 경로다. 되돌리지 않으면 CLI에서는
+    프로세스가 곧 끝나 티가 나지 않지만, `run_scan()`을 반복 호출하는 후속 어댑터에서
+    sqlite 커넥션이 누적된다.
+    """
+    closed: list[str] = []
+
+    class _SpyStore:
+        def close(self) -> None:
+            closed.append("vector-index")
+
+    corpus = tmp_path / "docs"
+    corpus.mkdir()
+    (corpus / "a.txt").write_text("본문", encoding="utf-8")
+
+    def _request_json(url: str, *, method: str = "GET", payload: object = None, **_: object):
+        if url.endswith("/api/tags"):
+            return {"models": [{"name": "qwen2.5:7b-instruct"}, {"name": "nomic-embed-text"}]}
+        raise AssertionError("그래프 개봉 실패 이후로는 진행하지 않는다")
+
+    monkeypatch.setattr(gateway, "request_json", _request_json)
+    monkeypatch.setattr(
+        pipeline, "_open_index", lambda config: (_SpyStore(), frozenset())
+    )
+
+    def _boom(path: Path) -> object:
+        raise PreconditionError("그래프 DB의 스키마 버전이 다릅니다")
+
+    monkeypatch.setattr(pipeline, "SqliteGraphStore", _boom)
+
+    with pytest.raises(PreconditionError):
+        pipeline.run_scan(
+            ScanConfig(folder=corpus, out_dir=tmp_path / "wiki", force_gates=True)
+        )
+
+    assert closed == ["vector-index"]

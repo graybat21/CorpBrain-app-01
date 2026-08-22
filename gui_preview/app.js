@@ -1,5 +1,5 @@
 /* ==========================================================================
-   CorpBrain v0.6 GUI Prototype Interactive Engine
+   CorpBrain GUI 디자인 프리뷰 Interactive Engine
    2-Axis Architecture: Left Sidebar (Projects) + Top Horizontal Tabs
    ========================================================================== */
 
@@ -258,7 +258,7 @@ const WIKI_DETAILS_DB = {
       "비즈니스 로직은 순수 코어 라이브러리에 격리 (No-I/O)",
       "단일 게이트웨이(gateway.request_json)를 통한 외부 호출 100% 통제",
       "Ollama 기반 요약 및 nomic-embed-text 벡터 인덱싱 파이프라인 내장",
-      "v0.6: 엔티티 및 토픽 관계를 시각화하는 지식그래프(Knowledge Graph) 엔진 탑재"
+      "엔티티 및 토픽 관계를 시각화하는 지식그래프(Knowledge Graph) 엔진 탑재"
     ],
     body: `CorpBrain은 엔터프라이즈 환경의 지식 분산 문제를 해결하면서도 기밀 데이터 유출 위험을 원천 차단하기 위해 설계되었습니다.
 

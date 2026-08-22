@@ -15,8 +15,8 @@ from __future__ import annotations
 
 import sqlite3
 import time
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable, Iterator
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -42,6 +42,8 @@ from corpbrain.core.errors import (
     TokenBudgetExceededError,
 )
 from corpbrain.core.extract import prepare_summary_input
+from corpbrain.core.graph import build_graph, extract_references, rank_related
+from corpbrain.core.graphstore import GraphStore, SqliteGraphStore, graph_path_for
 from corpbrain.core.llm.anthropic_client import (
     AnthropicSummarizer,
     CloudApiError,
@@ -59,20 +61,27 @@ from corpbrain.core.llm.ollama_client import (
 )
 from corpbrain.core.llm.summarize import OllamaSummarizer
 from corpbrain.core.models import (
+    DocFacts,
     EmbeddingFailure,
     GeneratedWiki,
+    GraphEdge,
+    GraphNode,
+    GraphOutcome,
+    GraphSkipReason,
     IndexingSkipReason,
+    InjectionFailure,
     PiiMasking,
     ScanPlan,
     ScanResult,
     SearchResult,
     SkippedFile,
     SkipReason,
+    SummaryResult,
 )
-from corpbrain.core.output import output_path_for, write_wiki
+from corpbrain.core.output import inject_related_block, output_path_for, write_wiki
 from corpbrain.core.plan import plan_scan
-from corpbrain.core.render import render_markdown
-from corpbrain.core.rerun import should_regenerate
+from corpbrain.core.render import render_markdown, render_related_block
+from corpbrain.core.rerun import read_source_path, should_regenerate
 from corpbrain.core.scanner import (
     ScanFindings,
     enforce_limit,
@@ -214,13 +223,22 @@ def run_scan(
     )
     result.indexing_skip_reason = skip_indexing
     valid_ids: set[str] = set()
+    doc_ids = frozenset(str(path) for path in findings.targets)
+    try:
+        graph = SqliteGraphStore(graph_path_for(config.out_dir))
+    except BaseException:
+        # 그래프 DB 개봉 실패(스키마 버전 불일치·손상·권한)는 §5가 설계한 경로다. 여기서
+        # 되돌리지 않으면 이미 연 벡터 인덱스 연결이 샌다 — CLI는 곧 끝나 티가 안 나지만,
+        # `run_scan()`을 반복 호출하는 후속 어댑터에서 커넥션이 누적된다.
+        store.close()
+        raise
     try:
         for index, source_path in enumerate(findings.targets, start=1):
             _process_one(
                 source_path, root, config, result,
                 on_event=on_event, index=index, total=total, run_state=run_state,
                 store=store, existing_ids=existing_ids, summarizer=summarizer,
-                indexing=indexing,
+                graph=graph, doc_ids=doc_ids, indexing=indexing,
             )
             out_path = output_path_for(source_path, root, config.out_dir)
             if out_path.exists():
@@ -236,8 +254,13 @@ def run_scan(
                     store.delete(stale_id)
         except sqlite3.Error:
             pass  # 정리 실패는 베스트 에포트 — 이미 완료된 스캔 결과를 무효화하지 않는다.
+
+        # 패스2·패스3 — 저장소가 열려 있는 이 블록 안에서 돈다 (v0.6 §4.8). `iter_vectors()`가
+        # 유사도 계산에 필요하므로 `finally: store.close()`의 범위를 실행 끝까지 늘린다.
+        result.graph = _run_graph_stage(config, store=store, graph=graph, indexing=indexing)
     finally:
         store.close()
+        graph.close()
 
     _emit(on_event, RunFinished(at=time.monotonic()))
     return result
@@ -267,6 +290,10 @@ class _NoIndexStore:
     def list_ids(self) -> list[str]:
         """저장된 문서가 없다 — 고아 벡터 정리도 아무 일을 하지 않는다."""
         return []
+
+    def iter_vectors(self) -> Iterator[tuple[str, list[float]]]:
+        """낼 벡터가 없다 — 유사도 엣지 0개인 부분 그래프가 분기 없이 성립한다 (v0.6 §5)."""
+        return iter(())
 
     def set_model_name(self, model_name: str) -> None:
         """기록할 인덱스가 없다."""
@@ -374,6 +401,8 @@ def _process_one(
     store: VectorStore,
     existing_ids: frozenset[str],
     summarizer: Summarizer,
+    graph: GraphStore,
+    doc_ids: frozenset[str],
     indexing: bool = True,
 ) -> None:
     """파일 1개를 처리한다 — 어떤 실패도 이 함수 밖으로 새어 나가지 않는다.
@@ -477,6 +506,9 @@ def _process_one(
         return
 
     result.generated.append(GeneratedWiki(source_path=source_path, output_path=out_path))
+    # 그래프 재료를 남긴다 (v0.6 §4.4). 재요약된 문서만 기록하고, 스킵된 문서의 재료는
+    # 저장소에 그대로 남아 다음 실행의 그래프에 계속 참여한다.
+    _record_facts(source_path, summary, prepared.text, doc_ids=doc_ids, graph=graph)
     # 위키가 재생성됐으므로 벡터도 항상 재계산한다 (v0.4 스펙 §3 항목3).
     if indexing:
         _index_document(
@@ -484,6 +516,207 @@ def _process_one(
         )
     _emit(on_event, FileGenerated(at=time.monotonic(), index=index, total=total,
                                   path=path_str, output_path=str(out_path), latency=latency))
+
+
+def _record_facts(
+    source_path: Path,
+    summary: SummaryResult,
+    text: str,
+    *,
+    doc_ids: frozenset[str],
+    graph: GraphStore,
+) -> None:
+    """이번에 요약한 문서의 그래프 재료를 저장한다 (v0.6 §4.4).
+
+    `REFERENCES`용 텍스트는 **이미 읽어 둔 요약 입력**을 그대로 재사용해 추가 파일 I/O를
+    만들지 않는다 (§5). 저장 실패는 위키 생성 결과를 무효화하지 않는다 — 그 문서만 재료가
+    없어 다음 실행에서 복원 경로로 떨어진다.
+    """
+    doc_id = str(source_path)
+    try:
+        graph.upsert_facts(
+            DocFacts(
+                doc_id=doc_id,
+                title=summary.title,
+                tags=list(summary.tags),
+                entities=list(summary.entities),
+                refs=extract_references(text, doc_ids, self_id=doc_id),
+            )
+        )
+    except sqlite3.Error:
+        pass  # 베스트 에포트 — 그래프 단계가 이 문서를 복원 경로로 다룬다
+
+
+def _run_graph_stage(
+    config: ScanConfig, *, store: VectorStore, graph: GraphStore, indexing: bool
+) -> GraphOutcome:
+    """패스2(그래프 빌드)와 패스3(「관련 문서」 주입) (v0.6 §4.8).
+
+    대상은 이번 실행에서 처리한 문서가 아니라 **`--out`에 존재하는 위키 전체**다 (§4.1) —
+    재실행에서 대부분의 문서가 `up_to_date`로 스킵돼도 그래프가 쪼그라들지 않는다.
+    """
+    inventory = _collect_wiki_documents(config.out_dir)
+    wikis = inventory.documents
+    facts, missing = _materialize_facts(wikis, config=config, graph=graph)
+    if inventory.complete:
+        _prune_orphan_facts(graph, known=wikis.keys())
+
+    nodes, edges = build_graph(
+        facts, store.iter_vectors(), similarity_threshold=config.similarity_threshold
+    )
+    skipped = None if indexing else GraphSkipReason.VECTORS_UNAVAILABLE
+    try:
+        graph.replace_graph(nodes, edges)
+    except sqlite3.Error as exc:
+        # 단일 트랜잭션이라 이전 그래프가 그대로 남는다. 위키는 이미 생성돼 있고 LLM 비용도
+        # 지불된 상태이므로 스캔 전체를 무효화하지 않는다 (§5).
+        return GraphOutcome(
+            similarity_skipped=GraphSkipReason.BUILD_FAILED,
+            build_failure=str(exc),
+            facts_missing_count=missing,
+            duplicate_sources=inventory.duplicates,
+        )
+
+    relative = {
+        doc_id: path.relative_to(config.out_dir).as_posix() for doc_id, path in wikis.items()
+    }
+    updated, failures = _inject_related(
+        wikis, nodes=nodes, edges=edges, relative=relative, top_k=config.related_top_k
+    )
+    return GraphOutcome(
+        stats=graph.stats(),
+        similarity_skipped=skipped,
+        facts_missing_count=missing,
+        related_updated_count=updated,
+        injection_failures=failures,
+        duplicate_sources=inventory.duplicates,
+    )
+
+
+@dataclass
+class _WikiInventory:
+    """`--out` 아래 위키 목록과, 그 목록을 믿어도 되는지에 대한 판정."""
+
+    documents: dict[str, Path] = field(default_factory=dict)
+    #: 하나라도 읽지 못했으면 목록이 불완전하다 — 파괴적인 재료 정리를 건너뛰는 근거다.
+    complete: bool = True
+    #: 같은 원문을 가리켜 밀려난 위키들 (마지막 것만 그래프에 참여한다).
+    duplicates: list[Path] = field(default_factory=list)
+
+
+def _collect_wiki_documents(out_dir: Path) -> _WikiInventory:
+    """`--out` 아래 위키를 모아 `doc_id` → 위키 경로로 만든다.
+
+    front-matter의 `source_path`가 곧 `doc_id`다 (§4.1). 그 키가 없는 `.md`(사용자가 손으로
+    둔 메모 등)는 조용히 건너뛰고, **읽지 못한 위키**는 목록을 불완전으로 표시한다.
+    """
+    inventory = _WikiInventory()
+    if not out_dir.is_dir():
+        return inventory
+    for path in sorted(out_dir.rglob("*.md")):
+        doc_id = read_source_path(path)
+        if doc_id is None:
+            inventory.complete = False
+            continue
+        if not doc_id:
+            continue
+        if doc_id in inventory.documents:
+            # 서로 다른 스캔 루트가 같은 `--out`을 공유하면 생길 수 있다. 마지막 것이
+            # 이기지만 조용히 사라지게 두지 않고 종료 요약에 알린다.
+            inventory.duplicates.append(inventory.documents[doc_id])
+        inventory.documents[doc_id] = path
+    return inventory
+
+
+def _materialize_facts(
+    wikis: dict[str, Path], *, config: ScanConfig, graph: GraphStore
+) -> tuple[list[DocFacts], int]:
+    """저장된 재료를 모으고, 없는 문서는 위키를 파싱해 1회 복원한다 (§4.4).
+
+    복원된 재료는 엔티티가 빈 배열이다 — 위키에 남지 않기 때문이다. 그래서 v0.5 이하
+    산출물도 태그·참조·유사도 3종이 동작하는 부분 그래프에 참여한다.
+    """
+    facts: list[DocFacts] = []
+    missing = 0
+    for doc_id, wiki_path in wikis.items():
+        stored = graph.get_facts(doc_id)
+        if stored is not None:
+            facts.append(stored)
+            continue
+        restored = _restore_facts(doc_id, wiki_path, config=config, known=wikis.keys())
+        if restored is None:
+            continue
+        missing += 1
+        facts.append(restored)
+        try:
+            graph.upsert_facts(restored)  # 파싱 비용은 문서당 1회뿐이다
+        except sqlite3.Error:
+            pass  # 캐시 실패는 다음 실행에서 다시 복원하면 된다
+    return facts, missing
+
+
+def _restore_facts(
+    doc_id: str, wiki_path: Path, *, config: ScanConfig, known: Iterable[str]
+) -> DocFacts | None:
+    try:
+        markdown = wiki_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    title, _text, tags = parse_wiki_markdown(markdown)
+    return DocFacts(
+        doc_id=doc_id, title=title, tags=tags, entities=[], refs=_restore_refs(doc_id, config, known)
+    )
+
+
+def _restore_refs(doc_id: str, config: ScanConfig, known: Iterable[str]) -> list[str]:
+    """복원 경로에서만 원문을 `--max-chars`까지 1회 다시 읽어 참조를 계산한다 (§5).
+
+    원문이 이미 없거나 접근 불가하면 빈 배열로 둔다.
+    """
+    prepared = prepare_summary_input(Path(doc_id), config.max_chars)
+    if prepared.text is None:
+        return []
+    return extract_references(prepared.text, known, self_id=doc_id)
+
+
+def _prune_orphan_facts(graph: GraphStore, *, known: Iterable[str]) -> None:
+    """위키가 사라진 문서의 재료를 지운다 — 유령 노드를 막는다 (v0.4 고아 벡터 정리 계승).
+
+    **위키 목록이 완전할 때만 호출한다.** 하나라도 읽지 못한 채 이 판정을 내리면, 파일이
+    잠긴 일시적 조건이 `doc_facts` 삭제(엔티티 영구 소실)로 번진다.
+    """
+    known_ids = set(known)
+    try:
+        stale = [f.doc_id for f in graph.iter_facts() if f.doc_id not in known_ids]
+        for doc_id in stale:
+            graph.delete_facts(doc_id)
+    except sqlite3.Error:
+        pass  # 정리 실패는 베스트 에포트
+
+
+def _inject_related(
+    wikis: dict[str, Path],
+    *,
+    nodes: list[GraphNode],
+    edges: list[GraphEdge],
+    relative: dict[str, str],
+    top_k: int,
+) -> tuple[int, list[InjectionFailure]]:
+    """패스3 — 파일별 베스트 에포트로 「관련 문서」를 반영한다 (§5)."""
+    updated = 0
+    failures: list[InjectionFailure] = []
+    for doc_id, wiki_path in wikis.items():
+        block = render_related_block(
+            rank_related(doc_id, nodes, edges, relative_paths=relative, top_k=top_k),
+            relative_to=relative[doc_id],
+            relative_paths=relative,
+        )
+        try:
+            if inject_related_block(wiki_path, block):
+                updated += 1
+        except (OSError, UnicodeDecodeError) as exc:
+            failures.append(InjectionFailure(path=wiki_path, detail=str(exc)))
+    return updated, failures
 
 
 def _summary_failure_reason(exc: Exception) -> SkipReason:
@@ -527,7 +760,7 @@ def _backfill_embedding(
             EmbeddingFailure(path=source_path, detail=f"기존 위키를 읽지 못했습니다: {exc}")
         )
         return
-    title, text = parse_wiki_markdown(markdown)
+    title, text, _tags = parse_wiki_markdown(markdown)
     _index_document(source_path, text, title, config, result, store)
 
 

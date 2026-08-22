@@ -24,6 +24,13 @@ _FRONT_MATTER = re.compile(r"\A---\r?\n(.*?)\r?\n---\s*$", re.DOTALL | re.MULTIL
 #: front-matter 안의 `engine: "..."` 한 줄. 값의 따옴표는 있어도 없어도 읽는다.
 _ENGINE_LINE = re.compile(r'^engine:\s*"?([^"\r\n]*?)"?\s*$', re.MULTILINE)
 
+#: front-matter 안의 `source_path: "..."` 한 줄 (v0.6). 위키에서 원문 `doc_id`를 되찾는다.
+#:
+#: 값 안의 이스케이프(`\"`)를 건너뛰도록 `(?:[^"\\]|\\.)*`를 쓴다. `[^"]*`로 두면 파일명에
+#: 큰따옴표가 들어간 경로에서 값이 잘려 `None`이 되고, 그 위키가 그래프에서 조용히 빠진 뒤
+#: 고아 정리가 재료까지 지운다(엔티티 소실).
+_SOURCE_PATH_LINE = re.compile(r'^source_path:\s*"((?:[^"\\]|\\.)*)"\s*$', re.MULTILINE)
+
 #: front-matter를 찾기 위해 읽어들이는 앞부분 크기(바이트). 템플릿상 front-matter는
 #: 200바이트 안팎이라 넉넉하며, 위키 전체를 메모리에 올리지 않기 위한 상한이다.
 _FRONT_MATTER_PEEK = 2048
@@ -82,3 +89,34 @@ def read_engine(out_path: Path) -> str:
     if match is None:
         return ENGINE_LOCAL
     return match.group(1).strip() or ENGINE_LOCAL
+
+
+def read_source_path(out_path: Path) -> str | None:
+    """기존 위키 front-matter에 기록된 원문 절대경로를 읽는다 (v0.6 §4.1 노드 ID 체계).
+
+    그래프의 대상은 이번 실행에서 처리한 문서가 아니라 `--out`에 존재하는 **위키 전체**이므로
+    (v0.6 §4.1), 디스크의 위키에서 `doc_id`를 되찾을 수단이 필요하다. 위키 폴더만 복사해 온
+    경우처럼 이번 스캔 대상에 없는 문서도 이 값으로 그래프에 참여한다.
+
+    Returns:
+        원문 절대경로. **읽지 못했으면 `None`**(권한 거부·잠금 등), 읽었지만 `source_path`
+        키가 없으면 빈 문자열(위키가 아닌 `.md`).
+
+        둘을 구분하는 이유는 재료 정리가 파괴적이기 때문이다. 읽기 실패를 "위키 없음"과 같이
+        다루면 파일이 잠긴 일시적 조건이 `doc_facts` 삭제(엔티티 영구 소실)로 번진다.
+    """
+    try:
+        with out_path.open("r", encoding="utf-8", errors="replace") as handle:
+            head = handle.read(_FRONT_MATTER_PEEK)
+    except OSError:
+        return None
+    block = _FRONT_MATTER.search(head)
+    if block is None:
+        return ""
+    match = _SOURCE_PATH_LINE.search(block.group(1))
+    return _unquote(match.group(1)) if match else ""
+
+
+def _unquote(value: str) -> str:
+    """`render._quote`의 역변환 — 이스케이프한 순서의 반대로 되돌린다."""
+    return value.replace('\\"', '"').replace("\\\\", "\\")

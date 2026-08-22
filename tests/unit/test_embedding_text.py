@@ -49,7 +49,7 @@ def test_parse_wiki_markdown_strips_front_matter_and_finds_title() -> None:
         generated_at="2026-01-01T00:00:00+09:00",
     )
 
-    title, body = parse_wiki_markdown(markdown)
+    title, body, _tags = parse_wiki_markdown(markdown)
 
     assert title == "분기 실적 보고"
     assert "source_path" not in body  # front-matter 제거됨
@@ -67,7 +67,7 @@ def test_parse_wiki_markdown_excludes_link_and_markdown_syntax() -> None:
         source_bytes=10, generated_at="2026-01-01T00:00:00+09:00",
     )
 
-    _title, body = parse_wiki_markdown(markdown)
+    _title, body, _tags = parse_wiki_markdown(markdown)
 
     assert "file://" not in body
     assert "## " not in body
@@ -89,6 +89,6 @@ def test_backfilled_text_matches_fresh_text_shape() -> None:
         summary, source_path="/abs/vacation.txt", model="m",
         source_bytes=10, generated_at="2026-01-01T00:00:00+09:00",
     )
-    _title, backfilled = parse_wiki_markdown(markdown)
+    _title, backfilled, _tags = parse_wiki_markdown(markdown)
 
     assert fresh == backfilled

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -94,6 +95,11 @@ class _InMemoryVectorStore:
 
     def list_ids(self) -> list[str]:
         return list(self._data)
+
+    def iter_vectors(self) -> Iterator[tuple[str, list[float]]]:
+        # v0.6: 그래프 빌더가 저장소를 통해서만 벡터에 닿게 하는 계약 (v0.6 §4.4).
+        for doc_id, (vector, _metadata) in sorted(self._data.items()):
+            yield doc_id, vector
 
     def search(self, query_vector: list[float], top_k: int) -> list[SearchResult]:
         return [

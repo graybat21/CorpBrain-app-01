@@ -45,6 +45,12 @@ SUPPORTED_EXTENSIONS: frozenset[str] = frozenset({".docx", ".txt", ".md", ".pdf"
 #: 경로 길이 상한 (스펙 §5) — 초과 시 스킵한다.
 MAX_PATH_LENGTH = 260
 
+#: `SEMANTICALLY_SIMILAR` 엣지를 만드는 코사인 유사도 하한 (v0.6 스펙 §4.7).
+#: 비교는 `>=`(이상)이며, 이 값과 정확히 같은 쌍도 엣지를 만든다 (§4.1).
+DEFAULT_SIMILARITY_THRESHOLD = 0.75
+#: 위키 「관련 문서」 섹션에 넣을 최대 항목 수 (v0.6 스펙 §4.7).
+DEFAULT_RELATED_TOP_K = 5
+
 
 @dataclass(frozen=True)
 class ScanConfig:
@@ -72,6 +78,11 @@ class ScanConfig:
     #: `engine="cloud"`일 때 쓸 Anthropic 모델 (v0.5 §4.1). API 키는 여기 담지 않는다 —
     #: 자격증명은 `llm.anthropic_client`가 호출 시점에 환경변수에서 직접 읽는다.
     cloud_model: str = DEFAULT_CLOUD_MODEL
+    #: `SEMANTICALLY_SIMILAR` 엣지를 만드는 코사인 유사도 하한 (v0.6 §4.7). 기본값을
+    #: 보존하므로 v0.5까지의 동작이 그대로다.
+    similarity_threshold: float = DEFAULT_SIMILARITY_THRESHOLD
+    #: 위키 「관련 문서」 섹션의 최대 항목 수 (v0.6 §4.7).
+    related_top_k: int = DEFAULT_RELATED_TOP_K
 
     @property
     def effective_model(self) -> str:

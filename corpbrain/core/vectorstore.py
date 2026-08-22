@@ -16,6 +16,7 @@ import json
 import math
 import sqlite3
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, Protocol, Self, runtime_checkable
 
@@ -49,6 +50,14 @@ class VectorStore(Protocol):
 
     def list_ids(self) -> list[str]:
         """저장된 모든 `doc_id` — 재스캔 시 고아 벡터를 가려내는 데 쓴다(v0.4 §3 항목5)."""
+        ...
+
+    def iter_vectors(self) -> Iterator[tuple[str, list[float]]]:
+        """저장된 모든 `(doc_id, 벡터)` — 그래프의 유사도 엣지 계산에 쓴다 (v0.6 §4.4).
+
+        그래프 빌더가 sqlite를 직접 열지 않고 이 인터페이스로만 벡터에 접근하게 해, v0.4가
+        세운 저장소 어댑터 이음새를 유지한다 — 후속 저장소 교체가 그래프까지 자동으로 따라온다.
+        """
         ...
 
     def set_model_name(self, model_name: str) -> None:
@@ -115,6 +124,14 @@ class SqliteVectorStore:
         rows = self._conn.execute("SELECT doc_id FROM vectors").fetchall()
         return [row[0] for row in rows]
 
+    def iter_vectors(self) -> Iterator[tuple[str, list[float]]]:
+        # `doc_id` 순으로 낸다 — 전 쌍 계산이 항상 같은 순서를 보게 해 §3 항목4(결정성)를 돕는다.
+        rows = self._conn.execute(
+            "SELECT doc_id, vector FROM vectors ORDER BY doc_id"
+        ).fetchall()
+        for doc_id, vector_json in rows:
+            yield doc_id, json.loads(vector_json)
+
     def search(self, query_vector: list[float], top_k: int) -> list[SearchResult]:
         top_k = max(0, top_k)  # 음수 --top-k가 슬라이스를 뒤집지 않도록 방어한다.
         rows = self._conn.execute("SELECT doc_id, vector, metadata FROM vectors").fetchall()
@@ -128,7 +145,7 @@ class SqliteVectorStore:
             scored.append(
                 SearchResult(
                     doc_id=doc_id,
-                    score=_cosine_similarity(query_vector, vector),
+                    score=cosine_similarity(query_vector, vector),
                     metadata=json.loads(metadata_json),
                 )
             )
@@ -146,10 +163,13 @@ class SqliteVectorStore:
         self.close()
 
 
-def _cosine_similarity(a: list[float], b: list[float]) -> float:
+def cosine_similarity(a: list[float], b: list[float]) -> float:
     """두 벡터의 코사인 유사도. 호출자가 이미 길이를 맞춘 뒤 불러야 한다(`strict=True`로 보증).
 
     영벡터는 0.0을 돌려준다.
+
+    v0.6 그래프 빌더가 전 쌍 유사도를 계산할 때도 같은 함수를 쓴다 — `search` 랭킹과
+    그래프 엣지가 다른 계산식을 쓰면 같은 문서 쌍이 두 화면에서 다른 값을 갖는다.
     """
     dot = sum(x * y for x, y in zip(a, b, strict=True))
     norm_a = math.sqrt(sum(x * x for x in a))
