@@ -18,6 +18,8 @@ from corpbrain.core.models import (
     GraphEdge,
     GraphNode,
     NodeType,
+    ReferenceDirection,
+    RelatedDocument,
 )
 from corpbrain.core.vectorstore import cosine_similarity
 
@@ -198,3 +200,124 @@ def _similarity_edges(
                     )
                 )
     return edges
+
+
+def rank_related(
+    doc_id: str,
+    nodes: Sequence[GraphNode],
+    edges: Sequence[GraphEdge],
+    *,
+    relative_paths: Mapping[str, str],
+    top_k: int,
+) -> list[RelatedDocument]:
+    """한 문서의 「관련 문서」를 계층적 정렬로 상위 `top_k`개 고른다 (§4.5).
+
+    가중합을 쓰지 않는다 — 가중치를 임의로 정해야 하고 부동소수 비교가 생긴다. 대신 축을
+    우선순위대로 훑는다:
+
+    1. `REFERENCES` 관계가 있는 문서 (방향 무관 — 작성자가 직접 가리켰다)
+    2. 유사도 내림차순
+    3. 공유 엔티티 수 내림차순
+    4. 공유 태그 수 내림차순
+    5. 동점은 **출력 상대경로 사전순** (tie-break, 실행마다 순서가 흔들리지 않게 한다)
+
+    Args:
+        relative_paths: `doc_id` → `--out` 기준 위키 상대경로. 5번 tie-break에 쓴다.
+            코어는 경로를 만들지 않으므로 호출자가 넘긴다.
+    """
+    labels = {n.id: n.label for n in nodes}
+    attributes = _attributes_by_document(edges)
+    similarity, outgoing, incoming = _relations_of(doc_id, edges)
+
+    mine = attributes.get(doc_id, ({}, {}))
+    candidates = set(similarity) | outgoing | incoming
+    candidates |= _documents_sharing_attributes(doc_id, attributes, mine)
+    candidates.discard(doc_id)
+
+    related = [
+        RelatedDocument(
+            doc_id=other,
+            title=labels.get(other, other),
+            similarity=similarity.get(other),
+            shared_tags=sorted(
+                mine[0].keys() & attributes.get(other, ({}, {}))[0].keys()
+            ),
+            shared_entities=sorted(
+                mine[1].keys() & attributes.get(other, ({}, {}))[1].keys()
+            ),
+            reference=_direction(other, outgoing, incoming),
+        )
+        for other in candidates
+    ]
+    related.sort(key=lambda r: _rank_key(r, relative_paths))
+    return related[: max(0, top_k)]
+
+
+def _rank_key(
+    related: RelatedDocument, relative_paths: Mapping[str, str]
+) -> tuple[int, float, int, int, str]:
+    return (
+        0 if related.reference is not ReferenceDirection.NONE else 1,
+        -related.similarity if related.similarity is not None else float("inf"),
+        -len(related.shared_entities),
+        -len(related.shared_tags),
+        relative_paths.get(related.doc_id, related.doc_id),
+    )
+
+
+def _direction(
+    other: str, outgoing: set[str], incoming: set[str]
+) -> ReferenceDirection:
+    if other in outgoing and other in incoming:
+        return ReferenceDirection.MUTUAL
+    if other in outgoing:
+        return ReferenceDirection.OUTGOING
+    if other in incoming:
+        return ReferenceDirection.INCOMING
+    return ReferenceDirection.NONE
+
+
+def _attributes_by_document(
+    edges: Sequence[GraphEdge],
+) -> dict[str, tuple[dict[str, None], dict[str, None]]]:
+    """문서별 (태그 노드 집합, 엔티티 노드 집합). 삽입 순서를 보존하는 dict를 집합처럼 쓴다."""
+    table: dict[str, tuple[dict[str, None], dict[str, None]]] = {}
+    for edge in edges:
+        if edge.type is EdgeType.TAGGED_WITH:
+            table.setdefault(edge.src, ({}, {}))[0][edge.dst] = None
+        elif edge.type is EdgeType.CONTAINS_ENTITY:
+            table.setdefault(edge.src, ({}, {}))[1][edge.dst] = None
+    return table
+
+
+def _relations_of(
+    doc_id: str, edges: Sequence[GraphEdge]
+) -> tuple[dict[str, float], set[str], set[str]]:
+    similarity: dict[str, float] = {}
+    outgoing: set[str] = set()
+    incoming: set[str] = set()
+    for edge in edges:
+        if edge.type is EdgeType.SEMANTICALLY_SIMILAR and edge.weight is not None:
+            # 대칭 엣지는 한 행만 저장되므로 양쪽 끝을 모두 본다 (§4.1).
+            if edge.src == doc_id:
+                similarity[edge.dst] = edge.weight
+            elif edge.dst == doc_id:
+                similarity[edge.src] = edge.weight
+        elif edge.type is EdgeType.REFERENCES:
+            if edge.src == doc_id:
+                outgoing.add(edge.dst)
+            elif edge.dst == doc_id:
+                incoming.add(edge.src)
+    return similarity, outgoing, incoming
+
+
+def _documents_sharing_attributes(
+    doc_id: str,
+    attributes: Mapping[str, tuple[dict[str, None], dict[str, None]]],
+    mine: tuple[dict[str, None], dict[str, None]],
+) -> set[str]:
+    return {
+        other
+        for other, (tags, entities) in attributes.items()
+        if other != doc_id and (tags.keys() & mine[0].keys() or entities.keys() & mine[1].keys())
+    }

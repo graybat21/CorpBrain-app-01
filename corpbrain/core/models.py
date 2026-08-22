@@ -157,6 +157,30 @@ class DocFacts:
     refs: list[str] = field(default_factory=list)
 
 
+class ReferenceDirection(StrEnum):
+    """두 문서 사이 `REFERENCES` 관계의 방향 — 「관련 문서」 근거 문구가 여기서 갈린다 (§4.5)."""
+
+    NONE = "none"
+    #: 이 문서가 상대를 참조함.
+    OUTGOING = "outgoing"
+    #: 상대가 이 문서를 참조함.
+    INCOMING = "incoming"
+    #: 서로 참조함.
+    MUTUAL = "mutual"
+
+
+@dataclass(frozen=True)
+class RelatedDocument:
+    """「관련 문서」 한 줄에 필요한 값 — 대상 문서와 관련 근거 (v0.6 스펙 §4.5)."""
+
+    doc_id: str
+    title: str
+    similarity: float | None = None
+    shared_tags: list[str] = field(default_factory=list)
+    shared_entities: list[str] = field(default_factory=list)
+    reference: ReferenceDirection = ReferenceDirection.NONE
+
+
 @dataclass(frozen=True)
 class GraphNode:
     """그래프 노드 1개 (v0.6 스펙 §4.1 노드 ID 체계)."""
