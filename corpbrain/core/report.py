@@ -6,11 +6,16 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
 from corpbrain.core.config import API_KEY_ENV_VAR
+from corpbrain.core.graph import ENTITY_PREFIX, TAG_PREFIX
 from corpbrain.core.models import (
+    EdgeType,
+    GraphEdge,
     GraphSkipReason,
+    GraphStats,
     IndexingSkipReason,
     PlanEntry,
     ScanPlan,
@@ -204,6 +209,77 @@ def _pii_summary_lines(result: ScanResult) -> list[str]:
     return [
         f"PII 마스킹 {total}건 (문서 {len(result.pii_maskings)}개) — {_breakdown(per_type)}",
     ]
+
+
+def build_graph_stats_lines(stats: GraphStats) -> list[str]:
+    """`graph --stats` — 노드·엣지 종류별 개수 (v0.6 §4.7).
+
+    엣지는 `EdgeType` 선언 순서로 내고 0인 종류도 함께 낸다 — 그래프가 비어도 출력 줄 수가
+    흔들리지 않아 눈으로도 스크립트로도 비교하기 쉽다.
+    """
+    edges = " · ".join(
+        f"{kind.value} {stats.edges_by_type.get(str(kind), 0)}" for kind in EdgeType
+    )
+    return [
+        f"노드 {stats.nodes}개  문서 {stats.documents} · 엔티티 {stats.entities} · 태그 {stats.tags}",
+        f"엣지 {stats.edges}개  {edges}",
+    ]
+
+
+def build_graph_neighbors_lines(
+    focus: str, edges: list[GraphEdge], *, labels: Mapping[str, str]
+) -> list[str]:
+    """`graph --neighbors` — 한 문서에 닿는 4종 엣지 (v0.6 §4.7).
+
+    Args:
+        focus: 조회 대상 문서의 `doc_id`(원문 절대경로).
+        edges: `GraphStore.neighbors(focus)` 결과.
+        labels: 노드 id → 표시 라벨. 코어 저장소 계약에 노드 조회가 없으므로 호출자가
+            `get_facts()`로 만들어 넘긴다.
+    """
+    lines = [f"{labels.get(focus, focus)}  —  {focus}"]
+    if not edges:
+        lines.append("  (연결된 문서·태그·엔티티가 없습니다)")
+        return lines
+    ordered = sorted(edges, key=lambda e: (_EDGE_ORDER[e.type], _neighbor_text(e, focus, labels)))
+    for edge in ordered:
+        kind = _edge_kind(edge, focus)
+        weight = f"{edge.weight:.2f}" if edge.weight is not None else ""
+        lines.append(f"  {kind:<20}  {weight:>4}  {_neighbor_text(edge, focus, labels)}")
+    return lines
+
+
+def build_graph_central_lines(
+    ranking: list[tuple[str, int]], *, labels: Mapping[str, str]
+) -> list[str]:
+    """`graph --central` — 연결 차수 내림차순 문서 목록 (v0.6 §4.7)."""
+    if not ranking:
+        return ["그래프에 문서가 없습니다."]
+    return [
+        f"  {degree:>3}  {labels.get(doc_id, doc_id)}  ({doc_id})"
+        for doc_id, degree in ranking
+    ]
+
+
+#: 출력 순서 — `EdgeType` 선언 순서를 따른다. 저장소는 타입 문자열 사전순으로 돌려주므로
+#: (`CONTAINS_ENTITY` 가 먼저) 여기서 의미 있는 순서로 다시 세운다.
+_EDGE_ORDER = {kind: index for index, kind in enumerate(EdgeType)}
+
+
+def _edge_kind(edge: GraphEdge, focus: str) -> str:
+    """엣지 종류 표기. `REFERENCES`만 방향이 의미를 가지므로 화살표를 붙인다 (§4.1)."""
+    if edge.type is not EdgeType.REFERENCES:
+        return edge.type.value
+    return f"{edge.type.value} →" if edge.src == focus else f"{edge.type.value} ←"
+
+
+def _neighbor_text(edge: GraphEdge, focus: str, labels: Mapping[str, str]) -> str:
+    """상대편 노드의 표시 문자열. 문서는 `doc_id`를 함께 낸다 — 그대로 `--neighbors`에 넣을 수 있다."""
+    other = edge.dst if edge.src == focus else edge.src
+    label = labels.get(other, other)
+    if other.startswith((ENTITY_PREFIX, TAG_PREFIX)):
+        return label
+    return f"{label}  ({other})"
 
 
 def build_search_lines(results: list[SearchResult]) -> list[str]:
