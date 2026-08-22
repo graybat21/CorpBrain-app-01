@@ -91,20 +91,25 @@ def read_engine(out_path: Path) -> str:
     return match.group(1).strip() or ENGINE_LOCAL
 
 
-def read_source_path(out_path: Path) -> str:
+def read_source_path(out_path: Path) -> str | None:
     """기존 위키 front-matter에 기록된 원문 절대경로를 읽는다 (v0.6 §4.1 노드 ID 체계).
 
     그래프의 대상은 이번 실행에서 처리한 문서가 아니라 `--out`에 존재하는 **위키 전체**이므로
     (v0.6 §4.1), 디스크의 위키에서 `doc_id`를 되찾을 수단이 필요하다. 위키 폴더만 복사해 온
     경우처럼 이번 스캔 대상에 없는 문서도 이 값으로 그래프에 참여한다.
 
-    읽기에 실패하거나 키가 없으면 빈 문자열을 돌려준다 — 그 위키는 그래프에서 조용히 빠진다.
+    Returns:
+        원문 절대경로. **읽지 못했으면 `None`**(권한 거부·잠금 등), 읽었지만 `source_path`
+        키가 없으면 빈 문자열(위키가 아닌 `.md`).
+
+        둘을 구분하는 이유는 재료 정리가 파괴적이기 때문이다. 읽기 실패를 "위키 없음"과 같이
+        다루면 파일이 잠긴 일시적 조건이 `doc_facts` 삭제(엔티티 영구 소실)로 번진다.
     """
     try:
         with out_path.open("r", encoding="utf-8", errors="replace") as handle:
             head = handle.read(_FRONT_MATTER_PEEK)
     except OSError:
-        return ""
+        return None
     block = _FRONT_MATTER.search(head)
     if block is None:
         return ""

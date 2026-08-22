@@ -16,7 +16,7 @@ from __future__ import annotations
 import sqlite3
 import time
 from collections.abc import Callable, Iterable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -555,9 +555,11 @@ def _run_graph_stage(
     대상은 이번 실행에서 처리한 문서가 아니라 **`--out`에 존재하는 위키 전체**다 (§4.1) —
     재실행에서 대부분의 문서가 `up_to_date`로 스킵돼도 그래프가 쪼그라들지 않는다.
     """
-    wikis = _collect_wiki_documents(config.out_dir)
+    inventory = _collect_wiki_documents(config.out_dir)
+    wikis = inventory.documents
     facts, missing = _materialize_facts(wikis, config=config, graph=graph)
-    _prune_orphan_facts(graph, known=wikis.keys())
+    if inventory.complete:
+        _prune_orphan_facts(graph, known=wikis.keys())
 
     nodes, edges = build_graph(
         facts, store.iter_vectors(), similarity_threshold=config.similarity_threshold
@@ -572,6 +574,7 @@ def _run_graph_stage(
             similarity_skipped=GraphSkipReason.BUILD_FAILED,
             build_failure=str(exc),
             facts_missing_count=missing,
+            duplicate_sources=inventory.duplicates,
         )
 
     relative = {
@@ -586,23 +589,43 @@ def _run_graph_stage(
         facts_missing_count=missing,
         related_updated_count=updated,
         injection_failures=failures,
+        duplicate_sources=inventory.duplicates,
     )
 
 
-def _collect_wiki_documents(out_dir: Path) -> dict[str, Path]:
+@dataclass
+class _WikiInventory:
+    """`--out` 아래 위키 목록과, 그 목록을 믿어도 되는지에 대한 판정."""
+
+    documents: dict[str, Path] = field(default_factory=dict)
+    #: 하나라도 읽지 못했으면 목록이 불완전하다 — 파괴적인 재료 정리를 건너뛰는 근거다.
+    complete: bool = True
+    #: 같은 원문을 가리켜 밀려난 위키들 (마지막 것만 그래프에 참여한다).
+    duplicates: list[Path] = field(default_factory=list)
+
+
+def _collect_wiki_documents(out_dir: Path) -> _WikiInventory:
     """`--out` 아래 위키를 모아 `doc_id` → 위키 경로로 만든다.
 
     front-matter의 `source_path`가 곧 `doc_id`다 (§4.1). 그 키가 없는 `.md`(사용자가 손으로
-    둔 메모 등)는 조용히 건너뛴다.
+    둔 메모 등)는 조용히 건너뛰고, **읽지 못한 위키**는 목록을 불완전으로 표시한다.
     """
-    documents: dict[str, Path] = {}
+    inventory = _WikiInventory()
     if not out_dir.is_dir():
-        return documents
+        return inventory
     for path in sorted(out_dir.rglob("*.md")):
         doc_id = read_source_path(path)
-        if doc_id:
-            documents[doc_id] = path
-    return documents
+        if doc_id is None:
+            inventory.complete = False
+            continue
+        if not doc_id:
+            continue
+        if doc_id in inventory.documents:
+            # 서로 다른 스캔 루트가 같은 `--out`을 공유하면 생길 수 있다. 마지막 것이
+            # 이기지만 조용히 사라지게 두지 않고 종료 요약에 알린다.
+            inventory.duplicates.append(inventory.documents[doc_id])
+        inventory.documents[doc_id] = path
+    return inventory
 
 
 def _materialize_facts(
@@ -657,7 +680,11 @@ def _restore_refs(doc_id: str, config: ScanConfig, known: Iterable[str]) -> list
 
 
 def _prune_orphan_facts(graph: GraphStore, *, known: Iterable[str]) -> None:
-    """위키가 사라진 문서의 재료를 지운다 — 유령 노드를 막는다 (v0.4 고아 벡터 정리 계승)."""
+    """위키가 사라진 문서의 재료를 지운다 — 유령 노드를 막는다 (v0.4 고아 벡터 정리 계승).
+
+    **위키 목록이 완전할 때만 호출한다.** 하나라도 읽지 못한 채 이 판정을 내리면, 파일이
+    잠긴 일시적 조건이 `doc_facts` 삭제(엔티티 영구 소실)로 번진다.
+    """
     known_ids = set(known)
     try:
         stale = [f.doc_id for f in graph.iter_facts() if f.doc_id not in known_ids]

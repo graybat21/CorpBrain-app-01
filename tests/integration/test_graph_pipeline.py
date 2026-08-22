@@ -403,3 +403,76 @@ def test_legacy_wiki_is_restored_without_resummarizing(
     assert "CONTAINS_ENTITY" not in kinds  # 엔티티는 위키에 남지 않는다
     assert {"TAGGED_WITH", "SEMANTICALLY_SIMILAR", "REFERENCES"} <= kinds
     assert any("--force" in line for line in build_summary_lines(result))
+
+
+# --- 리뷰 지적 ⓐ·ⓑ — 파괴적 정리의 전제와 중복 원문 -------------------------------
+
+
+def test_unreadable_wiki_suspends_orphan_pruning(
+    corpus: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """위키 하나를 읽지 못하면 재료 정리를 통째로 건너뛴다.
+
+    파일이 잠긴 일시적 조건이 `doc_facts` 삭제(엔티티 영구 소실)로 번지면 안 된다. 목록이
+    불완전한 채로 "위키 없는 문서"를 판정할 수 없다.
+    """
+    monkeypatch.setattr(gateway_module, "request_json", _stub())
+    out_dir = tmp_path / "wiki"
+    run_scan(_config(corpus, out_dir))
+
+    from corpbrain.core import pipeline as pipeline_module
+    from corpbrain.core.graphstore import SqliteGraphStore
+
+    target = out_dir / "기타/메모.txt.md"
+    real = pipeline_module.read_source_path
+
+    def _unreadable(path: Path) -> str | None:
+        return None if path == target else real(path)
+
+    monkeypatch.setattr(pipeline_module, "read_source_path", _unreadable)
+
+    run_scan(_config(corpus, out_dir))
+
+    # 읽히지 않은 문서의 재료가 살아 있다 — 정리가 유예됐다.
+    with SqliteGraphStore(graph_path_for(out_dir)) as store:
+        surviving = {facts.doc_id for facts in store.iter_facts()}
+    assert any(doc_id.endswith("기타/메모.txt") for doc_id in surviving)
+
+
+def test_orphan_facts_are_pruned_when_the_inventory_is_complete(
+    corpus: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """목록이 완전하면 위키가 사라진 문서의 재료는 지운다 (유령 노드 방지)."""
+    monkeypatch.setattr(gateway_module, "request_json", _stub())
+    out_dir = tmp_path / "wiki"
+    run_scan(_config(corpus, out_dir))
+
+    (out_dir / "기타/메모.txt.md").unlink()
+    (corpus / "기타/메모.txt").unlink()
+
+    run_scan(_config(corpus, out_dir))
+
+    from corpbrain.core.graphstore import SqliteGraphStore
+
+    with SqliteGraphStore(graph_path_for(out_dir)) as store:
+        surviving = {facts.doc_id for facts in store.iter_facts()}
+    assert not any(doc_id.endswith("기타/메모.txt") for doc_id in surviving)
+
+
+def test_duplicate_source_path_is_reported_not_swallowed(
+    corpus: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """서로 다른 스캔 루트가 같은 `--out`을 공유하면 생길 수 있다 — 조용히 두지 않는다."""
+    monkeypatch.setattr(gateway_module, "request_json", _stub())
+    out_dir = tmp_path / "wiki"
+    run_scan(_config(corpus, out_dir))
+
+    original = out_dir / "기타/메모.txt.md"
+    twin = out_dir / "기타/메모-사본.txt.md"
+    twin.write_text(original.read_text(encoding="utf-8"), encoding="utf-8")
+
+    result = run_scan(_config(corpus, out_dir))
+
+    assert result.graph is not None
+    assert len(result.graph.duplicate_sources) == 1
+    assert any("같은 원문을 가리키는 위키" in line for line in build_summary_lines(result))

@@ -161,6 +161,17 @@ def _graph_summary_lines(result: ScanResult) -> list[str]:
             f"  - 엔티티 없는 기존 위키 {outcome.facts_missing_count}건 — "
             "`--force` 로 재스캔하면 엔티티까지 채워집니다."
         )
+    if outcome.duplicate_sources:
+        listed = " · ".join(str(path) for path in outcome.duplicate_sources[:3])
+        more = (
+            f" 외 {len(outcome.duplicate_sources) - 3}건"
+            if len(outcome.duplicate_sources) > 3
+            else ""
+        )
+        lines.append(
+            f"  - 같은 원문을 가리키는 위키 {len(outcome.duplicate_sources)}건 — "
+            f"그래프에는 마지막 것만 참여합니다: {listed}{more}"
+        )
     for failure in outcome.injection_failures:
         lines.append(f"  - 「관련 문서」 주입 실패: {failure.path} — {failure.detail}")
     return lines

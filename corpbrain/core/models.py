@@ -247,6 +247,9 @@ class GraphOutcome:
     #: 「관련 문서」 블록이 실제로 달라져 다시 기록한 위키 수 — 생성/스킵과 별개 축이다.
     related_updated_count: int = 0
     injection_failures: list[InjectionFailure] = field(default_factory=list)
+    #: 같은 원문(`source_path`)을 가리켜 밀려난 위키들. 서로 다른 스캔 루트가 같은 `--out`을
+    #: 공유하면 생길 수 있다 — 마지막 것만 그래프에 참여하므로 조용히 두지 않고 알린다.
+    duplicate_sources: list[Path] = field(default_factory=list)
 
 
 @dataclass
