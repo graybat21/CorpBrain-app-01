@@ -59,3 +59,7 @@ corpbrain graph
 - 경로 해석: `--out` 기준 **위키 상대경로**(`개발/설계.md.md`)를 우선 매칭하고, 실패하면 **원문 상대경로**(`개발/설계.md`)로 한 번 더 시도한다. 절대경로도 허용한다. 해석은 **CLI 어댑터**가 하고 코어에 절대경로를 넘긴다.
 - 오류 계약: 그래프 DB 부재 → **exit 1**(`search`의 인덱스 부재 선례). `--neighbors` 가 지목한 문서가 그래프에 없음 → **exit 1** + 안내(자유 텍스트 쿼리와 달리 존재를 전제한 식별자 지목이므로 매칭 실패는 빈 결과가 아니라 잘못된 지목이다). `--stats`·`--central` 이 빈 그래프를 만난 경우 → **exit 0**.
 - `--central` 은 `Document` 노드만, 연결 차수 내림차순, 동점은 노드 id 사전순이다(`GraphStore.degree_ranking()` 이 이미 구현).
+- **`cli.build_config(args)` 를 `graph` 명령에서 재사용하지 않는다.** 이 함수는
+  `args.similarity_threshold`·`args.related_top_k` 를 무조건 읽는데 두 인자는 `scan` 파서에만
+  있어, 그대로 부르면 `AttributeError` 가 난다. `graph` 는 `--out` 하나만 필요하므로 인자를
+  직접 읽어 코어에 넘긴다. (PR #33 리뷰에서 확인된 지점)
