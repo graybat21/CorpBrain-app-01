@@ -98,6 +98,36 @@ def test_pipeline_makes_no_non_localhost_connections(
     assert any(url.endswith("/api/embeddings") for url in calls)  # 임베딩 경로가 실제로 돎
 
 
+def test_graph_stage_makes_no_non_localhost_connections(
+    watch_sockets: SocketWatcher, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """v0.6 §3 항목8 — 그래프 빌드·「관련 문서」 주입 단계에서도 localhost 외 연결이 0건이다.
+
+    그래프 계층은 네트워크 라이브러리를 직접 호출하지 않는다 (v0.6 §4.8). 그래프가 실제로
+    만들어졌음을 함께 단언해, 이 테스트가 그래프 경로를 지나치지 않고 있음을 보장한다 —
+    감시장치가 공허하게 통과하는 것을 막는 `test_watcher_flags_a_gateway_bypass`와 같은 취지다.
+    """
+
+    def _request_json(url: str, *, method: str = "GET", payload: Any = None, **_: Any) -> Any:
+        if url.endswith("/api/tags"):
+            return {"models": [{"name": DEFAULT_MODEL}, {"name": DEFAULT_EMBED_MODEL}]}
+        if url.endswith("/api/embeddings"):
+            return {"embedding": [0.1, 0.2, 0.3]}
+        return {"response": json.dumps(SUMMARY_JSON, ensure_ascii=False)}
+
+    monkeypatch.setattr(gateway, "request_json", _request_json)
+
+    result = run_scan(
+        ScanConfig(folder=FIXTURE_CORPUS, out_dir=tmp_path / "wiki", force_gates=True)
+    )
+
+    assert watch_sockets.offenders(LOCALHOST_HOSTS) == []
+    assert result.graph is not None
+    assert result.graph.stats is not None
+    assert result.graph.stats.edges > 0  # 그래프 단계가 실제로 돌았다
+    assert result.graph.injection_failures == []
+
+
 def test_gateway_only_dials_the_given_localhost_url(watch_sockets: SocketWatcher) -> None:
     """관문 스텁 없이 detect가 실제로 여는 소켓은 지정한 localhost 주소뿐이다."""
     url = "http://127.0.0.1:11434"
