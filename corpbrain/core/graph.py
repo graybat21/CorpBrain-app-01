@@ -240,10 +240,12 @@ def rank_related(
             title=labels.get(other, other),
             similarity=similarity.get(other),
             shared_tags=sorted(
-                mine[0].keys() & attributes.get(other, ({}, {}))[0].keys()
+                labels.get(node_id, node_id)
+                for node_id in mine[0].keys() & attributes.get(other, ({}, {}))[0].keys()
             ),
             shared_entities=sorted(
-                mine[1].keys() & attributes.get(other, ({}, {}))[1].keys()
+                labels.get(node_id, node_id)
+                for node_id in mine[1].keys() & attributes.get(other, ({}, {}))[1].keys()
             ),
             reference=_direction(other, outgoing, incoming),
         )

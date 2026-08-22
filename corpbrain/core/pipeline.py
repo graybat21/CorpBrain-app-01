@@ -531,7 +531,7 @@ def _backfill_embedding(
             EmbeddingFailure(path=source_path, detail=f"기존 위키를 읽지 못했습니다: {exc}")
         )
         return
-    title, text = parse_wiki_markdown(markdown)
+    title, text, _tags = parse_wiki_markdown(markdown)
     _index_document(source_path, text, title, config, result, store)
 
 

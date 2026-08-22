@@ -93,16 +93,17 @@ def test_reference_direction_is_reported_for_each_case() -> None:
 
 
 def test_shared_tags_and_entities_are_reported_as_labels() -> None:
+    """노드 id(`tag:인사`)가 아니라 표시 라벨을 담는다 — 렌더러가 다시 변환하지 않게."""
     facts = [
         DocFacts(doc_id=SELF, title="본문", tags=["인사"], entities=["인사팀"]),
-        DocFacts(doc_id=TAG, title="상대", tags=["인사"], entities=["인사 팀"]),
+        DocFacts(doc_id=TAG, title="상대", tags=["인사"], entities=["인사팀"]),
     ]
 
     related = _ranked(facts)
 
     assert len(related) == 1
-    assert related[0].shared_tags == ["tag:인사"]
-    assert related[0].shared_entities == ["entity:인사팀"]
+    assert related[0].shared_tags == ["인사"]
+    assert related[0].shared_entities == ["인사팀"]
 
 
 def test_isolated_document_has_no_related_documents() -> None:
