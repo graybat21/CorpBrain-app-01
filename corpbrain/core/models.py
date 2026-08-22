@@ -103,6 +103,10 @@ class SummaryResult:
     key_points: list[str]
     summary: str
     tags: list[str]
+    #: 문서에 등장하는 인물·부서·시스템·프로젝트명 (v0.6 §4.2). **선택 필드**다 — 응답에
+    #: 없으면 빈 배열이 된다. 위키 템플릿의 어느 섹션에도 렌더되지 않는 그래프 전용 재료라
+    #: 위키 생성의 선행 조건으로 삼지 않는다.
+    entities: list[str] = field(default_factory=list)
 
 
 class NodeType(StrEnum):

@@ -52,11 +52,16 @@ MAX_TOKENS = 2048
 #: 스키마를 강제하는 도구 이름 (v0.5 §4.3).
 SUMMARY_TOOL_NAME = "emit_summary"
 
-#: tool use 입력 스키마 — 5필드 모두 required. `minItems`/`maxItems`는 두지 않는다.
-#: (로컬 `parse_summary`와 동일하게 "비어있지 않은 문자열 배열"만 검증해 규칙을 일치시킨다.)
+#: tool use 입력 스키마 — 기존 5필드는 required, v0.6의 `entities`는 **선택**이다.
+#: `minItems`/`maxItems`는 두지 않는다 (로컬 `parse_summary`와 동일하게 "비어있지 않은
+#: 문자열 배열"만 검증해 규칙을 일치시킨다).
+#:
+#: `entities`를 required에 넣지 않는 이유는 엔진별로 필수 여부가 갈리지 않게 하기 위함이다
+#: (v0.6 §4.2) — 로컬은 프롬프트로만 요청할 수 있어 강제가 불가능하므로, 클라우드만 강제하면
+#: 같은 폴더를 엔진 바꿔 돌렸을 때 생성되는 위키 개수가 달라진다.
 SUMMARY_TOOL_SCHEMA: dict[str, Any] = {
     "name": SUMMARY_TOOL_NAME,
-    "description": "문서 요약 결과를 고정 5필드로 제출한다.",
+    "description": "문서 요약 결과를 고정 필드로 제출한다.",
     "input_schema": {
         "type": "object",
         "properties": {
@@ -72,6 +77,14 @@ SUMMARY_TOOL_SCHEMA: dict[str, Any] = {
                 "type": "array",
                 "items": {"type": "string"},
                 "description": "문서를 대표하는 키워드",
+            },
+            "entities": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "문서에 등장하는 인물·부서·시스템·프로젝트명 등 고유명사. "
+                    "주제어(tags)가 아니라 실재하는 개체를 담는다."
+                ),
             },
         },
         "required": ["title", "one_line_summary", "key_points", "summary", "tags"],

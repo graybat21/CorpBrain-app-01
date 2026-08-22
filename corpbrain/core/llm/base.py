@@ -20,6 +20,14 @@ from corpbrain.core.pii import MaskingResult
 TEXT_FIELDS = ("title", "one_line_summary", "summary")
 LIST_FIELDS = ("key_points", "tags")
 
+#: 있으면 쓰고 없으면 빈 배열로 두는 배열 필드 (v0.6 §4.2).
+#:
+#: `entities`는 §4.5 위키 템플릿의 어느 섹션에도 렌더되지 않는 **그래프 전용 재료**다.
+#: 필수로 두면 프롬프트로만 요청받는 로컬 모델이 이 필드를 빠뜨렸을 때 제목·요약·태그를
+#: 모두 정상 수신했음에도 그 문서의 위키가 통째로 생성되지 않고, 같은 모델이면 재실행에서도
+#: 반복된다. 재료가 없으면 그 엣지만 빠지는 것이 v0.6의 다른 «재료 부재» 처리와 일관된다.
+OPTIONAL_LIST_FIELDS = ("entities",)
+
 
 class LLMParseError(CorpBrainError):
     """LLM 응답을 고정 필드 JSON으로 해석하지 못함 — 해당 파일만 스킵된다."""
@@ -56,7 +64,11 @@ def validate_summary_fields(parsed: Any) -> SummaryResult:
     """모델이 낸 JSON 객체(dict)를 검증해 `SummaryResult`로 만든다.
 
     로컬·클라우드 두 백엔드가 공유하는 단일 검증 규칙이다 — 필수 5필드, 문자열 필드는
-    공백 불허, 배열 필드는 문자열 배열만 허용한다 (v0.5 스펙 §4.3).
+    공백 불허, 배열 필드는 문자열 배열만 허용한다 (v0.5 스펙 §4.3). v0.6의 `entities`는
+    선택 필드로, 없거나 문자열 배열이 아니면 빈 배열로 둔다 (v0.6 §4.2).
+
+    엔진별로 필수 여부를 달리하지 않는다 — 같은 폴더를 `--engine local`로 돌렸을 때와
+    `cloud`로 돌렸을 때 생성되는 위키 개수가 달라지기 때문이다.
     """
     if not isinstance(parsed, dict):
         raise LLMParseError(f"응답 JSON이 객체가 아닙니다: {type(parsed).__name__}")
@@ -74,10 +86,18 @@ def validate_summary_fields(parsed: Any) -> SummaryResult:
             raise LLMParseError(f"필수 배열 필드가 문자열 배열이 아닙니다: {field}")
         values[field] = [item.strip() for item in value if item.strip()]
 
+    for field in OPTIONAL_LIST_FIELDS:
+        value = parsed.get(field)
+        if not isinstance(value, list):
+            values[field] = []
+            continue
+        values[field] = [item.strip() for item in value if isinstance(item, str) and item.strip()]
+
     return SummaryResult(
         title=values["title"],
         one_line_summary=values["one_line_summary"],
         key_points=values["key_points"],
         summary=values["summary"],
         tags=values["tags"],
+        entities=values["entities"],
     )
