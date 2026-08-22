@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from corpbrain.core.render import replace_related_block
+
 WIKI_SUFFIX = ".md"
 
 
@@ -26,3 +28,21 @@ def write_wiki(markdown: str, out_path: Path) -> None:
     """마크다운을 UTF-8로 기록한다. 필요한 하위 디렉터리는 만들어 준다."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(markdown, encoding="utf-8")
+
+
+def inject_related_block(out_path: Path, block: str) -> bool:
+    """위키의 「관련 문서」 마커 블록을 교체한다. **실제로 기록했으면** True (v0.6 §4.5).
+
+    마커 교체를 위해 어차피 파일 전체를 읽으므로, 교체 결과를 기존 내용과 비교해 **다를 때만**
+    쓴다. 재실행 시 관련 문서가 바뀌지 않은 대다수 위키는 mtime이 그대로 유지되어, 동기화
+    도구가 매 실행마다 위키 전체를 변경으로 보고 다시 전송하는 일이 없다.
+
+    Raises:
+        OSError: 읽기·쓰기 실패(권한 거부·잠금 등). 호출자가 파일별 베스트 에포트로 다룬다.
+    """
+    original = out_path.read_text(encoding="utf-8")
+    updated = replace_related_block(original, block)
+    if updated == original:
+        return False
+    out_path.write_text(updated, encoding="utf-8")
+    return True

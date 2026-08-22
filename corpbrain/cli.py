@@ -147,6 +147,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="원문 mtime과 무관하게 강제 재생성한다.",
     )
     scan.add_argument(
+        "--similarity-threshold",
+        dest="similarity_threshold",
+        type=float,
+        default=core.DEFAULT_SIMILARITY_THRESHOLD,
+        help=(
+            "지식그래프의 유사도 엣지를 만드는 코사인 하한 "
+            f"(기본 {core.DEFAULT_SIMILARITY_THRESHOLD}, 이 값 이상이면 연결)."
+        ),
+    )
+    scan.add_argument(
+        "--related-top-k",
+        dest="related_top_k",
+        type=int,
+        default=core.DEFAULT_RELATED_TOP_K,
+        help=f"위키 「관련 문서」 섹션에 넣을 최대 항목 수 (기본 {core.DEFAULT_RELATED_TOP_K}).",
+    )
+    scan.add_argument(
         "--dry-run",
         dest="dry_run",
         action="store_true",
@@ -357,6 +374,8 @@ def build_config(args: argparse.Namespace) -> core.ScanConfig:
         force_gates=args.force_gates,
         engine=args.engine,
         cloud_model=args.cloud_model,
+        similarity_threshold=args.similarity_threshold,
+        related_top_k=args.related_top_k,
     )
 
 

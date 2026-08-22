@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 
 from corpbrain.core.config import API_KEY_ENV_VAR
 from corpbrain.core.models import (
+    GraphSkipReason,
     IndexingSkipReason,
     PlanEntry,
     ScanPlan,
@@ -121,7 +122,47 @@ def build_summary_lines(result: ScanResult) -> list[str]:
             f"인덱싱 생략 — {INDEXING_SKIP_LABELS[result.indexing_skip_reason]} "
             "위키는 정상 생성됐지만 `corpbrain search`로는 찾을 수 없습니다."
         )
+    lines.extend(_graph_summary_lines(result))
     lines.append(f"출력 경로: {result.out_dir}")
+    return lines
+
+
+def _graph_summary_lines(result: ScanResult) -> list[str]:
+    """그래프 단계 결과 (v0.6 §4.6). 요약 파이프라인의 «생성/스킵» 축과 별개 축이다."""
+    outcome = result.graph
+    if outcome is None:
+        return []
+
+    lines: list[str] = []
+    if outcome.stats is not None:
+        stats = outcome.stats
+        lines.append(
+            f"그래프: 노드 {stats.nodes}개"
+            f"(문서 {stats.documents} · 엔티티 {stats.entities} · 태그 {stats.tags})"
+            f" / 엣지 {stats.edges}개"
+        )
+    if outcome.build_failure:
+        # 위키는 이미 생성돼 있고 이전 그래프도 트랜잭션 덕에 그대로 남아 있다 (§5).
+        lines.append(
+            f"그래프 갱신 실패 — {outcome.build_failure}. 이전 그래프를 유지했습니다."
+        )
+    if outcome.related_updated_count:
+        # `up_to_date`로 스킵된 문서라도 다른 문서의 변경으로 관련 문서가 바뀌면 다시 쓰인다.
+        # 이 줄이 없으면 "스킵 N건"이라고 보고해 놓고 파일 타임스탬프가 바뀌는 상황이
+        # 설명되지 않는다 (§4.6).
+        lines.append(f"  - 관련 문서 갱신 {outcome.related_updated_count}건")
+    if outcome.similarity_skipped is GraphSkipReason.VECTORS_UNAVAILABLE:
+        lines.append(
+            "  - 유사도 엣지 생략 — 벡터 인덱스가 비어 있습니다. "
+            "태그·엔티티·참조 엣지만으로 그래프를 만들었습니다."
+        )
+    if outcome.facts_missing_count:
+        lines.append(
+            f"  - 엔티티 없는 기존 위키 {outcome.facts_missing_count}건 — "
+            "`--force` 로 재스캔하면 엔티티까지 채워집니다."
+        )
+    for failure in outcome.injection_failures:
+        lines.append(f"  - 「관련 문서」 주입 실패: {failure.path} — {failure.detail}")
     return lines
 
 
