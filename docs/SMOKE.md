@@ -112,7 +112,8 @@ mock 통합테스트가 이미 계약(스킵 사유 매핑·재생성 판정·ex
 ### 사전 조건
 
 - 유효한 Anthropic API 키. `export ANTHROPIC_API_KEY=sk-ant-...` — 디스크에 저장하지 않는다.
-- 로컬 Ollama 데몬 + `nomic-embed-text` (실행 F를 제외한 나머지의 인덱싱 단계에 필요).
+- 로컬 Ollama 데몬 + `nomic-embed-text` — 실행 D의 인덱싱 단계에 필요하다. F는
+  프리플라이트에서 끊기고, G(doctor)는 이 모델의 유무를 보고만 한다.
 - 비용: 기본 모델 `claude-haiku-4-5-20251001`로 소형 문서 2~3건이면 1센트 미만이다.
 - **주의**: `consent cloud --grant`는 테스트 격리 경로가 아니라 실제 `~/.corpbrain/config.json`에
   기록된다. 스모크가 끝나면 `consent cloud --revoke`로 되돌린다.
@@ -203,7 +204,7 @@ uv run corpbrain doctor
 `--out`을 스캔 대상인 `tests/fixtures/sample_corpus/` **안**(`.../sample_corpus/wiki/`)으로
 잡아 실행했다. 그 실행 자체는 §4.2 자동 제외 덕분에 정상이었지만, 남은 `wiki/*.md`가 다음
 `pytest`에서 픽스처의 **입력 문서로 다시 잡혀** `test_pipeline.py` 3건이 깨졌다
-(`normal.txt.md.md` 같은 이중 산출물이 기대 트리와 어긋났다). 산출물은 삭제해 원복했다.
+(`normal.txt.md.md` 같은 이중 산출물이 기대 트리와 어긋났다). 산출물은 리포지토리 밖으로 옮겨 원복했다.
 
 **스모크는 반드시 리포지토리 밖 임시 폴더를 `--out`으로 쓴다.** 픽스처 폴더는 테스트가
 파일 목록을 그대로 기대하므로 어떤 산출물도 남기면 안 된다(`.gitignore`로는 못 막는다 —

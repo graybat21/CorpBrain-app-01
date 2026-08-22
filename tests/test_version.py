@@ -21,9 +21,16 @@ def _declared_version() -> str:
 
 
 def test_package_version_matches_pyproject() -> None:
-    assert corpbrain.__version__ == _declared_version()
+    declared = _declared_version()
+    assert corpbrain.__version__ == declared, (
+        f"패키지 버전 {corpbrain.__version__!r} != pyproject {declared!r} — "
+        "버전을 범프한 뒤 재설치하지 않았다면 `uv sync`로 메타데이터를 갱신한다."
+    )
 
 
 def test_package_version_is_resolved() -> None:
     """설치가 깨졌을 때의 폴백 값이 그대로 새어 나가지 않는지 확인한다."""
-    assert corpbrain.__version__ != "0.0.0+unknown"
+    assert corpbrain.__version__ != corpbrain._UNKNOWN_VERSION, (
+        "배포 메타데이터를 찾지 못했다 — 개발 환경에 패키지가 설치되지 않았다. "
+        "`uv sync` 후 `uv run pytest`로 실행한다."
+    )
