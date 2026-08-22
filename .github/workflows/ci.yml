@@ -1,0 +1,54 @@
+# 로드맵 §5의 품질 게이트 중 "green — `ruff check .` · `pytest` 모두 통과"를 자동으로 강제한다.
+# 지금까지는 사람이 매번 손으로 돌려 지켜 왔지만, 픽스처 폴더에 파일 하나가 남는 것만으로도
+# 조용히 깨질 수 있다(2026-08-22 실측: 스모크 산출물이 통합테스트 3건을 깨뜨렸다).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# 이 워크플로는 저장소를 읽기만 한다.
+permissions:
+  contents: read
+
+jobs:
+  green:
+    name: ruff + pytest (Python 3.12)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # setup-uv는 떠 있는 메이저 태그(`v10`)를 발행하지 않아 정확한 버전으로 고정한다.
+      # Python 버전은 여기서 지정하지 않는다 — uv가 `.python-version`(3.12)과
+      # `requires-python = ">=3.12,<3.13"`을 읽어 알아서 받아 쓴다. 워크플로에 3.12를 또
+      # 적어 두면 단일 출처가 둘로 갈라진다.
+      - name: uv 설치
+        uses: astral-sh/setup-uv@v10.0.1
+        with:
+          enable-cache: true
+
+      # `--locked`는 `uv.lock`이 `pyproject.toml`과 어긋나면 실패한다 — 의존성·버전을 바꾸고
+      # 락파일 갱신을 잊은 커밋을 여기서 잡는다.
+      - name: 의존성 동기화
+        run: uv sync --locked
+
+      - name: 린트
+        run: uv run ruff check .
+
+      # 테스트는 Ollama·Anthropic을 모두 mock으로 스텁하므로 외부 네트워크를 타지 않는다
+      # (스펙 §4.5의 단일 관문 불변식을 검증하는 테스트가 이를 감시한다).
+      - name: 테스트
+        run: uv run pytest -q
+
+      # 테스트가 리포지토리에 산출물을 남기면 다음 실행이 그 파일을 입력으로 다시 잡는다.
+      # 픽스처 오염은 로컬에서는 조용하다가 CI에서 터지므로 여기서 명시적으로 막는다.
+      - name: 작업 트리가 깨끗한지 확인
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "테스트 실행 후 작업 트리가 더럽다 — 아래 파일이 생성·변경됐다:"
+            git status --porcelain
+            exit 1
+          fi
