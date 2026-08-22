@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import sqlite3
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -267,6 +267,10 @@ class _NoIndexStore:
     def list_ids(self) -> list[str]:
         """저장된 문서가 없다 — 고아 벡터 정리도 아무 일을 하지 않는다."""
         return []
+
+    def iter_vectors(self) -> Iterator[tuple[str, list[float]]]:
+        """낼 벡터가 없다 — 유사도 엣지 0개인 부분 그래프가 분기 없이 성립한다 (v0.6 §5)."""
+        return iter(())
 
     def set_model_name(self, model_name: str) -> None:
         """기록할 인덱스가 없다."""
