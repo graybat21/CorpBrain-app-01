@@ -128,6 +128,43 @@ def test_graph_stage_makes_no_non_localhost_connections(
     assert result.graph.injection_failures == []
 
 
+def test_graph_command_opens_no_sockets_at_all(
+    watch_sockets: SocketWatcher, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """v0.6 §3 항목8 — `corpbrain graph` 는 소켓을 **하나도** 열지 않는다.
+
+    §4.7에서 순수 조회로 확정했으므로 네트워크가 아예 없어야 한다. `plan_scan`에 대해 이미
+    세워 둔 "소켓 0건" 단언과 같은 종류이며, 그래프가 실제로 조회됐음을 함께 단언해 이
+    테스트가 조회 경로를 지나치지 않고 있음을 보장한다.
+    """
+    from corpbrain import cli
+    from corpbrain.core.graphstore import SqliteGraphStore, graph_path_for
+    from corpbrain.core.models import DocFacts, EdgeType, GraphEdge, GraphNode, NodeType
+
+    out_dir = tmp_path / "wiki"
+    out_dir.mkdir()
+    source = "/work/docs/a.md"
+    with SqliteGraphStore(graph_path_for(out_dir)) as store:
+        store.upsert_facts(DocFacts(doc_id=source, title="A", tags=["t"]))
+        store.replace_graph(
+            [
+                GraphNode(id=source, type=NodeType.DOCUMENT, label="A"),
+                GraphNode(id="tag:t", type=NodeType.TAG, label="t"),
+            ],
+            [GraphEdge(src=source, dst="tag:t", type=EdgeType.TAGGED_WITH)],
+        )
+
+    def _forbidden(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("graph 조회는 관문을 부르지 않는다")
+
+    monkeypatch.setattr(gateway, "request_json", _forbidden)
+
+    for view in (["--stats"], ["--central"], ["--neighbors", source]):
+        assert cli.main(["graph", "--out", str(out_dir), *view]) == 0
+
+    assert watch_sockets.addresses == []  # localhost조차 열지 않는다
+
+
 def test_gateway_only_dials_the_given_localhost_url(watch_sockets: SocketWatcher) -> None:
     """관문 스텁 없이 detect가 실제로 여는 소켓은 지정한 localhost 주소뿐이다."""
     url = "http://127.0.0.1:11434"

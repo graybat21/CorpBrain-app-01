@@ -323,3 +323,21 @@ def _documents_sharing_attributes(
         for other, (tags, entities) in attributes.items()
         if other != doc_id and (tags.keys() & mine[0].keys() or entities.keys() & mine[1].keys())
     }
+
+
+def label_index(facts: Sequence[DocFacts]) -> dict[str, str]:
+    """노드 id → 표시 라벨 (v0.6 §4.3).
+
+    `GraphStore` 계약(§4.4)에는 노드 조회가 없다 — `neighbors()`는 엣지만, `degree_ranking()`은
+    `(id, 차수)`만 돌려준다. 라벨은 `nodes` 테이블에 있지만 계약을 통해 닿을 수 없으므로,
+    조회 어댑터가 `iter_facts()`로 얻은 재료에서 `build_graph()`와 **같은 규칙으로** 다시
+    만든다. 규칙을 공유하므로 위키 「관련 문서」에 찍힌 라벨과 `graph` 출력이 어긋나지 않는다.
+    """
+    labels = {f.doc_id: (f.title or f.doc_id) for f in facts}
+    for attribute, prefix, node_type in (
+        ("tags", TAG_PREFIX, NodeType.TAG),
+        ("entities", ENTITY_PREFIX, NodeType.ENTITY),
+    ):
+        for node in _attribute_nodes(facts, attribute=attribute, prefix=prefix, node_type=node_type):
+            labels[node.id] = node.label
+    return labels

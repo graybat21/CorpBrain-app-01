@@ -56,6 +56,8 @@ from corpbrain.core.errors import (
     PreconditionError,
     TokenBudgetExceededError,
 )
+from corpbrain.core.graph import label_index
+from corpbrain.core.graphstore import SqliteGraphStore, graph_path_for
 from corpbrain.core.models import (
     DocFacts,
     EdgeType,
@@ -81,6 +83,7 @@ from corpbrain.core.models import (
     SkipReason,
     SummaryResult,
 )
+from corpbrain.core.output import WIKI_SUFFIX
 from corpbrain.core.pipeline import run_scan
 from corpbrain.core.plan import plan_scan
 from corpbrain.core.search import IndexNotFoundError, search_index
@@ -103,6 +106,7 @@ __all__ = [
     "ENGINE_LOCAL",
     "MAX_PATH_LENGTH",
     "SUPPORTED_EXTENSIONS",
+    "WIKI_SUFFIX",
     "CorpBrainError",
     "DocFacts",
     "DoctorReport",
@@ -131,13 +135,16 @@ __all__ = [
     "SearchResult",
     "SkipReason",
     "SkippedFile",
+    "SqliteGraphStore",
     "SummaryResult",
     "TokenBudgetExceededError",
     "consent_path",
     "diagnose",
     "grant_cloud_consent",
+    "graph_path_for",
     "index_path_for",
     "is_cloud_consent_granted",
+    "label_index",
     "plan_scan",
     "revoke_cloud_consent",
     "run_scan",
