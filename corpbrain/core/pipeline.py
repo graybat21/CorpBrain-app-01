@@ -224,7 +224,14 @@ def run_scan(
     result.indexing_skip_reason = skip_indexing
     valid_ids: set[str] = set()
     doc_ids = frozenset(str(path) for path in findings.targets)
-    graph = SqliteGraphStore(graph_path_for(config.out_dir))
+    try:
+        graph = SqliteGraphStore(graph_path_for(config.out_dir))
+    except BaseException:
+        # 그래프 DB 개봉 실패(스키마 버전 불일치·손상·권한)는 §5가 설계한 경로다. 여기서
+        # 되돌리지 않으면 이미 연 벡터 인덱스 연결이 샌다 — CLI는 곧 끝나 티가 안 나지만,
+        # `run_scan()`을 반복 호출하는 후속 어댑터에서 커넥션이 누적된다.
+        store.close()
+        raise
     try:
         for index, source_path in enumerate(findings.targets, start=1):
             _process_one(

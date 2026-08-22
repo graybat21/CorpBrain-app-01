@@ -25,7 +25,11 @@ _FRONT_MATTER = re.compile(r"\A---\r?\n(.*?)\r?\n---\s*$", re.DOTALL | re.MULTIL
 _ENGINE_LINE = re.compile(r'^engine:\s*"?([^"\r\n]*?)"?\s*$', re.MULTILINE)
 
 #: front-matter 안의 `source_path: "..."` 한 줄 (v0.6). 위키에서 원문 `doc_id`를 되찾는다.
-_SOURCE_PATH_LINE = re.compile(r'^source_path:\s*"?([^"\r\n]*?)"?\s*$', re.MULTILINE)
+#:
+#: 값 안의 이스케이프(`\"`)를 건너뛰도록 `(?:[^"\\]|\\.)*`를 쓴다. `[^"]*`로 두면 파일명에
+#: 큰따옴표가 들어간 경로에서 값이 잘려 `None`이 되고, 그 위키가 그래프에서 조용히 빠진 뒤
+#: 고아 정리가 재료까지 지운다(엔티티 소실).
+_SOURCE_PATH_LINE = re.compile(r'^source_path:\s*"((?:[^"\\]|\\.)*)"\s*$', re.MULTILINE)
 
 #: front-matter를 찾기 위해 읽어들이는 앞부분 크기(바이트). 템플릿상 front-matter는
 #: 200바이트 안팎이라 넉넉하며, 위키 전체를 메모리에 올리지 않기 위한 상한이다.
@@ -105,4 +109,9 @@ def read_source_path(out_path: Path) -> str:
     if block is None:
         return ""
     match = _SOURCE_PATH_LINE.search(block.group(1))
-    return match.group(1).strip() if match else ""
+    return _unquote(match.group(1)) if match else ""
+
+
+def _unquote(value: str) -> str:
+    """`render._quote`의 역변환 — 이스케이프한 순서의 반대로 되돌린다."""
+    return value.replace('\\"', '"').replace("\\\\", "\\")
