@@ -172,6 +172,38 @@ def _sim(left: str, right: str) -> tuple[str, str, str]:
     return ("SEMANTICALLY_SIMILAR", low, high)
 
 
+def _without_generated_at(wiki: Path) -> str:
+    """`--force` 재실행 비교용 — **front-matter 안의** 생성 시각 한 줄만 뺀다.
+
+    파일 전체에서 접두사로 지우지 않는다. 요약 본문에 같은 접두사로 시작하는 줄이 들어오면
+    양쪽에서 똑같이 지워져 실제 차이가 조용히 가려진다 — 스펙 §4.5가 「관련 문서」를 헤딩
+    문자열 탐색이 아니라 마커 블록으로 정의한 것과 같은 이유다.
+    """
+    lines = wiki.read_text(encoding="utf-8").splitlines()
+    assert lines and lines[0] == "---", f"front-matter 로 시작하지 않는 위키: {wiki}"
+    end = lines.index("---", 1)
+    front = [line for line in lines[1:end] if not line.startswith("generated_at:")]
+    return "\n".join([lines[0], *front, *lines[end:]])
+
+
+def _rows(out_dir: Path) -> tuple[list[Any], list[Any]]:
+    """결정성 비교용 전체 행 — 튜플 집합이 보지 않는 `label`·`weight`까지 포함한다.
+
+    `_nodes`·`_edges`는 기대값을 손으로 적기 위해 `(종류, 상대경로)`로 줄여 읽는다. 그래서
+    저장된 라벨이나 유사도 가중치가 실행마다 달라져도 그 헬퍼로는 잡히지 않는다. 스펙 §3
+    항목4가 "그래프 DB **내용**이 동일하다"고 한 범위를 이 헬퍼가 덮는다.
+    """
+    conn = sqlite3.connect(graph_path_for(out_dir))
+    nodes = conn.execute(
+        "SELECT id, type, label, props_json FROM nodes ORDER BY id"
+    ).fetchall()
+    edges = conn.execute(
+        "SELECT src, dst, type, weight FROM edges ORDER BY 1, 2, 3"
+    ).fetchall()
+    conn.close()
+    return nodes, edges
+
+
 def _related_block(wiki: Path) -> str:
     body = wiki.read_text(encoding="utf-8")
     return body.split(RELATED_MARKER_START)[1].split(RELATED_MARKER_END)[0].strip()
@@ -313,14 +345,70 @@ def test_second_run_changes_nothing(
 
     run_scan(_config(corpus, out_dir))
     first_files = {p: p.read_bytes() for p in sorted(out_dir.rglob("*.md"))}
-    first_edges = _edges(out_dir)
+    first_edges, first_rows = _edges(out_dir), _rows(out_dir)
 
     result = run_scan(_config(corpus, out_dir))
 
     assert {p: p.read_bytes() for p in sorted(out_dir.rglob("*.md"))} == first_files
     assert _edges(out_dir) == first_edges
+    assert _rows(out_dir) == first_rows
     assert result.graph is not None
     assert result.graph.related_updated_count == 0
+
+
+def test_forced_rerun_produces_the_same_graph_and_bodies(
+    corpus: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """완료의 정의 4의 나머지 절반 — `--force` 2회 실행 비교.
+
+    `--force`는 mtime과 무관하게 재요약하므로 `generated_at`이 달라진다. 스펙이 그 필드만
+    제외하라고 한 이유다. 그 한 줄을 빼면 본문도 그래프도 바이트 동일해야 한다 — 같은
+    입력에서 같은 요약·같은 벡터·같은 엣지가 나오기 때문이다.
+    """
+    monkeypatch.setattr(gateway_module, "request_json", _stub())
+    out_dir = tmp_path / "wiki"
+
+    run_scan(_config(corpus, out_dir, force=True))
+    first_nodes, first_edges, first_rows = _nodes(out_dir), _edges(out_dir), _rows(out_dir)
+    first_bodies = {
+        p.relative_to(out_dir): _without_generated_at(p) for p in sorted(out_dir.rglob("*.md"))
+    }
+
+    run_scan(_config(corpus, out_dir, force=True))
+
+    assert _nodes(out_dir) == first_nodes
+    assert _edges(out_dir) == first_edges
+    assert _rows(out_dir) == first_rows  # 라벨·가중치까지 (`_rows` 독스트링)
+    assert {
+        p.relative_to(out_dir): _without_generated_at(p) for p in sorted(out_dir.rglob("*.md"))
+    } == first_bodies
+
+
+def test_forced_rerun_actually_resummarizes(
+    corpus: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """위 테스트가 «아무것도 안 해서» 통과하지 않음을 보인다 — `--force`는 실제로 재요약한다.
+
+    URL이 아니라 **어느 문서를 요약했는지**를 모은다. 요약 호출은 URL이 전부 같아서 개수만
+    세면 한 문서를 여섯 번 부르고 나머지를 건너뛴 경우와 구분되지 않는다.
+    """
+    summarized: list[str] = []
+    stub = _stub()
+
+    def counting(url: str, **kwargs: Any) -> Any:
+        if not url.endswith("/api/tags") and not url.endswith("/api/embeddings"):
+            summarized.append(_which((kwargs.get("payload") or {}).get("prompt", "")))
+        return stub(url, **kwargs)
+
+    monkeypatch.setattr(gateway_module, "request_json", counting)
+    out_dir = tmp_path / "wiki"
+
+    run_scan(_config(corpus, out_dir, force=True))
+    first = list(summarized)
+    run_scan(_config(corpus, out_dir, force=True))
+
+    assert sorted(first) == sorted(FILES)
+    assert sorted(summarized[len(first) :]) == sorted(FILES)  # 두 번째 실행도 전 문서를 재요약
 
 
 # --- 완료의 정의 5: 벡터 없음 → 부분 그래프 ---------------------------------------
