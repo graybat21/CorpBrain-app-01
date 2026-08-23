@@ -491,6 +491,9 @@ corpbrain graph --out "$OUT" --neighbors 인사/채용계획.md.md
 
 ##### 새로 드러난 것 ★ — `entities` 를 선택 필드로 둔 대가
 
+> **v0.6.1에서 해소됐다.** `SUMMARY_TOOL_SCHEMA` 의 `required` 에 `entities` 를 넣었다.
+> 아래는 그렇게 결정하게 된 실측 기록이다.
+
 **문서 6개 중 5개가 `entities: []` 로 왔다.**
 
 ```
