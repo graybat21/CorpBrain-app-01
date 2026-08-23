@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import sqlite3
 import sys
 from pathlib import Path
 from typing import TextIO
@@ -26,14 +27,19 @@ from corpbrain.core._progress import (
 )
 from corpbrain.core.config import API_KEY_ENV_VAR
 from corpbrain.core.errors import PreconditionError, TokenBudgetExceededError
+from corpbrain.core.graphstore import graph_path_for
 from corpbrain.core.report import (
     build_detail_lines,
     build_doctor_lines,
+    build_graph_central_lines,
+    build_graph_neighbors_lines,
+    build_graph_stats_lines,
     build_plan_report_lines,
     build_scan_banner_lines,
     build_search_lines,
     build_summary_lines,
 )
+from corpbrain.core.rerun import read_source_path
 from corpbrain.core.scanner import (
     ScanFindings,
     resolve_excluded_out_dir,
@@ -324,6 +330,39 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    graph = subparsers.add_parser(
+        "graph",
+        help="지식그래프를 조회한다 (v0.6 스펙 §4.7).",
+        description=(
+            "scan이 만들어 둔 지식그래프를 읽기만 한다. 조회 시점에 엣지를 다시 계산하지 "
+            "않으므로 출력이 그래프 DB·위키와 항상 같은 값을 가리킨다. 임계치를 바꿔 보려면 "
+            "`corpbrain scan --similarity-threshold ...` 를 다시 실행한다."
+        ),
+    )
+    graph.add_argument(
+        "--out",
+        dest="out_dir",
+        type=Path,
+        default=core.DEFAULT_OUT_DIR,
+        help=f"위키·그래프 DB 위치 (기본 {core.DEFAULT_OUT_DIR}).",
+    )
+    view = graph.add_mutually_exclusive_group(required=True)
+    view.add_argument(
+        "--stats", action="store_true", help="노드·엣지 종류별 개수를 낸다."
+    )
+    view.add_argument(
+        "--neighbors",
+        metavar="경로",
+        help=(
+            "해당 문서에 닿는 4종 엣지를 낸다. --out 기준 위키 상대경로"
+            "(개발/설계.md.md)를 우선 찾고, 없으면 원문 상대경로(개발/설계.md)로 다시 "
+            "시도한다. 절대경로도 받는다."
+        ),
+    )
+    view.add_argument(
+        "--central", action="store_true", help="연결 차수 내림차순 문서 목록을 낸다."
+    )
+
     doctor = subparsers.add_parser(
         "doctor",
         help="환경 준비 상태(Ollama 설치/구동/모델·GPU·게이트 임계)를 점검한다.",
@@ -408,6 +447,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_search(args)
     if args.command == "consent":
         return _run_consent(args)
+    if args.command == "graph":
+        return _run_graph(args)
     return _run_scan(args)
 
 
@@ -526,6 +567,91 @@ def _run_search(args: argparse.Namespace) -> int:
     for line in build_search_lines(results):
         print(line)
     return EXIT_OK
+
+
+def _run_graph(args: argparse.Namespace) -> int:
+    """`graph` — 지식그래프를 조회해 stdout에 낸다 (v0.6 스펙 §4.7).
+
+    `build_config()`를 쓰지 않는다 — 그 함수는 `scan` 파서에만 있는 인자를 무조건 읽는다.
+    `graph`에 필요한 것은 `--out` 하나뿐이다.
+
+    그래프 DB 부재·손상은 exit 1(`search`가 인덱스 부재를 다루는 선례). `--neighbors`가
+    지목한 문서가 그래프에 없으면 exit 1 — 자유 텍스트 쿼리와 달리 존재를 전제한 식별자
+    지목이므로 매칭 실패는 빈 결과가 아니라 잘못된 지목이다. 빈 그래프 조회는 exit 0.
+    """
+    path = graph_path_for(args.out_dir)
+    if not path.exists():
+        _log(
+            f"선행 조건 실패: 그래프 DB가 없습니다: {path} — "
+            "먼저 `corpbrain scan <폴더> --out <경로>` 를 실행하세요."
+        )
+        return EXIT_PRECONDITION_FAILED
+    try:
+        store = core.SqliteGraphStore(path)
+    except PreconditionError as exc:
+        _log(f"선행 조건 실패: {exc}")
+        return EXIT_PRECONDITION_FAILED
+
+    try:
+        if args.stats:
+            lines = build_graph_stats_lines(store.stats())
+        else:
+            facts = list(store.iter_facts())
+            labels = core.label_index(facts)
+            if args.central:
+                lines = build_graph_central_lines(store.degree_ranking(), labels=labels)
+            else:
+                doc_id = _resolve_graph_document(args.out_dir, args.neighbors)
+                if store.get_facts(doc_id) is None:
+                    _log(
+                        f"그래프에 없는 문서입니다: {args.neighbors} — "
+                        "`corpbrain graph --central` 로 문서 목록을 확인하세요."
+                    )
+                    return EXIT_PRECONDITION_FAILED
+                lines = build_graph_neighbors_lines(
+                    doc_id, store.neighbors(doc_id), labels=labels
+                )
+    except sqlite3.Error as exc:
+        # 개봉은 됐지만 조회에서 깨지는 DB(손상된 페이지 등)를 raw traceback으로 흘리지
+        # 않는다 — 다른 명령과 같이 선행 조건 실패로 정리한다.
+        _log(
+            f"선행 조건 실패: 그래프 DB를 읽지 못했습니다: {exc} — "
+            f"{path} 를 지우고 다시 scan 하세요."
+        )
+        return EXIT_PRECONDITION_FAILED
+    finally:
+        store.close()
+
+    for line in lines:
+        print(line)
+    return EXIT_OK
+
+
+def _resolve_graph_document(out_dir: Path, raw: str) -> str:
+    """`--neighbors` 인자를 `doc_id`(원문 절대경로)로 해석한다 (v0.6 §4.7).
+
+    위키 상대경로를 우선 찾고, 없으면 원문 상대경로에 위키 접미사를 붙여 다시 찾는다. 둘 다
+    아니면 인자를 `doc_id`로 그대로 넘겨 그래프가 판정하게 둔다(절대경로 입력).
+
+    경로 해석은 어댑터의 몫이다 — 코어는 경로 해석 책임을 지지 않는다(코어 no-I/O 불변식).
+    """
+    for wiki in (out_dir / raw, out_dir / f"{raw}{core.WIKI_SUFFIX}"):
+        # `out_dir` 하위일 때만 위키로 본다. `raw`가 절대경로면 `out_dir / raw`는 그 경로
+        # 자체가 되는데, 그것이 front-matter를 가진 **원문**(다른 도구의 위키, 스캔 대상에
+        # 섞인 CorpBrain 위키 등)이면 그 안의 `source_path`를 읽어 엉뚱한 문서로 간다.
+        if wiki.is_file() and _is_within(wiki, out_dir):
+            doc_id = read_source_path(wiki)
+            if doc_id:
+                return doc_id
+    return raw
+
+
+def _is_within(path: Path, root: Path) -> bool:
+    """`path`가 `root` 아래인가. 심볼릭 링크·`..`를 풀어서 판정한다."""
+    try:
+        return path.resolve().is_relative_to(root.resolve())
+    except OSError:
+        return False
 
 
 def _emit_plan_report(config: core.ScanConfig) -> int:
