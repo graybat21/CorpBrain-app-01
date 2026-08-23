@@ -385,6 +385,10 @@ class GraphStats:
     documents: int
     entities: int
     tags: int
+    #: 키는 엣지 종류 표기(§4.1 표의 `TAGGED_WITH`·`CONTAINS_ENTITY`·
+    #: `SEMANTICALLY_SIMILAR`·`REFERENCES`)이며, 코드에서 단일 출처가 소유한다.
+    #: 표기가 저장소·집계·출력에서 갈리면 타입 검사와 각자의 단위테스트를 통과하면서도
+    #: 통합 시점에야 드러나는 종류의 오류가 된다.
     edges_by_type: dict[str, int]
 
 @dataclass(frozen=True)
