@@ -2,8 +2,10 @@
 
 v0.4 `VectorStore`와 같은 형태를 따른다: 파이프라인·`graph` CLI는 `GraphStore` 인터페이스에만
 의존하고 구체 구현(`SqliteGraphStore`)을 직접 참조하지 않는다. 계약은 스펙이 명시한
-사용처에서 역산한 9멤버이며, v0.4가 3메서드로 적었다가 코드리뷰에서 누락이 드러나 6메서드로
-넓힌 전례를 반복하지 않기 위해 처음부터 전부 선언한다.
+사용처에서 역산한 10멤버다. v0.4가 3메서드로 적었다가 코드리뷰에서 누락이 드러나 6메서드로
+넓힌 전례를 반복하지 않으려 v0.6은 처음부터 전부 선언했지만, 그럼에도 «조회 결과를 사람에게
+보여주려면 라벨이 필요하다»는 사용처를 세지 못해 v0.6.1에서 `nodes_of()`가 늘었다 —
+계약을 미리 못박아도 역산이 완전하긴 어렵다는 사례로 남긴다.
 
 **재료와 파생물을 분리한다** (스펙 §4.4). `doc_facts`는 재요약된 문서만 증분 upsert해 영속하고,
 `nodes`·`edges`는 매 실행 `replace_graph()`로 통째로 다시 만든다 — 임계치나 문서 집합이
@@ -36,6 +38,9 @@ GRAPH_FILENAME = ".corpbrain_graph.sqlite"
 #: 그래프 DB 스키마 버전 (스펙 §5). 값이 다르면 자동 마이그레이션하지 않고 선행 조건 실패로
 #: 멈춘 뒤 삭제·재실행을 안내한다 — v0.4가 벡터 인덱스에 세운 방침과 동형이다.
 SCHEMA_VERSION = "1"
+
+#: `nodes_of()`가 한 번에 묶는 id 개수 — sqlite의 기본 변수 상한(999)보다 넉넉히 아래다.
+_ID_CHUNK = 500
 
 
 @runtime_checkable
@@ -78,6 +83,17 @@ class GraphStore(Protocol):
         """`Document` 노드를 연결 차수 내림차순으로 — 동점은 노드 id 사전순 (스펙 §4.7)."""
         ...
 
+    def nodes_of(self, node_ids: Iterable[str]) -> dict[str, GraphNode]:
+        """지목한 노드들을 돌려준다. 없는 id는 결과에서 빠진다.
+
+        `neighbors()`는 엣지만, `degree_ranking()`은 `(id, 차수)`만 돌려주므로 조회 명령이
+        표시할 **라벨을 얻을 길**이 이 메서드다. 저장된 값을 읽으므로 라벨 선택 규칙이
+        `build_graph()`와 갈릴 여지가 없다 — v0.6.0은 계약에 이 조회가 없어 재료에서 라벨을
+        다시 계산했고, 규칙을 한쪽만 고치면 위키 「관련 문서」와 `graph --neighbors`가 같은
+        노드를 다르게 표시하면서도 오류 없이 통과하는 상태였다.
+        """
+        ...
+
     def close(self) -> None:
         """이 저장소가 쥔 자원(연결 등)을 정리한다."""
         ...
@@ -91,13 +107,28 @@ def graph_path_for(out_dir: Path) -> Path:
 class SqliteGraphStore:
     """외부 의존성 없는 `GraphStore` 기본 구현 — 표준 라이브러리 `sqlite3`만 쓴다."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, read_only: bool = False) -> None:
+        """`read_only=True`면 **파일에 아무것도 쓰지 않고** 연다 (스펙 §4.7).
+
+        `graph`는 순수 조회 명령인데 종전에는 개봉 시 `CREATE TABLE IF NOT EXISTS`가 돌아
+        두 가지가 어긋났다 — ① 읽기 전용 파일·마운트에서 조회가 실패하고(팀이 위키 폴더를
+        읽기 전용으로 공유하거나 백업 볼륨에서 조회하는 경우) ② 테이블이 통째로 사라진 DB를
+        조용히 되만들어 "엣지 0개"라고 정상 응답했다. §5는 "자동 복구하지 않고 에러 + 재생성
+        안내"를 정해 두었으므로 후자는 방침 위반이었다.
+
+        조회 전용으로 열면 스키마가 없는 DB는 `no such table`로 실패해 §5대로 선행 조건
+        실패가 된다.
+        """
         self._path = path
-        path.parent.mkdir(parents=True, exist_ok=True)
-        is_new = not path.exists()
+        self._read_only = read_only
+        is_new = False
+        if not read_only:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            is_new = not path.exists()
         try:
-            self._conn = sqlite3.connect(path)
-            self._create_schema()
+            self._conn = _connect(path, read_only=read_only)
+            if not read_only:
+                self._create_schema()
             self._check_schema_version()
         except sqlite3.Error as exc:
             self._safe_close()
@@ -135,6 +166,13 @@ class SqliteGraphStore:
             "SELECT value FROM meta WHERE key = 'schema_version'"
         ).fetchone()
         if row is None:
+            if self._read_only:
+                # 조회 전용에서는 기록하지 않는다 — 버전을 모르는 DB를 «맞다»고 단정하면
+                # §5가 막으려던 "조용한 복구"를 이름만 바꿔 되살리는 셈이다.
+                raise PreconditionError(
+                    f"그래프 DB에 스키마 버전이 없습니다: {self._path} — "
+                    f"파일을 지우고 다시 scan 하세요."
+                )
             self._conn.execute(
                 "INSERT INTO meta (key, value) VALUES ('schema_version', ?)", (SCHEMA_VERSION,)
             )
@@ -245,10 +283,31 @@ class SqliteGraphStore:
         ).fetchall()
         return [(row[0], row[1]) for row in rows]
 
+    def nodes_of(self, node_ids: Iterable[str]) -> dict[str, GraphNode]:
+        found: dict[str, GraphNode] = {}
+        unique = list(dict.fromkeys(node_ids))
+        for start in range(0, len(unique), _ID_CHUNK):
+            chunk = unique[start : start + _ID_CHUNK]
+            # 조립하는 것은 자리표시자뿐이고 id는 전부 파라미터로 넘어간다.
+            placeholders = ",".join("?" * len(chunk))
+            rows = self._conn.execute(
+                f"SELECT id, type, label, props_json FROM nodes WHERE id IN ({placeholders})",
+                chunk,
+            ).fetchall()
+            for row in rows:
+                found[row[0]] = GraphNode(
+                    id=row[0],
+                    type=NodeType(row[1]),
+                    label=row[2],
+                    props=json.loads(row[3]),
+                )
+        return found
+
     # --- 수명 -----------------------------------------------------------------
 
     def close(self) -> None:
-        self._conn.commit()
+        if not self._read_only:
+            self._conn.commit()
         self._conn.close()
 
     def _safe_close(self) -> None:
@@ -274,6 +333,17 @@ def _row_to_facts(row: tuple[str, str, str, str, str]) -> DocFacts:
         entities=json.loads(row[3]),
         refs=json.loads(row[4]),
     )
+
+
+def _connect(path: Path, *, read_only: bool) -> sqlite3.Connection:
+    """sqlite 연결을 연다. `read_only`면 URI `mode=ro`로 열어 쓰기를 원천 차단한다.
+
+    URI는 `Path.as_uri()`로 만든다 — 경로에 `?`·`#`가 들어 있어도 퍼센트 인코딩되어
+    질의 문자열이 잘리지 않는다.
+    """
+    if not read_only:
+        return sqlite3.connect(path)
+    return sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
 
 
 def _hide_on_windows(path: Path) -> None:

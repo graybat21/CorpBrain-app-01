@@ -114,12 +114,16 @@ def test_document_body_reaches_the_prompt(calls: list[dict[str, Any]]) -> None:
     assert "고유한문서본문표식" in calls[0]["payload"]["messages"][0]["content"]
 
 
-def test_tool_schema_requires_all_five_fields_without_item_bounds() -> None:
-    """5필드 모두 required이되 minItems/maxItems는 두지 않는다 — 로컬과 검증 규칙 일치 (§4.3)."""
+def test_tool_schema_requires_all_six_fields_without_item_bounds() -> None:
+    """6필드 모두 required이되 minItems/maxItems는 두지 않는다 — 로컬과 검증 규칙 일치 (§4.3).
+
+    `entities`는 v0.6.1에서 required로 옮겼다 — 선택으로 두면 스키마를 강제받는 모델이
+    건너뛴다 (`tests/unit/test_summary_entities.py`).
+    """
     schema = ac.SUMMARY_TOOL_SCHEMA["input_schema"]
 
     assert set(schema["required"]) == {
-        "title", "one_line_summary", "key_points", "summary", "tags",
+        "title", "one_line_summary", "key_points", "summary", "tags", "entities",
     }
     for field in ("key_points", "tags"):
         assert "minItems" not in schema["properties"][field]

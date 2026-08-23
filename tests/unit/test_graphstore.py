@@ -244,3 +244,132 @@ def test_degree_ranking_lists_documents_by_degree_then_id(tmp_path: Path) -> Non
 
         # a: 2, c: 2, b: 1 — a와 c는 동점이므로 사전순. 태그 노드는 목록에 없다.
         assert store.degree_ranking() == [("/w/a.txt", 2), ("/w/c.txt", 2), ("/w/b.txt", 1)]
+
+
+# --- 조회 전용 개봉 (v0.6.1 후속-1 · 스펙 §4.7) ------------------------------------
+
+
+def _built(tmp_path: Path) -> Path:
+    """노드 하나짜리 그래프를 만들어 두고 경로를 돌려준다."""
+    with _store(tmp_path) as store:
+        store.replace_graph([_doc("/w/a.txt")], [])
+    return graph_path_for(tmp_path)
+
+
+def test_read_only_open_does_not_touch_the_file(tmp_path: Path) -> None:
+    """개봉만으로 파일이 달라지지 않는다 — `graph`가 «순수 조회»라는 문서와 맞는다."""
+    path = _built(tmp_path)
+    before = path.read_bytes()
+
+    with SqliteGraphStore(path, read_only=True) as store:
+        assert store.stats().documents == 1
+
+    assert path.read_bytes() == before
+
+
+def test_read_only_open_works_on_a_read_only_file(tmp_path: Path) -> None:
+    """읽기 전용 파일에서도 조회된다 — 팀이 위키 폴더를 읽기 전용으로 공유하는 경우."""
+    path = _built(tmp_path)
+    path.chmod(0o444)
+    try:
+        with SqliteGraphStore(path, read_only=True) as store:
+            assert store.stats().documents == 1
+    finally:
+        path.chmod(0o644)
+
+
+def test_read_only_open_refuses_a_db_whose_tables_are_gone(tmp_path: Path) -> None:
+    """테이블이 사라진 DB를 조용히 되만들지 않는다 (스펙 §5).
+
+    종전에는 개봉 시 `CREATE TABLE IF NOT EXISTS`가 돌아 빈 그래프를 만들고 "엣지 0개"라고
+    정상 응답했다. §5는 "자동 복구하지 않고 에러 + 재생성 안내"를 정해 두었다.
+    """
+    path = _built(tmp_path)
+    conn = sqlite3.connect(path)
+    for table in ("edges", "nodes", "doc_facts", "meta"):
+        conn.execute(f"DROP TABLE {table}")
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(PreconditionError, match="다시 scan"):
+        SqliteGraphStore(path, read_only=True)
+
+
+def test_read_only_open_refuses_a_db_without_a_schema_version(tmp_path: Path) -> None:
+    """버전 행이 없는 DB를 «맞다»고 단정하지 않는다 — 기록하면 조용한 복구가 된다."""
+    path = _built(tmp_path)
+    conn = sqlite3.connect(path)
+    conn.execute("DELETE FROM meta WHERE key = 'schema_version'")
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(PreconditionError, match="스키마 버전이 없습니다"):
+        SqliteGraphStore(path, read_only=True)
+
+
+def test_read_only_store_cannot_write(tmp_path: Path) -> None:
+    """쓰기는 조용히 무시되지 않고 실패한다."""
+    path = _built(tmp_path)
+    with (
+        SqliteGraphStore(path, read_only=True) as store,
+        pytest.raises(sqlite3.OperationalError),
+    ):
+        store.replace_graph([_doc("/w/b.txt")], [])
+
+
+def test_writable_open_still_creates_the_schema(tmp_path: Path) -> None:
+    """`scan` 경로는 종전대로 — 없으면 만든다."""
+    path = graph_path_for(tmp_path)
+    assert not path.exists()
+
+    with SqliteGraphStore(path) as store:
+        assert store.stats().documents == 0
+
+    assert path.exists()
+
+
+# --- 노드 조회 (v0.6.1 후속-2 · 스펙 §4.4) ------------------------------------------
+
+
+def test_nodes_of_returns_stored_nodes(tmp_path: Path) -> None:
+    """저장된 값을 그대로 돌려준다 — 라벨을 다시 계산하지 않는다."""
+    with _store(tmp_path) as store:
+        store.replace_graph(
+            [
+                GraphNode(id="/w/a.txt", type=NodeType.DOCUMENT, label="채용 계획"),
+                GraphNode(id="tag:인사", type=NodeType.TAG, label="인사"),
+            ],
+            [],
+        )
+
+        found = store.nodes_of(["/w/a.txt", "tag:인사"])
+
+    assert found["/w/a.txt"].label == "채용 계획"
+    assert found["/w/a.txt"].type is NodeType.DOCUMENT
+    assert found["tag:인사"].type is NodeType.TAG
+
+
+def test_nodes_of_omits_unknown_ids(tmp_path: Path) -> None:
+    """없는 id는 빠진다 — 호출자가 `labels.get(id, id)`로 대비한다."""
+    with _store(tmp_path) as store:
+        store.replace_graph([_doc("/w/a.txt")], [])
+
+        assert store.nodes_of(["/w/a.txt", "tag:없음"]).keys() == {"/w/a.txt"}
+        assert store.nodes_of([]) == {}
+
+
+def test_nodes_of_handles_more_ids_than_the_sqlite_variable_limit(tmp_path: Path) -> None:
+    """sqlite 변수 상한(999)을 넘는 조회도 나눠서 처리한다 — `--max`를 크게 올린 경우."""
+    ids = [f"/w/{index:04d}.txt" for index in range(1200)]
+    with _store(tmp_path) as store:
+        store.replace_graph([_doc(node_id) for node_id in ids], [])
+
+        assert store.nodes_of(ids).keys() == set(ids)
+
+
+def test_nodes_of_deduplicates_repeated_ids(tmp_path: Path) -> None:
+    """`--neighbors`는 엣지 양 끝을 모아 넘기므로 같은 id가 여러 번 들어온다."""
+    with _store(tmp_path) as store:
+        store.replace_graph([_doc("/w/a.txt")], [])
+
+        assert store.nodes_of(["/w/a.txt"] * 5).keys() == {"/w/a.txt"}

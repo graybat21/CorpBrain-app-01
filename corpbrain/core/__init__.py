@@ -56,8 +56,7 @@ from corpbrain.core.errors import (
     PreconditionError,
     TokenBudgetExceededError,
 )
-from corpbrain.core.graph import label_index
-from corpbrain.core.graphstore import SqliteGraphStore, graph_path_for
+from corpbrain.core.graphstore import GraphStore, SqliteGraphStore, graph_path_for
 from corpbrain.core.models import (
     DocFacts,
     EdgeType,
@@ -120,6 +119,7 @@ __all__ = [
     "GraphOutcome",
     "GraphSkipReason",
     "GraphStats",
+    "GraphStore",
     "HardwareInfo",
     "IndexNotFoundError",
     "InjectionFailure",
@@ -144,7 +144,6 @@ __all__ = [
     "graph_path_for",
     "index_path_for",
     "is_cloud_consent_granted",
-    "label_index",
     "plan_scan",
     "revoke_cloud_consent",
     "run_scan",

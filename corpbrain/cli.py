@@ -587,7 +587,8 @@ def _run_graph(args: argparse.Namespace) -> int:
         )
         return EXIT_PRECONDITION_FAILED
     try:
-        store = core.SqliteGraphStore(path)
+        # 조회 전용으로 연다 — 파일에 아무것도 쓰지 않는다 (v0.6.1 / 스펙 §4.7).
+        store = core.SqliteGraphStore(path, read_only=True)
     except PreconditionError as exc:
         _log(f"선행 조건 실패: {exc}")
         return EXIT_PRECONDITION_FAILED
@@ -595,22 +596,23 @@ def _run_graph(args: argparse.Namespace) -> int:
     try:
         if args.stats:
             lines = build_graph_stats_lines(store.stats())
+        elif args.central:
+            ranking = store.degree_ranking()
+            labels = _labels_for(store, [doc_id for doc_id, _ in ranking])
+            lines = build_graph_central_lines(ranking, labels=labels)
         else:
-            facts = list(store.iter_facts())
-            labels = core.label_index(facts)
-            if args.central:
-                lines = build_graph_central_lines(store.degree_ranking(), labels=labels)
-            else:
-                doc_id = _resolve_graph_document(args.out_dir, args.neighbors)
-                if store.get_facts(doc_id) is None:
-                    _log(
-                        f"그래프에 없는 문서입니다: {args.neighbors} — "
-                        "`corpbrain graph --central` 로 문서 목록을 확인하세요."
-                    )
-                    return EXIT_PRECONDITION_FAILED
-                lines = build_graph_neighbors_lines(
-                    doc_id, store.neighbors(doc_id), labels=labels
+            doc_id = _resolve_graph_document(args.out_dir, args.neighbors)
+            if not store.nodes_of([doc_id]):
+                _log(
+                    f"그래프에 없는 문서입니다: {args.neighbors} — "
+                    "`corpbrain graph --central` 로 문서 목록을 확인하세요."
                 )
+                return EXIT_PRECONDITION_FAILED
+            edges = store.neighbors(doc_id)
+            ids = [doc_id]
+            for edge in edges:
+                ids += [edge.src, edge.dst]
+            lines = build_graph_neighbors_lines(doc_id, edges, labels=_labels_for(store, ids))
     except sqlite3.Error as exc:
         # 개봉은 됐지만 조회에서 깨지는 DB(손상된 페이지 등)를 raw traceback으로 흘리지
         # 않는다 — 다른 명령과 같이 선행 조건 실패로 정리한다.
@@ -625,6 +627,15 @@ def _run_graph(args: argparse.Namespace) -> int:
     for line in lines:
         print(line)
     return EXIT_OK
+
+
+def _labels_for(store: core.GraphStore, node_ids: list[str]) -> dict[str, str]:
+    """노드 id → 표시 라벨. **저장된 `nodes.label`을 그대로 읽는다** (스펙 §4.4).
+
+    v0.6.0은 저장소 계약에 노드 조회가 없어 재료에서 라벨을 다시 계산했다. 규칙을 한쪽만
+    고치면 위키 「관련 문서」와 이 출력이 같은 노드를 다르게 표시하면서도 오류 없이 통과했다.
+    """
+    return {node_id: node.label for node_id, node in store.nodes_of(node_ids).items()}
 
 
 def _resolve_graph_document(out_dir: Path, raw: str) -> str:

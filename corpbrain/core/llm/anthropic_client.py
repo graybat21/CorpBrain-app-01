@@ -52,13 +52,20 @@ MAX_TOKENS = 2048
 #: 스키마를 강제하는 도구 이름 (v0.5 §4.3).
 SUMMARY_TOOL_NAME = "emit_summary"
 
-#: tool use 입력 스키마 — 기존 5필드는 required, v0.6의 `entities`는 **선택**이다.
+#: tool use 입력 스키마 — `entities`를 포함한 6필드 전부가 required다 (v0.6.1 / §4.2).
 #: `minItems`/`maxItems`는 두지 않는다 (로컬 `parse_summary`와 동일하게 "비어있지 않은
 #: 문자열 배열"만 검증해 규칙을 일치시킨다).
 #:
-#: `entities`를 required에 넣지 않는 이유는 엔진별로 필수 여부가 갈리지 않게 하기 위함이다
-#: (v0.6 §4.2) — 로컬은 프롬프트로만 요청할 수 있어 강제가 불가능하므로, 클라우드만 강제하면
-#: 같은 폴더를 엔진 바꿔 돌렸을 때 생성되는 위키 개수가 달라진다.
+#: v0.6.0은 `entities`를 선택으로 뒀다. "엔진별로 필수 여부를 달리하면 같은 폴더가 엔진에
+#: 따라 다른 개수의 위키를 낸다"는 근거였는데, 클라우드 스모크에서 그 전제가 깨졌다 —
+#: 문서 6개 중 5개가 `entities: []`로 왔다. `tool_use`로 스키마를 강제받는 모델은 required는
+#: 확실히 채우고 선택 필드는 건너뛴다. 그러면서 태그가 34개로 폭증해 그 안에 엔티티가 섞였고,
+#: 태그가 문서 간에 겹치지 않아 「관련 문서」의 «공유 태그» 근거가 한 줄도 나오지 않았다.
+#:
+#: required에 넣어도 위키 개수는 달라지지 않는다 — `tool_choice`가 스키마를 강제하므로
+#: **누락 자체가 불가능**하기 때문이다. 로컬은 프롬프트로만 요청할 수 있어 종전대로 선택이며
+#: (`llm/base.py`의 `OPTIONAL_LIST_FIELDS`), 그래서 문서 손실 위험도 종전대로 없다.
+#: 검증 규칙(`validate_summary_fields`)은 두 엔진이 계속 공유한다.
 SUMMARY_TOOL_SCHEMA: dict[str, Any] = {
     "name": SUMMARY_TOOL_NAME,
     "description": "문서 요약 결과를 고정 필드로 제출한다.",
@@ -87,7 +94,14 @@ SUMMARY_TOOL_SCHEMA: dict[str, Any] = {
                 ),
             },
         },
-        "required": ["title", "one_line_summary", "key_points", "summary", "tags"],
+        "required": [
+            "title",
+            "one_line_summary",
+            "key_points",
+            "summary",
+            "tags",
+            "entities",
+        ],
     },
 }
 
