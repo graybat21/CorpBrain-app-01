@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -196,3 +197,51 @@ def test_query_failure_after_open_is_a_precondition_failure(
     err = capsys.readouterr().err
     assert "읽지 못했습니다" in err
     assert "다시 scan" in err
+
+
+# --- 조회 전용 개봉 (v0.6.1 후속-1 · 스펙 §4.7) ------------------------------------
+
+
+def test_graph_does_not_modify_the_database(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    """조회 명령이 파일을 바꾸지 않는다 — 종전에는 개봉만으로 스키마를 되만들었다."""
+    out_dir = tmp_path / "wiki"
+    _seed(out_dir)
+    before = graph_path_for(out_dir).read_bytes()
+
+    assert cli.main(["graph", "--out", str(out_dir), "--stats"]) == cli.EXIT_OK
+
+    capsys.readouterr()
+    assert graph_path_for(out_dir).read_bytes() == before
+
+
+def test_graph_reads_a_read_only_database(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    """읽기 전용 파일에서도 조회된다 (백업 볼륨·읽기 전용 공유)."""
+    out_dir = tmp_path / "wiki"
+    _seed(out_dir)
+    path = graph_path_for(out_dir)
+    path.chmod(0o444)
+    try:
+        code = cli.main(["graph", "--out", str(out_dir), "--stats"])
+    finally:
+        path.chmod(0o644)
+
+    assert code == cli.EXIT_OK
+    assert "노드" in capsys.readouterr().out
+
+
+def test_graph_refuses_a_database_whose_tables_are_gone(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    """테이블이 사라진 DB를 «엣지 0개»라고 정상 응답하지 않는다 (스펙 §5)."""
+    out_dir = tmp_path / "wiki"
+    _seed(out_dir)
+    conn = sqlite3.connect(graph_path_for(out_dir))
+    for table in ("edges", "nodes", "doc_facts", "meta"):
+        conn.execute(f"DROP TABLE {table}")
+    conn.commit()
+    conn.close()
+
+    code = cli.main(["graph", "--out", str(out_dir), "--stats"])
+
+    assert code == cli.EXIT_PRECONDITION_FAILED
+    assert "다시 scan" in capsys.readouterr().err

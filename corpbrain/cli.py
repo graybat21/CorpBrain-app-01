@@ -587,7 +587,8 @@ def _run_graph(args: argparse.Namespace) -> int:
         )
         return EXIT_PRECONDITION_FAILED
     try:
-        store = core.SqliteGraphStore(path)
+        # 조회 전용으로 연다 — 파일에 아무것도 쓰지 않는다 (v0.6.1 / 스펙 §4.7).
+        store = core.SqliteGraphStore(path, read_only=True)
     except PreconditionError as exc:
         _log(f"선행 조건 실패: {exc}")
         return EXIT_PRECONDITION_FAILED

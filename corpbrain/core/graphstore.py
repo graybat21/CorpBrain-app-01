@@ -91,13 +91,28 @@ def graph_path_for(out_dir: Path) -> Path:
 class SqliteGraphStore:
     """외부 의존성 없는 `GraphStore` 기본 구현 — 표준 라이브러리 `sqlite3`만 쓴다."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, read_only: bool = False) -> None:
+        """`read_only=True`면 **파일에 아무것도 쓰지 않고** 연다 (스펙 §4.7).
+
+        `graph`는 순수 조회 명령인데 종전에는 개봉 시 `CREATE TABLE IF NOT EXISTS`가 돌아
+        두 가지가 어긋났다 — ① 읽기 전용 파일·마운트에서 조회가 실패하고(팀이 위키 폴더를
+        읽기 전용으로 공유하거나 백업 볼륨에서 조회하는 경우) ② 테이블이 통째로 사라진 DB를
+        조용히 되만들어 "엣지 0개"라고 정상 응답했다. §5는 "자동 복구하지 않고 에러 + 재생성
+        안내"를 정해 두었으므로 후자는 방침 위반이었다.
+
+        조회 전용으로 열면 스키마가 없는 DB는 `no such table`로 실패해 §5대로 선행 조건
+        실패가 된다.
+        """
         self._path = path
-        path.parent.mkdir(parents=True, exist_ok=True)
-        is_new = not path.exists()
+        self._read_only = read_only
+        is_new = False
+        if not read_only:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            is_new = not path.exists()
         try:
-            self._conn = sqlite3.connect(path)
-            self._create_schema()
+            self._conn = _connect(path, read_only=read_only)
+            if not read_only:
+                self._create_schema()
             self._check_schema_version()
         except sqlite3.Error as exc:
             self._safe_close()
@@ -135,6 +150,13 @@ class SqliteGraphStore:
             "SELECT value FROM meta WHERE key = 'schema_version'"
         ).fetchone()
         if row is None:
+            if self._read_only:
+                # 조회 전용에서는 기록하지 않는다 — 버전을 모르는 DB를 «맞다»고 단정하면
+                # §5가 막으려던 "조용한 복구"를 이름만 바꿔 되살리는 셈이다.
+                raise PreconditionError(
+                    f"그래프 DB에 스키마 버전이 없습니다: {self._path} — "
+                    f"파일을 지우고 다시 scan 하세요."
+                )
             self._conn.execute(
                 "INSERT INTO meta (key, value) VALUES ('schema_version', ?)", (SCHEMA_VERSION,)
             )
@@ -248,7 +270,8 @@ class SqliteGraphStore:
     # --- 수명 -----------------------------------------------------------------
 
     def close(self) -> None:
-        self._conn.commit()
+        if not self._read_only:
+            self._conn.commit()
         self._conn.close()
 
     def _safe_close(self) -> None:
@@ -274,6 +297,17 @@ def _row_to_facts(row: tuple[str, str, str, str, str]) -> DocFacts:
         entities=json.loads(row[3]),
         refs=json.loads(row[4]),
     )
+
+
+def _connect(path: Path, *, read_only: bool) -> sqlite3.Connection:
+    """sqlite 연결을 연다. `read_only`면 URI `mode=ro`로 열어 쓰기를 원천 차단한다.
+
+    URI는 `Path.as_uri()`로 만든다 — 경로에 `?`·`#`가 들어 있어도 퍼센트 인코딩되어
+    질의 문자열이 잘리지 않는다.
+    """
+    if not read_only:
+        return sqlite3.connect(path)
+    return sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
 
 
 def _hide_on_windows(path: Path) -> None:

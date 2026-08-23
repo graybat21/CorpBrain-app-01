@@ -439,11 +439,17 @@ corpbrain graph
 - **`graph`는 순수 조회 명령이다** [사용자 결정]. `--similarity-threshold`·`--related-top-k`는
   `graph`에 두지 않는다. 엣지는 `scan`이 §4.4의 재빌드 전략으로 이미 만들어 둔 것이고,
   조회 시점에 다시 계산하면 `--stats` 출력이 DB·위키와 어긋나 §3 항목3을 위반한다.
-  - 정확히는 **그래프 데이터를 변경하지 않는다**는 뜻이다. 현재 `SqliteGraphStore`는 개봉 시
-    `CREATE TABLE IF NOT EXISTS`를 실행하므로 파일 자체에는 쓰기가 발생한다 — 읽기 전용
-    파일·마운트에서 `graph`가 실패하고, 테이블이 소실된 DB를 §5의 방침과 달리 조용히
-    복구한다. **알려진 드리프트**이며 조회 전용 개봉(`mode=ro`) 도입은 후속 과제로 둔다
-    (`docs/loop/DECISION_CHECKPOINT-v0.6-cli.md` 후속-1). [2026-08-23 실측 확인]
+  - **파일에도 쓰지 않는다** [사용자 결정 · v0.6.1]. `graph`는 저장소를 sqlite URI
+    `mode=ro`로 연다(`SqliteGraphStore(path, read_only=True)`). 읽기 전용 파일·마운트에서도
+    조회되고, 스키마가 소실된 DB는 되만들어지지 않고 `no such table`로 실패해 §5 방침대로
+    선행 조건 실패가 된다.
+    - v0.6.0까지는 개봉 시 `CREATE TABLE IF NOT EXISTS`가 돌아 두 가지가 어긋나 있었다 —
+      읽기 전용 마운트에서 `graph`가 실패했고, 테이블이 통째로 사라진 DB를 조용히 복구해
+      «엣지 0개»라고 정상 응답했다. 후자는 "조용히 폐기하지 않는다"고 정해 놓고 조용히
+      복구하는 셈이라 §5 위반이었다. [2026-08-23 실측 확인 → v0.6.1 해소]
+    - 조회 전용에서는 `meta`에 `schema_version` 행이 없어도 **기록하지 않고 실패한다.**
+      기록하면 버전을 모르는 DB를 «맞다»고 단정하게 되어 같은 «조용한 복구»가 이름만 바꿔
+      되살아난다.
   - 임계치를 바꿔 보려면 `corpbrain scan … --similarity-threshold 0.85` 를 다시 돌린다.
     `should_regenerate()`는 임계치를 보지 않으므로 문서가 그대로면 전부 `up_to_date`로
     스킵되어 **LLM 호출이 0회**이고, 그래프 재빌드와 「관련 문서」 주입만 일어난다.
