@@ -172,6 +172,14 @@ def _sim(left: str, right: str) -> tuple[str, str, str]:
     return ("SEMANTICALLY_SIMILAR", low, high)
 
 
+def _without_generated_at(wiki: Path) -> str:
+    """`--force` 재실행 비교용 — 매 실행 달라지는 front-matter 시각 한 줄만 뺀다."""
+    return "\n".join(
+        line for line in wiki.read_text(encoding="utf-8").splitlines()
+        if not line.startswith("generated_at:")
+    )
+
+
 def _related_block(wiki: Path) -> str:
     body = wiki.read_text(encoding="utf-8")
     return body.split(RELATED_MARKER_START)[1].split(RELATED_MARKER_END)[0].strip()
@@ -321,6 +329,56 @@ def test_second_run_changes_nothing(
     assert _edges(out_dir) == first_edges
     assert result.graph is not None
     assert result.graph.related_updated_count == 0
+
+
+def test_forced_rerun_produces_the_same_graph_and_bodies(
+    corpus: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """완료의 정의 4의 나머지 절반 — `--force` 2회 실행 비교.
+
+    `--force`는 mtime과 무관하게 재요약하므로 `generated_at`이 달라진다. 스펙이 그 필드만
+    제외하라고 한 이유다. 그 한 줄을 빼면 본문도 그래프도 바이트 동일해야 한다 — 같은
+    입력에서 같은 요약·같은 벡터·같은 엣지가 나오기 때문이다.
+    """
+    monkeypatch.setattr(gateway_module, "request_json", _stub())
+    out_dir = tmp_path / "wiki"
+
+    run_scan(_config(corpus, out_dir, force=True))
+    first_nodes, first_edges = _nodes(out_dir), _edges(out_dir)
+    first_bodies = {
+        p.relative_to(out_dir): _without_generated_at(p) for p in sorted(out_dir.rglob("*.md"))
+    }
+
+    run_scan(_config(corpus, out_dir, force=True))
+
+    assert _nodes(out_dir) == first_nodes
+    assert _edges(out_dir) == first_edges
+    assert {
+        p.relative_to(out_dir): _without_generated_at(p) for p in sorted(out_dir.rglob("*.md"))
+    } == first_bodies
+
+
+def test_forced_rerun_actually_resummarizes(
+    corpus: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """위 테스트가 «아무것도 안 해서» 통과하지 않음을 보인다 — `--force`는 실제로 재요약한다."""
+    calls: list[str] = []
+    stub = _stub()
+
+    def counting(url: str, **kwargs: Any) -> Any:
+        if not url.endswith("/api/tags") and not url.endswith("/api/embeddings"):
+            calls.append(url)
+        return stub(url, **kwargs)
+
+    monkeypatch.setattr(gateway_module, "request_json", counting)
+    out_dir = tmp_path / "wiki"
+
+    run_scan(_config(corpus, out_dir, force=True))
+    first = len(calls)
+    run_scan(_config(corpus, out_dir, force=True))
+
+    assert first == len(FILES)
+    assert len(calls) == first * 2  # 두 번째 실행도 전부 재요약했다
 
 
 # --- 완료의 정의 5: 벡터 없음 → 부분 그래프 ---------------------------------------
