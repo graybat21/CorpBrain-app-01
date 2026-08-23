@@ -491,7 +491,11 @@ corpbrain graph --out "$OUT" --neighbors 인사/채용계획.md.md
 
 ##### 새로 드러난 것 ★ — `entities` 를 선택 필드로 둔 대가
 
-> **v0.6.1에서 해소됐다.** `SUMMARY_TOOL_SCHEMA` 의 `required` 에 `entities` 를 넣었다.
+> **v0.6.1에서 스키마를 고쳤다** — `SUMMARY_TOOL_SCHEMA` 의 `required` 에 `entities` 를
+> 넣었다. **효과는 아직 실측되지 않았다.** JSON Schema 의 `required` 는 «키가 존재할 것»
+> 이지 «비어 있지 않을 것» 이 아니므로 모델이 `"entities": []` 를 보내도 스키마는
+> 충족된다. 실제로 채워지는지는 **다음 클라우드 스모크에서 확인한다.**
+>
 > 아래는 그렇게 결정하게 된 실측 기록이다.
 
 **문서 6개 중 5개가 `entities: []` 로 왔다.**
