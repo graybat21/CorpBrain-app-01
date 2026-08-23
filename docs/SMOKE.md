@@ -232,25 +232,29 @@ uv run corpbrain doctor
 
 ### 실행 H — 실제 모델로 만든 그래프 (DoD 1·2·3)
 
-준비: 서로 관계가 있는 한국어 문서 6개를 임시 폴더에 만든다. 인라인 테스트 코퍼스와 같은
-구조로, **실제 모델이 엔티티를 뽑을 만한 내용**을 담는다(부서명·시스템명·인물명이 본문에
-등장해야 한다).
+코퍼스는 **`docs/smoke/corpus/`** 에 있다(문서 6개, 하위 폴더 3개). 실행 절차와 코퍼스 구성
+설명은 `docs/smoke/README.md` 에 있다.
 
 ```
-$TMP/docs/인사/채용계획.md      — 인사팀·그리팅 ATS 언급, 본문에 "온보딩.md" 참조
-$TMP/docs/인사/온보딩.md        — 인사팀 언급, 본문에 "채용계획.md" 참조
-$TMP/docs/개발/아키텍처.md      — 연구개발팀·Ollama 언급, 본문에 "README.md" 참조
-$TMP/docs/개발/벡터설계.md      — 연구개발팀·SQLite 언급
-$TMP/docs/개발/README.md        — 본문에 자기 파일명 "README.md" 언급
-$TMP/docs/기타/메모.md          — 다른 문서와 겹치는 주제가 없는 내용
+docs/smoke/corpus/인사/채용계획.md   — 인사팀·그리팅 ATS 언급, 본문에 "온보딩.md" 참조
+docs/smoke/corpus/인사/온보딩.md     — 인사팀 언급, 본문에 "채용계획.md" 참조
+docs/smoke/corpus/개발/아키텍처.md   — 연구개발팀·Ollama 언급, 본문에 "README.md" 참조
+docs/smoke/corpus/개발/벡터설계.md   — 연구개발팀·SQLite 언급
+docs/smoke/corpus/개발/README.md     — 본문에 자기 파일명 "README.md" 언급
+docs/smoke/corpus/기타/메모.md       — 다른 문서와 겹치는 주제가 없는 내용
 ```
 
 ```bash
-corpbrain scan "$TMP/docs" --out "$TMP/wiki" --force-gates
-corpbrain graph --out "$TMP/wiki" --stats
-corpbrain graph --out "$TMP/wiki" --central
-corpbrain graph --out "$TMP/wiki" --neighbors 인사/채용계획.md.md
+OUT=$(mktemp -d)                  # 산출물은 반드시 리포지토리 밖
+corpbrain scan docs/smoke/corpus --out "$OUT" --force-gates
+corpbrain graph --out "$OUT" --stats
+corpbrain graph --out "$OUT" --central
+corpbrain graph --out "$OUT" --neighbors 인사/채용계획.md.md
 ```
+
+입력 코퍼스를 리포지토리에 두는 것은 안전하다 — 테스트는 `tests/fixtures/` 와 `tmp_path`
+만 쓰고 `docs/` 를 읽지 않는다. **`--out` 만 리포지토리 밖으로 잡으면 된다**(2026-08-22
+사고는 산출물이 픽스처 폴더에 남아 생긴 것이다).
 
 체크리스트:
 
