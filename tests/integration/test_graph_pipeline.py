@@ -173,11 +173,35 @@ def _sim(left: str, right: str) -> tuple[str, str, str]:
 
 
 def _without_generated_at(wiki: Path) -> str:
-    """`--force` 재실행 비교용 — 매 실행 달라지는 front-matter 시각 한 줄만 뺀다."""
-    return "\n".join(
-        line for line in wiki.read_text(encoding="utf-8").splitlines()
-        if not line.startswith("generated_at:")
-    )
+    """`--force` 재실행 비교용 — **front-matter 안의** 생성 시각 한 줄만 뺀다.
+
+    파일 전체에서 접두사로 지우지 않는다. 요약 본문에 같은 접두사로 시작하는 줄이 들어오면
+    양쪽에서 똑같이 지워져 실제 차이가 조용히 가려진다 — 스펙 §4.5가 「관련 문서」를 헤딩
+    문자열 탐색이 아니라 마커 블록으로 정의한 것과 같은 이유다.
+    """
+    lines = wiki.read_text(encoding="utf-8").splitlines()
+    assert lines and lines[0] == "---", f"front-matter 로 시작하지 않는 위키: {wiki}"
+    end = lines.index("---", 1)
+    front = [line for line in lines[1:end] if not line.startswith("generated_at:")]
+    return "\n".join([lines[0], *front, *lines[end:]])
+
+
+def _rows(out_dir: Path) -> tuple[list[Any], list[Any]]:
+    """결정성 비교용 전체 행 — 튜플 집합이 보지 않는 `label`·`weight`까지 포함한다.
+
+    `_nodes`·`_edges`는 기대값을 손으로 적기 위해 `(종류, 상대경로)`로 줄여 읽는다. 그래서
+    저장된 라벨이나 유사도 가중치가 실행마다 달라져도 그 헬퍼로는 잡히지 않는다. 스펙 §3
+    항목4가 "그래프 DB **내용**이 동일하다"고 한 범위를 이 헬퍼가 덮는다.
+    """
+    conn = sqlite3.connect(graph_path_for(out_dir))
+    nodes = conn.execute(
+        "SELECT id, type, label, props_json FROM nodes ORDER BY id"
+    ).fetchall()
+    edges = conn.execute(
+        "SELECT src, dst, type, weight FROM edges ORDER BY 1, 2, 3"
+    ).fetchall()
+    conn.close()
+    return nodes, edges
 
 
 def _related_block(wiki: Path) -> str:
@@ -321,12 +345,13 @@ def test_second_run_changes_nothing(
 
     run_scan(_config(corpus, out_dir))
     first_files = {p: p.read_bytes() for p in sorted(out_dir.rglob("*.md"))}
-    first_edges = _edges(out_dir)
+    first_edges, first_rows = _edges(out_dir), _rows(out_dir)
 
     result = run_scan(_config(corpus, out_dir))
 
     assert {p: p.read_bytes() for p in sorted(out_dir.rglob("*.md"))} == first_files
     assert _edges(out_dir) == first_edges
+    assert _rows(out_dir) == first_rows
     assert result.graph is not None
     assert result.graph.related_updated_count == 0
 
@@ -344,7 +369,7 @@ def test_forced_rerun_produces_the_same_graph_and_bodies(
     out_dir = tmp_path / "wiki"
 
     run_scan(_config(corpus, out_dir, force=True))
-    first_nodes, first_edges = _nodes(out_dir), _edges(out_dir)
+    first_nodes, first_edges, first_rows = _nodes(out_dir), _edges(out_dir), _rows(out_dir)
     first_bodies = {
         p.relative_to(out_dir): _without_generated_at(p) for p in sorted(out_dir.rglob("*.md"))
     }
@@ -353,6 +378,7 @@ def test_forced_rerun_produces_the_same_graph_and_bodies(
 
     assert _nodes(out_dir) == first_nodes
     assert _edges(out_dir) == first_edges
+    assert _rows(out_dir) == first_rows  # 라벨·가중치까지 (`_rows` 독스트링)
     assert {
         p.relative_to(out_dir): _without_generated_at(p) for p in sorted(out_dir.rglob("*.md"))
     } == first_bodies
@@ -361,24 +387,28 @@ def test_forced_rerun_produces_the_same_graph_and_bodies(
 def test_forced_rerun_actually_resummarizes(
     corpus: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """위 테스트가 «아무것도 안 해서» 통과하지 않음을 보인다 — `--force`는 실제로 재요약한다."""
-    calls: list[str] = []
+    """위 테스트가 «아무것도 안 해서» 통과하지 않음을 보인다 — `--force`는 실제로 재요약한다.
+
+    URL이 아니라 **어느 문서를 요약했는지**를 모은다. 요약 호출은 URL이 전부 같아서 개수만
+    세면 한 문서를 여섯 번 부르고 나머지를 건너뛴 경우와 구분되지 않는다.
+    """
+    summarized: list[str] = []
     stub = _stub()
 
     def counting(url: str, **kwargs: Any) -> Any:
         if not url.endswith("/api/tags") and not url.endswith("/api/embeddings"):
-            calls.append(url)
+            summarized.append(_which((kwargs.get("payload") or {}).get("prompt", "")))
         return stub(url, **kwargs)
 
     monkeypatch.setattr(gateway_module, "request_json", counting)
     out_dir = tmp_path / "wiki"
 
     run_scan(_config(corpus, out_dir, force=True))
-    first = len(calls)
+    first = list(summarized)
     run_scan(_config(corpus, out_dir, force=True))
 
-    assert first == len(FILES)
-    assert len(calls) == first * 2  # 두 번째 실행도 전부 재요약했다
+    assert sorted(first) == sorted(FILES)
+    assert sorted(summarized[len(first) :]) == sorted(FILES)  # 두 번째 실행도 전 문서를 재요약
 
 
 # --- 완료의 정의 5: 벡터 없음 → 부분 그래프 ---------------------------------------
