@@ -127,7 +127,14 @@ def build_graph(
 def _attribute_nodes(
     facts: Sequence[DocFacts], *, attribute: str, prefix: str, node_type: NodeType
 ) -> list[GraphNode]:
-    """태그·엔티티 노드를 정규화 키로 병합해 만든다."""
+    """태그·엔티티 노드를 정규화 키로 병합해 만든다.
+
+    **이 규칙을 바꾸면 `label_index()`도 함께 간다.** 저장소 계약(§4.4)에 노드 조회가 없어
+    `graph` 조회 명령이 라벨을 여기서 다시 만들기 때문이다 — 한쪽만 고치면 위키 「관련 문서」와
+    `graph --neighbors`가 같은 노드를 다르게 표시하고, 오류 없이 두 화면이 어긋난다.
+    (계약에 노드 조회를 더해 이 의존을 없애는 것은 후속 PR 대상이다 —
+    `docs/loop/DECISION_CHECKPOINT-v0.6-cli.md` 후속-2.)
+    """
     variants: dict[str, list[str]] = {}
     for doc in facts:
         for raw in getattr(doc, attribute):

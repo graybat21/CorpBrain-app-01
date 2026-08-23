@@ -556,3 +556,29 @@ def test_cli_neighbors_rejects_an_absolute_source_path_outside_out_dir(
 
     assert code == cli.EXIT_PRECONDITION_FAILED
     assert "그래프에 없는 문서" in capsys.readouterr().err
+
+
+def test_cli_central_matches_the_graph_after_a_real_scan(
+    corpus: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    """`--central`도 손으로 seed한 저장소가 아니라 실제 scan 결과를 조회한다."""
+    from corpbrain import cli
+    from corpbrain.core.graphstore import SqliteGraphStore
+
+    monkeypatch.setattr(gateway_module, "request_json", _stub())
+    out_dir = tmp_path / "wiki"
+    run_scan(_config(corpus, out_dir))
+
+    with SqliteGraphStore(graph_path_for(out_dir)) as store:
+        ranking = store.degree_ranking()
+
+    assert cli.main(["graph", "--out", str(out_dir), "--central"]) == 0
+    out = capsys.readouterr().out.splitlines()
+
+    assert len(out) == len(ranking) == len(FILES)
+    # 출력 순서가 저장소의 순서(차수 내림차순, 동점은 id 사전순)와 같다.
+    for line, (doc_id, degree) in zip(out, ranking, strict=True):
+        assert doc_id in line
+        assert line.split()[0] == str(degree)
+    # 고립 문서는 차수가 가장 낮아 맨 끝이다.
+    assert "메모.txt" in out[-1]
