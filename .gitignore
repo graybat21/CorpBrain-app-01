@@ -30,3 +30,6 @@ dist/
 
 # OS
 .DS_Store
+
+# 수동 스모크 스크래치 — 코퍼스는 리포지토리 밖에서 돌린다 (docs/SMOKE.md 실행 H)
+/smoke-v0.6/
