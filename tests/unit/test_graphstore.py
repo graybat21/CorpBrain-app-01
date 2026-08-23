@@ -326,3 +326,50 @@ def test_writable_open_still_creates_the_schema(tmp_path: Path) -> None:
         assert store.stats().documents == 0
 
     assert path.exists()
+
+
+# --- 노드 조회 (v0.6.1 후속-2 · 스펙 §4.4) ------------------------------------------
+
+
+def test_nodes_of_returns_stored_nodes(tmp_path: Path) -> None:
+    """저장된 값을 그대로 돌려준다 — 라벨을 다시 계산하지 않는다."""
+    with _store(tmp_path) as store:
+        store.replace_graph(
+            [
+                GraphNode(id="/w/a.txt", type=NodeType.DOCUMENT, label="채용 계획"),
+                GraphNode(id="tag:인사", type=NodeType.TAG, label="인사"),
+            ],
+            [],
+        )
+
+        found = store.nodes_of(["/w/a.txt", "tag:인사"])
+
+    assert found["/w/a.txt"].label == "채용 계획"
+    assert found["/w/a.txt"].type is NodeType.DOCUMENT
+    assert found["tag:인사"].type is NodeType.TAG
+
+
+def test_nodes_of_omits_unknown_ids(tmp_path: Path) -> None:
+    """없는 id는 빠진다 — 호출자가 `labels.get(id, id)`로 대비한다."""
+    with _store(tmp_path) as store:
+        store.replace_graph([_doc("/w/a.txt")], [])
+
+        assert store.nodes_of(["/w/a.txt", "tag:없음"]).keys() == {"/w/a.txt"}
+        assert store.nodes_of([]) == {}
+
+
+def test_nodes_of_handles_more_ids_than_the_sqlite_variable_limit(tmp_path: Path) -> None:
+    """sqlite 변수 상한(999)을 넘는 조회도 나눠서 처리한다 — `--max`를 크게 올린 경우."""
+    ids = [f"/w/{index:04d}.txt" for index in range(1200)]
+    with _store(tmp_path) as store:
+        store.replace_graph([_doc(node_id) for node_id in ids], [])
+
+        assert store.nodes_of(ids).keys() == set(ids)
+
+
+def test_nodes_of_deduplicates_repeated_ids(tmp_path: Path) -> None:
+    """`--neighbors`는 엣지 양 끝을 모아 넘기므로 같은 id가 여러 번 들어온다."""
+    with _store(tmp_path) as store:
+        store.replace_graph([_doc("/w/a.txt")], [])
+
+        assert store.nodes_of(["/w/a.txt"] * 5).keys() == {"/w/a.txt"}

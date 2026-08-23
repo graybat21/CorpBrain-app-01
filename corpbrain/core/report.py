@@ -234,8 +234,8 @@ def build_graph_neighbors_lines(
     Args:
         focus: 조회 대상 문서의 `doc_id`(원문 절대경로).
         edges: `GraphStore.neighbors(focus)` 결과.
-        labels: 노드 id → 표시 라벨. 코어 저장소 계약에 노드 조회가 없으므로 호출자가
-            `get_facts()`로 만들어 넘긴다.
+        labels: 노드 id → 표시 라벨. 호출자가 `GraphStore.nodes_of()`로 읽어 넘긴다 —
+            저장된 `nodes.label` 그대로다 (§4.4).
     """
     lines = [f"{labels.get(focus, focus)}  —  {focus}"]
     if not edges:
