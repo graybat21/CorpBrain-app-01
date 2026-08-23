@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import sqlite3
 import sys
 from pathlib import Path
 from typing import TextIO
@@ -610,6 +611,14 @@ def _run_graph(args: argparse.Namespace) -> int:
                 lines = build_graph_neighbors_lines(
                     doc_id, store.neighbors(doc_id), labels=labels
                 )
+    except sqlite3.Error as exc:
+        # 개봉은 됐지만 조회에서 깨지는 DB(손상된 페이지 등)를 raw traceback으로 흘리지
+        # 않는다 — 다른 명령과 같이 선행 조건 실패로 정리한다.
+        _log(
+            f"선행 조건 실패: 그래프 DB를 읽지 못했습니다: {exc} — "
+            f"{path} 를 지우고 다시 scan 하세요."
+        )
+        return EXIT_PRECONDITION_FAILED
     finally:
         store.close()
 
@@ -627,11 +636,22 @@ def _resolve_graph_document(out_dir: Path, raw: str) -> str:
     경로 해석은 어댑터의 몫이다 — 코어는 경로 해석 책임을 지지 않는다(코어 no-I/O 불변식).
     """
     for wiki in (out_dir / raw, out_dir / f"{raw}{core.WIKI_SUFFIX}"):
-        if wiki.is_file():
+        # `out_dir` 하위일 때만 위키로 본다. `raw`가 절대경로면 `out_dir / raw`는 그 경로
+        # 자체가 되는데, 그것이 front-matter를 가진 **원문**(다른 도구의 위키, 스캔 대상에
+        # 섞인 CorpBrain 위키 등)이면 그 안의 `source_path`를 읽어 엉뚱한 문서로 간다.
+        if wiki.is_file() and _is_within(wiki, out_dir):
             doc_id = read_source_path(wiki)
             if doc_id:
                 return doc_id
     return raw
+
+
+def _is_within(path: Path, root: Path) -> bool:
+    """`path`가 `root` 아래인가. 심볼릭 링크·`..`를 풀어서 판정한다."""
+    try:
+        return path.resolve().is_relative_to(root.resolve())
+    except OSError:
+        return False
 
 
 def _emit_plan_report(config: core.ScanConfig) -> int:

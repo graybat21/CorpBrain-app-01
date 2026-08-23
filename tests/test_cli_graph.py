@@ -168,3 +168,31 @@ def test_neighbors_accepts_three_path_forms(
 
     assert code == cli.EXIT_OK
     assert "설계 문서" in capsys.readouterr().out
+
+
+def test_query_failure_after_open_is_a_precondition_failure(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """리뷰 지적 ⓐ — 개봉 후 조회에서 깨지는 DB를 raw traceback으로 흘리지 않는다.
+
+    `SqliteGraphStore.__init__`은 sqlite 오류를 감싸지만 `stats()`·`neighbors()`·
+    `iter_facts()`는 감싸지 않았다. 다른 명령과 같이 exit 1로 정리한다.
+    """
+    import sqlite3
+
+    from corpbrain.core import graphstore
+
+    out_dir = tmp_path / "wiki"
+    _seed(out_dir)
+
+    def _boom(self: object) -> object:
+        raise sqlite3.DatabaseError("database disk image is malformed")
+
+    monkeypatch.setattr(graphstore.SqliteGraphStore, "stats", _boom)
+
+    code = cli.main(["graph", "--out", str(out_dir), "--stats"])
+
+    assert code == cli.EXIT_PRECONDITION_FAILED
+    err = capsys.readouterr().err
+    assert "읽지 못했습니다" in err
+    assert "다시 scan" in err

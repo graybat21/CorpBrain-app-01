@@ -476,3 +476,83 @@ def test_duplicate_source_path_is_reported_not_swallowed(
     assert result.graph is not None
     assert len(result.graph.duplicate_sources) == 1
     assert any("같은 원문을 가리키는 위키" in line for line in build_summary_lines(result))
+
+
+# --- 리뷰 지적 ① — CLI 출력이 DB 실측과 일치하는가 (완료의 정의 3) ------------------
+
+
+def test_cli_stats_numbers_match_the_database(
+    corpus: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    """완료의 정의 3: `graph --stats` 출력의 개수가 **DB 실측과 일치**한다.
+
+    빌더 단위테스트는 손으로 만든 `GraphStats`를, 저장소 단위테스트는 `stats()` 자체를
+    검증한다. 그 둘의 **결합**은 여기서만 단언된다 — 빌더가 태그 수를 엔티티 자리에 넣어도
+    양쪽 단위테스트는 통과한다.
+    """
+    from corpbrain import cli
+    from corpbrain.core.graphstore import SqliteGraphStore
+
+    monkeypatch.setattr(gateway_module, "request_json", _stub())
+    out_dir = tmp_path / "wiki"
+    run_scan(_config(corpus, out_dir))
+
+    with SqliteGraphStore(graph_path_for(out_dir)) as store:
+        stats = store.stats()
+
+    assert cli.main(["graph", "--out", str(out_dir), "--stats"]) == 0
+    out = capsys.readouterr().out
+
+    assert f"노드 {stats.nodes}개" in out
+    assert f"문서 {stats.documents} · 엔티티 {stats.entities} · 태그 {stats.tags}" in out
+    assert f"엣지 {stats.edges}개" in out
+    for kind, count in stats.edges_by_type.items():
+        assert f"{kind} {count}" in out
+
+
+def test_cli_neighbors_matches_the_graph_after_a_real_scan(
+    corpus: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    """손으로 seed한 저장소가 아니라 실제 scan 결과를 조회한다."""
+    from corpbrain import cli
+
+    monkeypatch.setattr(gateway_module, "request_json", _stub())
+    out_dir = tmp_path / "wiki"
+    run_scan(_config(corpus, out_dir))
+
+    assert cli.main(["graph", "--out", str(out_dir), "--neighbors", "개발/아키텍처.md.md"]) == 0
+    out = capsys.readouterr().out
+
+    # 아키텍처 → README 단방향 참조와 벡터설계와의 유사도(정확히 임계치)가 함께 보인다.
+    assert "REFERENCES →" in out
+    assert "SEMANTICALLY_SIMILAR" in out
+    assert "README" in out
+    # 자기 자신은 결코 이웃으로 나오지 않는다 — 머리줄 뒤로는 자기 `doc_id`가 없다.
+    # (문자열 수를 세면 안 된다: "아키텍처"는 제목·경로·태그로도 등장한다.)
+    focus = str(corpus / "개발/아키텍처.md")
+    header, *neighbors = out.splitlines()
+    assert focus in header
+    assert all(focus not in line for line in neighbors)
+
+
+def test_cli_neighbors_rejects_an_absolute_source_path_outside_out_dir(
+    corpus: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    """리뷰 지적 ③ — `out_dir` 밖의 원문을 위키로 오인해 front-matter를 읽지 않는다.
+
+    원문이 front-matter를 가진 마크다운이면(다른 도구의 위키, 스캔 대상에 섞인 CorpBrain
+    위키) 그 안의 `source_path`를 읽어 **엉뚱한 문서**를 보여줄 수 있었다.
+    """
+    from corpbrain import cli
+
+    monkeypatch.setattr(gateway_module, "request_json", _stub())
+    out_dir = tmp_path / "wiki"
+    run_scan(_config(corpus, out_dir))
+
+    decoy = tmp_path / "decoy.md"
+    decoy.write_text('---\nsource_path: "/엉뚱한/원본.txt"\n---\n\n# 미끼\n', encoding="utf-8")
+
+    code = cli.main(["graph", "--out", str(out_dir), "--neighbors", str(decoy)])
+
+    assert code == cli.EXIT_PRECONDITION_FAILED
+    assert "그래프에 없는 문서" in capsys.readouterr().err
