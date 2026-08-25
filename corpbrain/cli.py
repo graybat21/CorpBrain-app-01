@@ -285,6 +285,36 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="URL",
         help=f"로컬 Ollama 주소 (기본 {core.DEFAULT_OLLAMA_URL}).",
     )
+    # v0.7: 하이브리드가 기본 동작이고, 되돌리는 플래그를 두어 하위 호환을 확보한다 (§4.4).
+    # 플래그 이름에 «hybrid»를 쓰지 않는다 — 그 단어는 업계에서 BM25 결합을 뜻한다 (§2).
+    search.add_argument(
+        "--no-graph",
+        dest="no_graph",
+        action="store_true",
+        help="그래프 확산 없이 코사인 단독으로 검색한다 (v0.4 동작).",
+    )
+    search.add_argument(
+        "--graph-decay",
+        dest="graph_decay",
+        type=float,
+        default=core.DEFAULT_GRAPH_DECAY,
+        metavar="FLOAT",
+        help=(
+            f"그래프 확산 감쇠 계수 α — 0 과 1 사이 (기본 {core.DEFAULT_GRAPH_DECAY}, "
+            "실측 전 잠정값)."
+        ),
+    )
+    search.add_argument(
+        "--expand-edges",
+        dest="expand_edges",
+        default=None,
+        metavar="LIST",
+        help=(
+            "확산에 쓸 엣지 종류를 쉼표로 나열한다 "
+            f"(기본 {','.join(sorted(str(e) for e in core.DEFAULT_EXPAND_EDGES))}; "
+            f"쓸 수 있는 값 {','.join(str(e) for e in core.EdgeType)})."
+        ),
+    )
 
     plan = subparsers.add_parser(
         "plan",
@@ -553,17 +583,40 @@ def _run_doctor(args: argparse.Namespace) -> int:
 
 
 def _run_search(args: argparse.Namespace) -> int:
-    """`search` — 위키 인덱스에서 쿼리와 유사한 문서를 찾아 stdout에 낸다 (v0.4 스펙 §3 항목6·7).
+    """`search` — 위키 인덱스·그래프에서 쿼리와 관련된 문서를 찾아 stdout에 낸다.
 
-    인덱스 없음·쿼리 임베딩 실패는 exit 1, 결과 0건은 exit 0(정상 — 빈 결과도 정상 응답).
+    인덱스 없음·쿼리 임베딩 실패·잘못된 확산 인자·그래프 DB 손상은 exit 1, 결과 0건은
+    exit 0(정상 — 빈 결과도 정상 응답). 그래프 DB **부재**도 exit 0이며, 코사인 단독으로
+    검색했음을 stderr에 한 줄 알린다 (v0.7 §3 항목7 · §5).
+
+    그래프 DB 존재 확인을 어댑터가 한 번 더 하는 이유는 코어 반환 타입이 `list[SearchResult]`
+    하나로 고정돼 있어(§4.5) «그래프 없이 답했다»를 실어 보낼 자리가 없기 때문이다. 읽기만
+    하는 확인이라 코어의 판정을 바꾸지 않는다.
     """
     try:
+        expand_edges = (
+            core.DEFAULT_EXPAND_EDGES
+            if args.expand_edges is None
+            # 파싱도 코어가 맡는다 — CLI는 문자열을 그대로 넘긴다 (§4.4 · T10).
+            else core.parse_expand_edges(args.expand_edges)
+        )
         results = core.search_index(
-            args.out_dir, args.query, top_k=args.top_k, ollama_url=args.ollama_url
+            args.out_dir,
+            args.query,
+            top_k=args.top_k,
+            ollama_url=args.ollama_url,
+            graph=not args.no_graph,
+            graph_decay=args.graph_decay,
+            expand_edges=expand_edges,
         )
     except PreconditionError as exc:
         _log(f"선행 조건 실패: {exc}")
         return EXIT_PRECONDITION_FAILED
+    if not args.no_graph and not graph_path_for(args.out_dir).exists():
+        _log(
+            "그래프 DB가 없어 코사인 단독으로 검색했습니다 — "
+            f"`corpbrain scan <폴더> --out {args.out_dir}` 를 실행하면 그래프 확산이 켜집니다."
+        )
     for line in build_search_lines(results):
         print(line)
     return EXIT_OK
