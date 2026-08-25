@@ -116,7 +116,7 @@ def test_scan_config_graph_defaults_preserve_backward_compatibility() -> None:
     """신규 파라미터는 선택이고 기본값이 보존된다 (ROADMAP §5 하위 호환 불변식)."""
     config = ScanConfig(folder=Path("./docs"))
 
-    assert config.similarity_threshold == DEFAULT_SIMILARITY_THRESHOLD == 0.75
+    assert config.similarity_threshold == DEFAULT_SIMILARITY_THRESHOLD
     assert config.related_top_k == DEFAULT_RELATED_TOP_K == 5
 
 

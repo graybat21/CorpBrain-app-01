@@ -4,12 +4,14 @@
 이며, 그 상태에서 외부로 나가는 통신은 로컬 Ollama 호출 하나뿐이다. `[v0.5]`부터 클라우드 요약을
 **옵트인**으로 켤 수 있으며, 켜지 않으면 v0.4까지와 완전히 동일하게 동작한다.
 
-이 문서는 현재 버전(**v0.6**) 기준이며, 각 기능이 처음 등장한 버전을
-`[v0.1]` / `[v0.2]` / `[v0.3]` / `[v0.4]` / `[v0.5]` / `[v0.6]`으로 표시한다.
+이 문서는 현재 버전(**v0.6**, 임베딩 모델 기본값은 v0.7 진행 중 항목으로 반영됨) 기준이며,
+각 기능이 처음 등장한 버전을 `[v0.1]` / `[v0.2]` / `[v0.3]` / `[v0.4]` / `[v0.5]` / `[v0.6]` /
+`[v0.7]`로 표시한다.
 
 > ⚠️ **v0.4 파괴적 변경(BREAKING)** — `scan`은 이제 위키 생성과 함께 **항상 벡터 인덱싱까지
-> 수행**한다. 그러려면 임베딩 모델(기본 `nomic-embed-text`)이 로컬에 있어야 하며, 없으면
-> **`scan`이 차단**된다(exit 1, `ollama pull nomic-embed-text` 안내). 별도 플래그로 끌 수 없다 —
+> 수행**한다. 그러려면 임베딩 모델(기본 `qwen3-embedding:4b`, `[v0.7]`부터 — 이전 기본값은
+> `nomic-embed-text`, §13.5 참고)이 로컬에 있어야 하며, 없으면
+> **`scan`이 차단**된다(exit 1, `ollama pull qwen3-embedding:4b` 안내). 별도 플래그로 끌 수 없다 —
 > `corpbrain doctor`로 미리 확인하자.
 
 > ⚠️ **v0.3 파괴적 변경(BREAKING)** — v0.2까지 `scan`은 GPU가 없어도 그냥 돌았지만, v0.3부터는
@@ -65,7 +67,7 @@ v0.5·v0.6은 위 표에 이어진다.
    ```bash
    ollama serve                       # 로컬 서버 (기본 127.0.0.1:11434)
    ollama pull qwen2.5:7b-instruct    # 기본 요약 모델
-   ollama pull nomic-embed-text       # 기본 임베딩 모델 [v0.4] — 없으면 scan이 exit 1로 차단됨
+   ollama pull qwen3-embedding:4b     # 기본 임베딩 모델 [v0.4, 모델은 v0.7에서 변경] — 없으면 scan이 exit 1로 차단됨
    ```
    > `plan` / `scan --dry-run`은 Ollama가 필요 없다(LLM·네트워크 0).
 
@@ -110,8 +112,8 @@ uv run corpbrain scan <folder> [옵션]
 | `--force-gates` | (off) | 차단 게이트(GPU·토큰)를 무시하고 강행. `file_too_large` 스킵에는 영향 없음 | **v0.3** |
 | `--max-file-size MB` | `20` | 개별 파일 크기 상한(MB). 초과 파일은 `file_too_large`로 스킵 | **v0.3** |
 | `--max-total-tokens N` | `200000` | 스캔 전체 예상 토큰 예산. 초과 시 **차단**(exit 3) | **v0.3** |
-| `--embed-model NAME` | `nomic-embed-text` | 인덱싱에 쓸 임베딩 모델. 환경변수 `CORPBRAIN_EMBED_MODEL`로도 지정(플래그가 우선). 없으면 `scan` 차단(exit 1) | **v0.4** |
-| `--similarity-threshold F` | `0.75` | 지식그래프의 유사도 엣지를 만드는 코사인 하한(이 값 **이상**이면 연결) | **v0.6** |
+| `--embed-model NAME` | `qwen3-embedding:4b` | 인덱싱에 쓸 임베딩 모델. 환경변수 `CORPBRAIN_EMBED_MODEL`로도 지정(플래그가 우선). 없으면 `scan` 차단(exit 1). 기본값은 v0.7에서 `nomic-embed-text`에서 교체됨(§13.5) | **v0.4** |
+| `--similarity-threshold F` | `0.5717` | 지식그래프의 유사도 엣지를 만드는 코사인 하한(이 값 **이상**이면 연결). 기본값은 v0.7에서 `0.75`에서 재산정됨(§13.5) | **v0.6** |
 | `--related-top-k N` | `5` | 위키 「관련 문서」 섹션에 넣을 최대 항목 수 | **v0.6** |
 
 **자원 게이팅 `[v0.3, v0.4에서 토큰 산정 확장]`** — 본격 처리 전에 세 축을 강제한다:
@@ -238,7 +240,7 @@ uv run corpbrain doctor [--model NAME] [--embed-model NAME] [--ollama-url URL]
 | 옵션 | 기본값 | 설명 |
 |---|---|---|
 | `--model NAME` | `qwen2.5:7b-instruct` | 존재를 점검할 요약 모델(환경변수 `CORPBRAIN_MODEL`도 가능) |
-| `--embed-model NAME` | `nomic-embed-text` | 존재를 점검할 임베딩 모델(환경변수 `CORPBRAIN_EMBED_MODEL`도 가능) `[v0.4]` |
+| `--embed-model NAME` | `qwen3-embedding:4b` | 존재를 점검할 임베딩 모델(환경변수 `CORPBRAIN_EMBED_MODEL`도 가능) `[v0.4, 기본값은 v0.7에서 변경]` |
 | `--ollama-url URL` | `http://127.0.0.1:11434` | 로컬 Ollama 주소 |
 
 점검 항목과 실패 시 안내(순서 = 설치 → 구동 → 대상 모델 → **임베딩 모델** → GPU → 게이트 임계값):
@@ -257,7 +259,7 @@ CorpBrain doctor — 환경 점검
   [OK] Ollama 설치됨
   [OK] Ollama 데몬 구동 중
   [실패] 모델 없음: qwen2.5:7b-instruct — `ollama pull qwen2.5:7b-instruct`
-  [실패] 임베딩 모델 없음: nomic-embed-text — `ollama pull nomic-embed-text`
+  [실패] 임베딩 모델 없음: qwen3-embedding:4b — `ollama pull qwen3-embedding:4b`
   [경고] CPU — scan은 GPU 없이 --force-gates 필요
   [정보] 게이트 임계: 파일 20,000,000 bytes · 총토큰 200,000
 준비 미완료 — 위 [실패] 항목을 해결한 뒤 다시 확인하세요.
@@ -350,8 +352,11 @@ source_bytes: <숫자>
   `--force-gates`를 붙인다(느림). `corpbrain doctor`로 하드웨어 확인 가능.
 - **`자원 게이트 차단: 스캔 전체 예상 토큰 …이 예산 …을 초과`** `[v0.3]` → `--max-total-tokens`를 올리거나
   입력 폴더를 좁히거나, `--force-gates`로 강행(v0.4부터 이 예산엔 임베딩 비용 근사도 포함된다).
-- **`선행 조건 실패: 대상 모델을 찾지 못했습니다: nomic-embed-text`** `[v0.4]` → 임베딩 모델 미설치.
-  `ollama pull nomic-embed-text` (다른 모델을 쓰려면 `--embed-model`). `corpbrain doctor`로 확인 가능.
+- **`선행 조건 실패: 대상 모델을 찾지 못했습니다: qwen3-embedding:4b`** `[v0.4]` → 임베딩 모델 미설치.
+  `ollama pull qwen3-embedding:4b` (다른 모델을 쓰려면 `--embed-model`). `corpbrain doctor`로 확인 가능.
+- **`선행 조건 실패: 인덱스가 다른 임베딩 모델로 생성되어 있습니다`** `[v0.4]` → v0.7 이전에 만든
+  인덱스(기본 모델이 `nomic-embed-text`였을 때)를 v0.7 이후 기본값으로 다시 스캔하면 뜬다.
+  안내대로 기존 모델을 `--embed-model`로 맞추거나, 인덱스를 지우고 `--force`로 새로 만든다(§13.5).
 - **`선행 조건 실패: 인덱스가 없습니다`** `[v0.4]` → `search`의 `--out` 폴더에 아직 `scan`을 돌리지
   않았거나 경로가 틀림. 먼저 `corpbrain scan <folder> --out <그 폴더>`를 실행한다.
 - **모든 파일이 `LLM JSON 파싱 실패` + `CUDA error ... PTX ... unsupported toolchain`** → CorpBrain이
@@ -397,7 +402,7 @@ corpbrain scan ./docs --out ./wiki --engine cloud
 
 - **나가는 것**: 요약 대상 문서 텍스트(`--max-chars`까지 절단, PII 마스킹 후)와 모델 이름.
 - **나가지 않는 것**: API 키(환경변수에서만 읽고 디스크에 쓰지 않는다), 임베딩(**항상 로컬**
-  `nomic-embed-text` — 엔진과 무관하다), 파일 경로 목록, 텔레메트리.
+  `qwen3-embedding:4b` — 엔진과 무관하다), 파일 경로 목록, 텔레메트리.
 - **Ollama가 아예 없어도 된다**: `--engine cloud`는 로컬 Ollama가 없으면 위키만 만들고 벡터
   인덱싱을 건너뛴다(종료 요약에 `인덱싱 생략`으로 알린다). 이 경우 `corpbrain search`로는
   해당 문서를 찾을 수 없으며, 나중에 Ollama를 설치하고 `--force`로 다시 스캔하면 채워진다.
@@ -491,7 +496,7 @@ PII 마스킹 7건 (문서 2개) — 주민등록번호 4건, 전화번호 2건,
 
 | 플래그 | 기본값 | 하는 일 |
 |---|---|---|
-| `--similarity-threshold` | `0.75` | 이 값 **이상**이면 유사도 엣지를 만든다 |
+| `--similarity-threshold` | `0.5717` | 이 값 **이상**이면 유사도 엣지를 만든다(v0.7에서 재산정, §13.5) |
 | `--related-top-k` | `5` | 「관련 문서」에 넣을 최대 항목 수 |
 
 임계치를 바꿔 보려면 `scan`을 다시 돌리면 된다. 문서가 그대로면 **재요약은 일어나지 않고**
@@ -516,33 +521,46 @@ corpbrain scan ./docs --out ./wiki --similarity-threshold 0.85
 `SEMANTICALLY_SIMILAR` 엣지만은 **어떤 임베딩 모델을 쓰느냐**에 따라 품질이 크게 갈린다.
 나머지 3종(태그·엔티티·참조)은 임베딩과 무관하다.
 
-한국어 문서 6개로 실측한 결과다(`docs/SMOKE.md` 실행 H).
+> ⚠️ **v0.7 파괴적 변경(BREAKING)** — 기본 임베딩 모델이 `nomic-embed-text`에서
+> **`qwen3-embedding:4b`**로, 기본 유사도 임계치가 `0.75`에서 **`0.5717`**로 바뀌었다
+> (issue #42, 근거는 `docs/SMOKE.md` 실행 I). **v0.6 이하로 만든 인덱스가 있다면** 다음
+> `scan`에서 모델 불일치로 막힌다 — 안내대로 인덱스를 지우고 `--force`로 다시 만들거나,
+> 예전처럼 쓰려면 `--embed-model nomic-embed-text --similarity-threshold 0.75`를 명시한다.
 
-| | 기본값 `nomic-embed-text` | `bge-m3` |
+**바뀐 이유**: 한국어 문서 6개(v0.6 실행 H)와 24개(v0.7 실행 I) 두 표본 모두에서
+`nomic-embed-text`가 **무관한 문서 쌍에 관련 있는 쌍보다 높은 점수**를 주는 경우가 반복
+확인됐다. `--similarity-threshold`를 올리거나 내려도 순서 자체가 틀려 고쳐지지 않는다.
+
+| | `nomic-embed-text`(v0.6 이하 기본값) | `qwen3-embedding:4b`(v0.7 기본값) |
 |---|---|---|
-| 관련 있는 문서를 1순위로 꼽은 비율 | **1/4** | **4/4** |
-| 유사도 값 범위 | 0.64 ~ 0.87 | 0.30 ~ 0.53 |
+| 관련 있는 문서를 1순위로 꼽은 비율(24문서) | 6/22 (27%) | **18/22 (82%)** |
+| 유사도 값 범위(24문서) | — | 0.20 ~ 0.70 |
 
-기본 모델에서는 **무관한 문서 쌍이 관련 있는 쌍보다 높은 점수를 받는 일이 생긴다.** 순서가
-어긋나므로 `--similarity-threshold` 를 올리거나 내려도 고쳐지지 않는다. 「관련 문서」 목록에
-엉뚱한 문서가 섞여 보인다면 이것이 원인일 가능성이 높다.
+**`qwen3-embedding:4b`도 완벽하지 않다.** 같은 클러스터 안에서 명시적으로 참조하지 않는
+문서끼리 어휘가 겹쳐 더 높은 점수를 받는 경우가 있다(예: 예산 문서와 원가분석 문서). 그래서
+기본 임계치(`0.5717`, 의도된 관련 쌍 코사인의 중앙값)는 **재현율보다 정밀도를 우선한다** —
+관련 쌍의 절반 정도만 잡지만, 무관한 쌍이 섞여 들어가는 경우는 249쌍 중 2개로 억제된다.
+자세한 실측은 `docs/SMOKE.md` 실행 I를 본다.
 
-품질이 중요하다면 다국어에 강한 임베딩 모델로 바꾼다.
+**선택 가능한 대안: `hf.co/mykor/KURE-v1-gguf`.** top-1 적중률만 보면 다른 후보(`bge-m3`,
+`bona/bge-m3-korean`, `KURE-v1-gguf` 모두 77% 안팎)와 기본값 사이에 큰 차이가 없어 보이지만,
+순위 기반 지표(MRR·Recall@3, `docs/SMOKE.md` 실행 I "보강" 절)로 다시 보면 `KURE-v1-gguf`가
+2위다 — top-1을 놓친 문서도 대부분 2~3위 안에 정답을 뒀다(Recall@3 100%, 기본값과 동률).
+`bge-m3`를 한국어 질의-문서 200만 쌍으로 파인튜닝한 모델(원본 `nlpai-lab/KURE-v1`, 고려대
+NLP랩)이라 출처도 명확하다. 기본값을 바꾸는 대신 이 모델을 시도해 보려면:
 
 ```bash
-ollama pull bge-m3
-corpbrain scan ./docs --out ./wiki-bge --embed-model bge-m3 --similarity-threshold 0.46
+ollama pull hf.co/mykor/KURE-v1-gguf
+corpbrain scan ./docs --out ./wiki-kure --embed-model hf.co/mykor/KURE-v1-gguf --similarity-threshold 0.6795
 ```
+
+(`bge-m3`를 직접 쓰려면 `--embed-model bge-m3 --similarity-threshold 0.46`.)
 
 - **`--out` 을 새 폴더로 잡는다.** 인덱스는 자기를 만든 임베딩 모델을 기록하고 혼입을
   거부하므로, 모델을 바꾸면 인덱스를 새로 만들어야 한다.
-- **임계치도 함께 바꾼다.** 모델마다 유사도 값의 분포가 달라 기본값 `0.75` 는 `bge-m3`
-  전 범위(최대 0.53)보다 높다 — 그대로 두면 유사도 엣지가 하나도 생기지 않는다.
-  위 표본에서는 `0.46` 근처가 적절했으나 코퍼스에 따라 다르므로 `graph --stats` 로 엣지
-  수를 보며 맞춘다.
-
-기본값을 바꾸지 않는 이유는 기존 인덱스를 무효화하는 파괴적 변경이 되기 때문이다. 후속
-버전에서 다시 판단한다.
+- **임계치도 함께 바꾼다.** 모델마다 유사도 값의 분포가 달라, `0.5717`은 `bge-m3`의 전
+  범위(최대 0.53)보다 높다 — 그대로 두면 유사도 엣지가 하나도 생기지 않는다. `graph --stats`
+  로 엣지 수를 보며 맞춘다.
 - 그래프 DB가 손상되거나 스키마 버전이 다르면 **자동 복구하지 않고 멈춘다**(exit 1).
   파일을 지우고 다시 `scan` 하면 된다.
 

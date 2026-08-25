@@ -16,6 +16,7 @@ from typing import Any
 import pytest
 from docx import Document
 
+from corpbrain import core
 from corpbrain.core import ScanConfig, run_scan
 from corpbrain.core import gateway as gateway_module
 from corpbrain.core.graphstore import graph_path_for
@@ -109,7 +110,13 @@ def _which(prompt: str) -> str:
 def _stub(*, with_vectors: bool = True):
     def request_json(url: str, *, method: str = "GET", payload: Any = None, **_: Any) -> Any:
         if url.endswith("/api/tags"):
-            return {"models": [{"name": "qwen2.5:7b-instruct"}, {"name": "nomic-embed-text"}]}
+            return {
+                "models": [
+                    {"name": "qwen2.5:7b-instruct"},
+                    {"name": "nomic-embed-text"},
+                    {"name": core.DEFAULT_EMBED_MODEL},
+                ]
+            }
         prompt = (payload or {}).get("prompt", "")
         if url.endswith("/api/embeddings"):
             assert with_vectors, "벡터 없는 시나리오에서는 임베딩을 호출하지 않는다"

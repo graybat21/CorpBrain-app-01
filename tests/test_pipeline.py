@@ -293,7 +293,13 @@ def test_graph_store_open_failure_closes_the_vector_index(
 
     def _request_json(url: str, *, method: str = "GET", payload: object = None, **_: object):
         if url.endswith("/api/tags"):
-            return {"models": [{"name": "qwen2.5:7b-instruct"}, {"name": "nomic-embed-text"}]}
+            return {
+                "models": [
+                    {"name": "qwen2.5:7b-instruct"},
+                    {"name": "nomic-embed-text"},
+                    {"name": DEFAULT_EMBED_MODEL},
+                ]
+            }
         raise AssertionError("그래프 개봉 실패 이후로는 진행하지 않는다")
 
     monkeypatch.setattr(gateway, "request_json", _request_json)
