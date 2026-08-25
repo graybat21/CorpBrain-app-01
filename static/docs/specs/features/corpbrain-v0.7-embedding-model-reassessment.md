@@ -1,7 +1,15 @@
 # 스펙: CorpBrain v0.7 — 임베딩 모델 재판단 (issue #42)
 
-- 상태: 확정
-- 최종 갱신: 2026-08-25
+- 상태: 완료
+- 최종 갱신: 2026-08-25 (구현 완료 — 실측 결과 반영)
+
+## 0. 구현 결과 (완료의 정의 3 반영)
+
+실측(`docs/smoke/embedding_reassessment.py`, 24문서 코퍼스, 5종 모델)에서 §4.1 규칙대로
+**`qwen3-embedding:4b`**가 top-1 적중률 최고(18/22, 82%)로 채택됐다. §4.2 규칙대로
+관련·무관 쌍 사이에 깨끗한 간극이 없어(§4.1 "전원 실패" 케이스) 대체 기준(관련 쌍 코사인의
+중앙값)을 적용, **`DEFAULT_SIMILARITY_THRESHOLD = 0.5717153219583704`**로 산정했다.
+`corpbrain/core/config.py`에 반영됨. 상세 실측 근거는 `docs/SMOKE.md` 실행 I.
 
 ## 1. 목표
 지식그래프의 `SEMANTICALLY_SIMILAR` 엣지가 의존하는 기본 임베딩 모델(`nomic-embed-text`)이

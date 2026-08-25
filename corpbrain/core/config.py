@@ -12,7 +12,7 @@ from pathlib import Path
 DEFAULT_OUT_DIR = Path("./corpbrain_wiki")
 DEFAULT_MODEL = "qwen2.5:7b-instruct"
 #: 임베딩 전용 모델 (v0.4 스펙 §4.1). 요약 모델과 별개로 프리플라이트에서 존재를 확인한다.
-DEFAULT_EMBED_MODEL = "nomic-embed-text"
+DEFAULT_EMBED_MODEL = "qwen3-embedding:4b"
 DEFAULT_MAX_FILES = 50
 DEFAULT_MAX_CHARS = 12000
 DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
@@ -47,7 +47,11 @@ MAX_PATH_LENGTH = 260
 
 #: `SEMANTICALLY_SIMILAR` 엣지를 만드는 코사인 유사도 하한 (v0.6 스펙 §4.7).
 #: 비교는 `>=`(이상)이며, 이 값과 정확히 같은 쌍도 엣지를 만든다 (§4.1).
-DEFAULT_SIMILARITY_THRESHOLD = 0.75
+#: v0.7 임베딩 모델 재판단(issue #42)에서 `qwen3-embedding:4b` 채택과 함께 재산정했다 —
+#: 24문서 코퍼스에서 "의도된 관련 쌍"의 코사인 중앙값. 관련·무관 쌍 사이에 깨끗한 간극이
+#: 없어(§4.1 "전원 실패" 케이스) 중간값 대신 이 대체 기준을 썼다. 근거는
+#: `docs/SMOKE.md` 실행 I, `static/docs/specs/features/corpbrain-v0.7-embedding-model-reassessment.md`.
+DEFAULT_SIMILARITY_THRESHOLD = 0.5717153219583704
 #: 위키 「관련 문서」 섹션에 넣을 최대 항목 수 (v0.6 스펙 §4.7).
 DEFAULT_RELATED_TOP_K = 5
 
