@@ -33,7 +33,3 @@ dist/
 
 # 수동 스모크 스크래치 — 코퍼스는 리포지토리 밖에서 돌린다 (docs/SMOKE.md 실행 H)
 /smoke-v0.6/
-
-# v0.7 임베딩 모델 재판단 실측 원본 (issue #42) — 결과 요약은 docs/SMOKE.md 실행 I에
-# 옮겨 적고, 재현 가능한 원시 데이터(수백 KB)는 커밋하지 않는다.
-docs/smoke/embedding_reassessment_results.*
