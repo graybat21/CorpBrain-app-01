@@ -25,6 +25,8 @@ from __future__ import annotations
 from corpbrain.core.config import (
     DEFAULT_CLOUD_MODEL,
     DEFAULT_EMBED_MODEL,
+    DEFAULT_EXPAND_EDGES,
+    DEFAULT_GRAPH_DECAY,
     DEFAULT_MAX_CHARS,
     DEFAULT_MAX_FILE_SIZE,
     DEFAULT_MAX_FILES,
@@ -64,6 +66,7 @@ from corpbrain.core.models import (
     GateVerdict,
     GeneratedWiki,
     GraphEdge,
+    GraphExpansion,
     GraphNode,
     GraphOutcome,
     GraphSkipReason,
@@ -91,6 +94,8 @@ from corpbrain.core.vectorstore import index_path_for
 __all__ = [
     "DEFAULT_CLOUD_MODEL",
     "DEFAULT_EMBED_MODEL",
+    "DEFAULT_EXPAND_EDGES",
+    "DEFAULT_GRAPH_DECAY",
     "DEFAULT_MAX_CHARS",
     "DEFAULT_MAX_FILES",
     "DEFAULT_MAX_FILE_SIZE",
@@ -115,6 +120,7 @@ __all__ = [
     "GeneratedWiki",
     "GpuGateError",
     "GraphEdge",
+    "GraphExpansion",
     "GraphNode",
     "GraphOutcome",
     "GraphSkipReason",

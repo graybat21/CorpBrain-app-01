@@ -9,6 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from corpbrain.core.models import EdgeType
+
 DEFAULT_OUT_DIR = Path("./corpbrain_wiki")
 DEFAULT_MODEL = "qwen2.5:7b-instruct"
 #: 임베딩 전용 모델 (v0.4 스펙 §4.1). 요약 모델과 별개로 프리플라이트에서 존재를 확인한다.
@@ -54,6 +56,24 @@ MAX_PATH_LENGTH = 260
 DEFAULT_SIMILARITY_THRESHOLD = 0.5717153219583704
 #: 위키 「관련 문서」 섹션에 넣을 최대 항목 수 (v0.6 스펙 §4.7).
 DEFAULT_RELATED_TOP_K = 5
+
+#: 그래프 시드 확산의 감쇠 계수 α (v0.7 스펙 §4.1). 확산 문서의 점수는
+#: `max(자기 코사인, 기준 시드 점수 × α)`이며, 열린 구간 `0 < α < 1`에서만
+#: 「확산 문서는 자기 시드를 추월하지 못한다」가 성립한다.
+#:
+#: **잠정값이다** — 스윕 범위 0.5~0.95의 가운데를 놓았을 뿐 실측 근거가 없다(스펙 §4.8·T11).
+#: 확정 절차: 사용자가 `docs/smoke/graph_decay_sweep.py`로 α를 스윕해 원시 출력을 전달하면,
+#: 스펙 §4.8 4번 규칙(top-1 → MRR → Recall@3 → α 작은 쪽)으로 값을 정해 이 한 줄만 교체한다.
+#: 자동 테스트는 이 상수를 참조하지 않고 `graph_decay=`를 명시적으로 넘긴다 — 교체가
+#: 테스트를 깨지 않게 하기 위함이다. **잠정값인 채로 릴리스하지 않는다.**
+DEFAULT_GRAPH_DECAY = 0.7
+
+#: 확산에 쓸 기본 엣지 종류 3종 (v0.7 스펙 §4.2). 임베딩이 포착하지 못하는 신호만 더한다.
+#: `SEMANTICALLY_SIMILAR`는 임베딩 코사인 그 자체라 같은 신호를 두 번 세게 되므로 기본에서
+#: 빠져 있다 — `--expand-edges`로 켤 수 있다.
+DEFAULT_EXPAND_EDGES: frozenset[EdgeType] = frozenset(
+    {EdgeType.TAGGED_WITH, EdgeType.CONTAINS_ENTITY, EdgeType.REFERENCES}
+)
 
 
 @dataclass(frozen=True)
