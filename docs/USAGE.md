@@ -542,13 +542,19 @@ corpbrain scan ./docs --out ./wiki --similarity-threshold 0.85
 관련 쌍의 절반 정도만 잡지만, 무관한 쌍이 섞여 들어가는 경우는 249쌍 중 2개로 억제된다.
 자세한 실측은 `docs/SMOKE.md` 실행 I를 본다.
 
-다른 후보 모델(`bge-m3`, `bona/bge-m3-korean`, `hf.co/mykor/KURE-v1-gguf`)도 82%에는
-못 미치지만 77% 안팎으로 `nomic-embed-text`보다는 확연히 낫다. 굳이 다른 모델을 쓰려면:
+**선택 가능한 대안: `hf.co/mykor/KURE-v1-gguf`.** top-1 적중률만 보면 다른 후보(`bge-m3`,
+`bona/bge-m3-korean`, `KURE-v1-gguf` 모두 77% 안팎)와 기본값 사이에 큰 차이가 없어 보이지만,
+순위 기반 지표(MRR·Recall@3, `docs/SMOKE.md` 실행 I "보강" 절)로 다시 보면 `KURE-v1-gguf`가
+2위다 — top-1을 놓친 문서도 대부분 2~3위 안에 정답을 뒀다(Recall@3 100%, 기본값과 동률).
+`bge-m3`를 한국어 질의-문서 200만 쌍으로 파인튜닝한 모델(원본 `nlpai-lab/KURE-v1`, 고려대
+NLP랩)이라 출처도 명확하다. 기본값을 바꾸는 대신 이 모델을 시도해 보려면:
 
 ```bash
-ollama pull bge-m3
-corpbrain scan ./docs --out ./wiki-bge --embed-model bge-m3 --similarity-threshold 0.46
+ollama pull hf.co/mykor/KURE-v1-gguf
+corpbrain scan ./docs --out ./wiki-kure --embed-model hf.co/mykor/KURE-v1-gguf --similarity-threshold 0.6795
 ```
+
+(`bge-m3`를 직접 쓰려면 `--embed-model bge-m3 --similarity-threshold 0.46`.)
 
 - **`--out` 을 새 폴더로 잡는다.** 인덱스는 자기를 만든 임베딩 모델을 기록하고 혼입을
   거부하므로, 모델을 바꾸면 인덱스를 새로 만들어야 한다.
