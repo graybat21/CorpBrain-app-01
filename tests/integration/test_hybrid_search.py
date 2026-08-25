@@ -14,6 +14,7 @@ from typing import Any
 
 import pytest
 
+from corpbrain import cli
 from corpbrain.core import gateway
 from corpbrain.core.errors import PreconditionError
 from corpbrain.core.graphstore import SqliteGraphStore, graph_path_for
@@ -275,3 +276,61 @@ def test_two_runs_return_identical_results(corpus: Path) -> None:
     second = search_index(corpus, "인사", top_k=3, graph_decay=ALPHA, expand_edges=NO_SIMILARITY)
 
     assert first == second
+
+
+# --- §3 항목5·2·10: 동점 순서와 CLI stdout 바이트 동일성 --------------------------
+
+
+def test_tie_group_order_follows_the_hierarchical_keys(corpus: Path) -> None:
+    """§3 항목5 — 같은 시드의 여러 이웃이 `시드 × α` 로 동점일 때의 순서.
+
+    채용계획·공지·복지제도 셋 다 온보딩의 이웃이라 점수가 `0.900 × α` 로 같다. 참조 관계가
+    먼저이고(키 1), 그 안에서는 공유 엔티티 수가 많은 쪽이 앞이다(키 2). 복지제도는 참조가
+    없어 셋 중 마지막이고 `--top-k 3` 에서 잘린다.
+    """
+    results = search_index(corpus, "인사", top_k=3, graph_decay=ALPHA, expand_edges=NO_SIMILARITY)
+
+    assert _ids(results) == [
+        ONBOARDING,  # 시드 (코사인 0.900)
+        HIRING,  # 참조 O · 공유 엔티티 1 · 공유 태그 1
+        NOTICE,  # 참조 O · 공유 엔티티 0
+    ]
+    tied = {result.score for result in results if result.expansion is not None}
+    assert len(tied) == 1  # 동점 그룹이 실제로 동점이다 — 단언이 공허하게 통과하지 않게 한다
+    assert WELFARE not in _ids(results)  # 참조가 없어 같은 점수에서도 뒤로 밀렸다
+
+
+def test_no_graph_stdout_is_byte_identical_to_the_deleted_graph_db_stdout(
+    corpus: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """§3 항목2 — 두 경로가 같은 한 줄을 타므로 stdout이 바이트 동일하다.
+
+    stderr는 §5의 안내 한 줄만큼 다르다 — 그래프를 **가지고 있는데 끈** 실행과 그래프가
+    **없는** 실행은 사용자에게 알릴 것이 다르다.
+    """
+    argv = ["search", "인사", "--out", str(corpus), "--top-k", "3"]
+
+    assert cli.main([*argv, "--no-graph"]) == cli.EXIT_OK
+    with_flag = capsys.readouterr()
+    graph_path_for(corpus).unlink()
+    assert cli.main(argv) == cli.EXIT_OK
+    deleted = capsys.readouterr()
+
+    assert with_flag.out == deleted.out
+    assert with_flag.err == ""
+    assert len([line for line in deleted.err.splitlines() if line.strip()]) == 1
+
+
+def test_two_cli_runs_are_byte_identical(
+    corpus: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """§3 항목10 — 동일 입력 2회 실행의 stdout이 바이트 동일하다."""
+    argv = ["search", "인사", "--out", str(corpus), "--top-k", "4", "--graph-decay", str(ALPHA)]
+
+    assert cli.main(argv) == cli.EXIT_OK
+    first = capsys.readouterr().out
+    assert cli.main(argv) == cli.EXIT_OK
+    second = capsys.readouterr().out
+
+    assert first == second
+    assert "└" in first  # 확산이 실제로 돌았다 — 단언이 공허하게 통과하지 않게 한다

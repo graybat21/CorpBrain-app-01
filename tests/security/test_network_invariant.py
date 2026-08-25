@@ -165,6 +165,80 @@ def test_graph_command_opens_no_sockets_at_all(
     assert watch_sockets.addresses == []  # localhost조차 열지 않는다
 
 
+def _seed_search_corpus(out_dir: Path) -> None:
+    """벡터 인덱스 + 그래프 DB를 심는다 — 확산이 실제로 일어나는 최소 코퍼스다."""
+    from corpbrain.core.graphstore import SqliteGraphStore, graph_path_for
+    from corpbrain.core.models import EdgeType, GraphEdge, GraphNode, NodeType
+    from corpbrain.core.vectorstore import SqliteVectorStore, index_path_for
+
+    store = SqliteVectorStore(index_path_for(out_dir))
+    store.set_model_name(DEFAULT_EMBED_MODEL)
+    store.upsert("/docs/a.md", [1.0, 0.0], {"title": "A", "source_path": "/docs/a.md"})
+    store.upsert("/docs/b.md", [0.0, 1.0], {"title": "B", "source_path": "/docs/b.md"})
+    store.close()
+
+    with SqliteGraphStore(graph_path_for(out_dir)) as graph_store:
+        graph_store.replace_graph(
+            [
+                GraphNode(id="/docs/a.md", type=NodeType.DOCUMENT, label="A"),
+                GraphNode(id="/docs/b.md", type=NodeType.DOCUMENT, label="B"),
+                GraphNode(id="/docs/c.md", type=NodeType.DOCUMENT, label="C"),
+                GraphNode(id="tag:t", type=NodeType.TAG, label="t"),
+            ],
+            [
+                GraphEdge(src="/docs/a.md", dst="tag:t", type=EdgeType.TAGGED_WITH),
+                GraphEdge(src="/docs/c.md", dst="tag:t", type=EdgeType.TAGGED_WITH),
+            ],
+        )
+
+
+def test_search_connects_once_for_the_query_embedding_and_the_graph_opens_nothing(
+    watch_sockets: SocketWatcher, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """v0.7 §3 항목11 — `search` 1회의 관문 호출은 쿼리 임베딩 **1회뿐**이다.
+
+    그래프 확산은 저장된 노드·엣지를 읽기만 하므로 추가 LLM 호출도 추가 네트워크 연결도
+    만들지 않는다. 확산이 실제로 일어났음을 함께 단언해 이 불변식이 공허하게 통과하지
+    않게 한다 — `test_watcher_flags_a_gateway_bypass`와 같은 취지다.
+    """
+    from corpbrain.core.search import search_index
+
+    calls: list[str] = []
+
+    def _request_json(url: str, *, method: str = "GET", payload: Any = None, **_: Any) -> Any:
+        calls.append(url)
+        return {"embedding": [1.0, 0.0]}
+
+    monkeypatch.setattr(gateway, "request_json", _request_json)
+
+    out_dir = tmp_path / "wiki"
+    _seed_search_corpus(out_dir)
+    results = search_index(out_dir, "질의", top_k=2, graph_decay=0.7)
+
+    assert len(calls) == 1  # 쿼리 임베딩 1회 — 그래프 단계는 관문을 부르지 않는다
+    assert calls[0].endswith("/api/embeddings")
+    assert any(result.expansion is not None for result in results)  # 확산이 실제로 돌았다
+    assert watch_sockets.addresses == []  # 관문을 우회해 직접 연 소켓이 없다
+
+
+def test_search_only_dials_the_given_localhost_url(
+    watch_sockets: SocketWatcher, tmp_path: Path
+) -> None:
+    """v0.7 §3 항목11 — 관문 스텁 없이 `search`가 실제로 여는 소켓은 localhost뿐이다."""
+    from corpbrain.core.errors import PreconditionError
+    from corpbrain.core.search import search_index
+
+    out_dir = tmp_path / "wiki"
+    _seed_search_corpus(out_dir)
+
+    with pytest.raises(PreconditionError):
+        search_index(out_dir, "질의", top_k=2, graph_decay=0.7)
+
+    assert watch_sockets.addresses  # 실제로 연결을 시도했다
+    assert watch_sockets.offenders(LOCALHOST_HOSTS) == []
+    assert {addr[1] for addr in watch_sockets.addresses} == {11434}
+
+
 def test_gateway_only_dials_the_given_localhost_url(watch_sockets: SocketWatcher) -> None:
     """관문 스텁 없이 detect가 실제로 여는 소켓은 지정한 localhost 주소뿐이다."""
     url = "http://127.0.0.1:11434"
