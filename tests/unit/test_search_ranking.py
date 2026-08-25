@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from corpbrain.core import (
     DEFAULT_EXPAND_EDGES,
     DEFAULT_GRAPH_DECAY,
@@ -16,7 +18,8 @@ from corpbrain.core import (
     ReferenceDirection,
     SearchResult,
 )
-from corpbrain.core.graph import rank_hybrid
+from corpbrain.core.errors import PreconditionError
+from corpbrain.core.graph import parse_expand_edges, rank_hybrid, validate_graph_decay
 
 # --- U1: 값 타입·설정 ---------------------------------------------------------
 
@@ -415,3 +418,53 @@ def test_a_document_is_never_its_own_neighbor() -> None:
     )
 
     assert [r.doc_id for r in results] == ["/a.md"]
+
+
+# --- U3: 입력 검증 ------------------------------------------------------------
+
+
+@pytest.mark.parametrize("alpha", [0.01, 0.5, 0.7, 0.99])
+def test_graph_decay_inside_the_open_interval_is_returned_as_is(alpha: float) -> None:
+    assert validate_graph_decay(alpha) == alpha
+
+
+@pytest.mark.parametrize("alpha", [0.0, 1.0, -0.1, 1.5, float("nan")])
+def test_graph_decay_outside_the_open_interval_is_rejected(alpha: float) -> None:
+    """§3 항목8 — 경계값 0.0·1.0을 포함해 범위 밖은 `PreconditionError`다. 클램프하지 않는다.
+
+    α ≥ 1은 확산 문서가 시드를 추월하거나 전부 동점이 되고, α ≤ 0은 확산 기여가 사라져
+    플래그가 무의미해진다. 조용히 다른 값으로 바꾸면 α를 스윕해 효과를 재는 측정 절차가
+    «준 값과 다른 값으로 계산된 결과»를 보게 된다 (§4.1).
+    """
+    with pytest.raises(PreconditionError):
+        validate_graph_decay(alpha)
+
+
+def test_expand_edges_parses_edge_type_values_verbatim() -> None:
+    """`EdgeType` StrEnum 값을 그대로 받는다 — 짧은 별칭을 새로 만들지 않는다 (§4.4)."""
+    assert parse_expand_edges("TAGGED_WITH,REFERENCES") == frozenset(
+        {EdgeType.TAGGED_WITH, EdgeType.REFERENCES}
+    )
+
+
+def test_expand_edges_trims_whitespace_and_absorbs_duplicates() -> None:
+    assert parse_expand_edges(" TAGGED_WITH , REFERENCES ,TAGGED_WITH") == frozenset(
+        {EdgeType.TAGGED_WITH, EdgeType.REFERENCES}
+    )
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "tagged_with",  # 소문자 — 어휘가 갈리지 않게 받아 주지 않는다
+        "",  # 빈 목록 — 확산을 끄는 길은 --no-graph 하나여야 한다
+        "   ",
+        "TAGGED_WITH,",  # 빈 항목
+        ",TAGGED_WITH",
+        "TAGGED_WITH,NOT_AN_EDGE",
+    ],
+)
+def test_expand_edges_rejects_malformed_input(raw: str) -> None:
+    """§4.4 입력 처리 규칙 표 — 소문자·빈 목록·빈 항목·미지의 값은 exit 1이 될 예외다."""
+    with pytest.raises(PreconditionError):
+        parse_expand_edges(raw)

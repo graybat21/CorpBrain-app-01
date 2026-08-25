@@ -12,6 +12,7 @@ import unicodedata
 from collections import Counter
 from collections.abc import Collection, Iterable, Mapping, Sequence
 
+from corpbrain.core.errors import PreconditionError
 from corpbrain.core.models import (
     DocFacts,
     EdgeType,
@@ -330,6 +331,59 @@ def _documents_sharing_attributes(
         for other, (tags, entities) in attributes.items()
         if other != doc_id and (tags.keys() & mine[0].keys() or entities.keys() & mine[1].keys())
     }
+
+
+# --- v0.7: 하이브리드 검색의 입력 검증 (스펙 §4.1·§4.4·§4.5) --------------------
+
+
+def validate_graph_decay(decay: float) -> float:
+    """감쇠 계수 α가 열린 구간 `0 < α < 1` 안인지 확인하고 그대로 돌려준다 (v0.7 §4.1 · T5).
+
+    검증을 CLI 파서가 아니라 **코어에 두는** 이유는 두 가지다 — 규칙이 한 곳에만 있어야
+    코어를 직접 부르는 후속 어댑터(GUI 등)도 같은 보호를 받고, 「확산 문서는 자기 시드를
+    추월하지 못한다」(§3 항목4)를 보장하는 성질이 순위 계산과 같은 파일에 놓인다.
+
+    **클램프하지 않는다.** α를 스윕해 효과를 재는 §4.8 측정 절차에서, 조용히 다른 값으로
+    바뀐 α는 결과를 설명 불가능하게 만든다.
+
+    Raises:
+        PreconditionError: `0 < α < 1` 밖(경계값 0.0·1.0 포함)이거나 NaN.
+    """
+    if not 0.0 < decay < 1.0:
+        raise PreconditionError(
+            f"--graph-decay 는 0 과 1 사이여야 합니다 (양 끝 제외): {decay} — "
+            f"1 이상이면 확산 문서가 시드를 추월하고, 0 이하면 확산 기여가 사라집니다."
+        )
+    return decay
+
+
+def parse_expand_edges(raw: str) -> frozenset[EdgeType]:
+    """`--expand-edges` 문자열을 엣지 종류 집합으로 파싱한다 (v0.7 §4.4 · T10).
+
+    파싱도 코어가 맡고 CLI는 문자열을 그대로 넘긴다 — `validate_graph_decay`와 같은 이유다.
+    `EdgeType` StrEnum 값을 **그대로** 받고 짧은 별칭을 새로 만들지 않는다. `graph --stats`
+    출력·DB의 `type` 컬럼·이 플래그가 한 문자열이어야 어휘가 갈리지 않는다.
+
+    쉼표 주변 공백은 다듬고 중복은 `frozenset`이 흡수한다. 빈 목록은 받아 주지 않는다 —
+    확산을 끄는 길은 `--no-graph` 하나여야 §3 항목2·7이 다루는 경로가 갈라지지 않는다.
+
+    Raises:
+        PreconditionError: 빈 목록·빈 항목·소문자·목록에 없는 값.
+    """
+    known = [str(edge_type) for edge_type in EdgeType]
+    items = [item.strip() for item in raw.split(",")]
+    if not raw.strip():
+        raise PreconditionError(
+            f"--expand-edges 가 비어 있습니다 — 확산을 끄려면 --no-graph 를 쓰세요. "
+            f"쓸 수 있는 값: {', '.join(known)}"
+        )
+    unknown = [item for item in items if item not in known]
+    if unknown:
+        raise PreconditionError(
+            f"--expand-edges 에 쓸 수 없는 값이 있습니다: {unknown} — "
+            f"쓸 수 있는 값: {', '.join(known)} (대소문자를 그대로 씁니다)"
+        )
+    return frozenset(EdgeType(item) for item in items)
 
 
 # --- v0.7: 하이브리드 검색의 확산 순위 계산 (스펙 §4.1·§4.3·§4.5) --------------

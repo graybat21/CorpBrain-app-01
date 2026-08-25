@@ -58,6 +58,7 @@ from corpbrain.core.errors import (
     PreconditionError,
     TokenBudgetExceededError,
 )
+from corpbrain.core.graph import parse_expand_edges
 from corpbrain.core.graphstore import GraphStore, SqliteGraphStore, graph_path_for
 from corpbrain.core.models import (
     DocFacts,
@@ -150,6 +151,7 @@ __all__ = [
     "graph_path_for",
     "index_path_for",
     "is_cloud_consent_granted",
+    "parse_expand_edges",
     "plan_scan",
     "revoke_cloud_consent",
     "run_scan",
