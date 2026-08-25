@@ -14,10 +14,12 @@ from corpbrain.core.graph import ENTITY_PREFIX, TAG_PREFIX
 from corpbrain.core.models import (
     EdgeType,
     GraphEdge,
+    GraphExpansion,
     GraphSkipReason,
     GraphStats,
     IndexingSkipReason,
     PlanEntry,
+    ReferenceDirection,
     ScanPlan,
     ScanResult,
     SearchResult,
@@ -282,19 +284,66 @@ def _neighbor_text(edge: GraphEdge, focus: str, labels: Mapping[str, str]) -> st
     return f"{label}  ({other})"
 
 
+#: 확산 근거 줄의 들여쓰기 — 결과 줄(`  1. [0.710] `)의 점수 뒤에 오도록 맞춘 값이다.
+_EVIDENCE_INDENT = "       └ "
+
+
 def build_search_lines(results: list[SearchResult]) -> list[str]:
-    """`search`가 stdout에 낼 결과 줄 — 점수 내림차순 제목·경로 (v0.4 스펙 §3 항목6)."""
+    """`search`가 stdout에 낼 결과 줄 — 점수 내림차순 제목·경로 (v0.4 스펙 §3 항목6).
+
+    v0.7부터 **확산으로 후보가 된 문서에만** 근거 줄이 한 줄 따라붙는다 (v0.7 §4.6).
+    시드는 코사인 상위라 이유가 자명하므로 붙이지 않는다 — 결과의 「왜 이 문서가 여기
+    있는가」는 후보 진입 경로로 갈린다 (§4.5).
+
+    경로는 v0.4 그대로 원문 절대경로(`metadata["source_path"]`)를 적는다. 상대 표기로
+    바꾸면 검색 1회마다 위키 전체를 읽어야 하고, 보이는 문자열과 정렬 키가 갈린다 (T4).
+    """
     if not results:
         return ["일치하는 문서가 없습니다."]
     lines = [f"검색 결과 {len(results)}건"]
-    lines += [
-        f"  {rank}. [{result.score:.3f}] "
-        # 키가 없을 때뿐 아니라 빈 문자열(제목 없는 손상·수기 편집 위키)일 때도 대체 문구를 쓴다.
-        f"{result.metadata.get('title') or '(제목 없음)'} — "
-        f"{result.metadata.get('source_path') or result.doc_id}"
-        for rank, result in enumerate(results, start=1)
-    ]
+    for rank, result in enumerate(results, start=1):
+        lines.append(
+            f"  {rank}. [{result.score:.3f}] "
+            # 키가 없을 때뿐 아니라 빈 문자열(제목 없는 손상·수기 편집 위키)일 때도 대체 문구를 쓴다.
+            f"{result.metadata.get('title') or '(제목 없음)'} — "
+            f"{result.metadata.get('source_path') or result.doc_id}"
+        )
+        if result.expansion is not None:
+            lines.append(
+                _EVIDENCE_INDENT + _expansion_evidence(result.expansion, result.score)
+            )
     return lines
+
+
+def _expansion_evidence(expansion: GraphExpansion, score: float) -> str:
+    """확산 문서의 근거 항목을 `·`로 잇는다 (v0.7 §4.6).
+
+    나열 관용구는 v0.6 `render.py:_evidence()`와 같은 결로 맞춘다 — 조사로 문장을 잇지
+    않는다. 항목을 기계적으로 잇는 그 관용구가 라벨 받침에 따라 조사가 갈리는 문제를 애초에
+    만들지 않는다.
+    """
+    parts: list[str] = []
+    # 대괄호 안 숫자는 최종 점수다. 두 값이 같으면 알릴 것이 없으므로 코사인을 적지 않는다 —
+    # 같은 숫자를 한 줄에서 두 번 적지 않는다 (T2).
+    if expansion.cosine is not None and expansion.cosine != score:
+        parts.append(f"코사인 {expansion.cosine:.3f}")
+    parts.append(f"시드 «{expansion.seed_title}»")
+    if expansion.shared_tags:
+        parts.append("공유 태그 " + " ".join(f"`{tag}`" for tag in expansion.shared_tags))
+    if expansion.shared_entities:
+        parts.append(
+            "공유 엔티티 " + " ".join(f"`{name}`" for name in expansion.shared_entities)
+        )
+    # 줄의 주인은 확산 문서이지만 문구는 «시드»를 글자로 박는다 — 한 줄에 문서가 둘
+    # 등장하므로 어느 쪽이 기준인지 눈으로 짚을 수 있어야 한다 (T9). 위키의 3종 문구는
+    # 그대로 두고 검색만 자기 기준을 적는다.
+    if expansion.reference is ReferenceDirection.MUTUAL:
+        parts.append("서로 참조함")
+    elif expansion.reference is ReferenceDirection.OUTGOING:
+        parts.append("시드를 참조함")
+    elif expansion.reference is ReferenceDirection.INCOMING:
+        parts.append("시드가 참조함")
+    return " · ".join(parts)
 
 
 # --- v0.2 U4: pre-scan 계량 리포트·배너 (스펙 §4.3) ------------------------------
