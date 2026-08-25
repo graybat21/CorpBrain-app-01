@@ -11,10 +11,12 @@ from corpbrain.core import (
     DEFAULT_EXPAND_EDGES,
     DEFAULT_GRAPH_DECAY,
     EdgeType,
+    GraphEdge,
     GraphExpansion,
     ReferenceDirection,
     SearchResult,
 )
+from corpbrain.core.graph import rank_hybrid
 
 # --- U1: 값 타입·설정 ---------------------------------------------------------
 
@@ -57,3 +59,359 @@ def test_graph_expansion_carries_labels_not_node_ids() -> None:
     assert expansion.shared_tags == ["인사"]
     assert not any(tag.startswith("tag:") for tag in expansion.shared_tags)
     assert not any(name.startswith("entity:") for name in expansion.shared_entities)
+
+
+# --- U2: 확산 순위 계산 -------------------------------------------------------
+
+ALPHA = 0.7  # 상수를 참조하지 않고 명시적으로 넘긴다 (스펙 T11)
+ALL_EDGES = frozenset(EdgeType)
+NO_SIMILARITY = frozenset(
+    {EdgeType.TAGGED_WITH, EdgeType.CONTAINS_ENTITY, EdgeType.REFERENCES}
+)
+
+
+def _hit(doc_id: str, score: float, title: str = "") -> SearchResult:
+    return SearchResult(
+        doc_id=doc_id,
+        score=score,
+        metadata={"title": title or doc_id, "source_path": doc_id},
+    )
+
+
+def _tagged(doc_id: str, tag: str) -> GraphEdge:
+    return GraphEdge(src=doc_id, dst=f"tag:{tag}", type=EdgeType.TAGGED_WITH)
+
+
+def _entity(doc_id: str, name: str) -> GraphEdge:
+    return GraphEdge(src=doc_id, dst=f"entity:{name}", type=EdgeType.CONTAINS_ENTITY)
+
+
+def _references(src: str, dst: str) -> GraphEdge:
+    return GraphEdge(src=src, dst=dst, type=EdgeType.REFERENCES)
+
+
+LABELS = {"tag:인사": "인사", "entity:인사팀": "인사팀", "/b.md": "채용계획", "/c.md": "메모"}
+
+
+def test_expansion_score_is_seed_score_times_decay() -> None:
+    """확산 문서의 점수는 `max(자기 코사인, 시드 점수 × α)`다 (스펙 §4.1)."""
+    ranked = [_hit("/a.md", 0.90, "온보딩"), _hit("/b.md", 0.10, "채용계획")]
+    edges = [_tagged("/a.md", "인사"), _tagged("/b.md", "인사")]
+
+    results = rank_hybrid(
+        ranked, edges, labels=LABELS, expand_edges=NO_SIMILARITY, decay=ALPHA, top_k=1
+    )
+
+    assert [r.doc_id for r in results] == ["/a.md"]  # top_k=1 로 잘린다
+
+    results = rank_hybrid(
+        ranked, edges, labels=LABELS, expand_edges=NO_SIMILARITY, decay=ALPHA, top_k=2
+    )
+    # /b.md 는 시드(top_k=2)라 코사인 그대로다 — 확산이 시드 점수를 건드리지 않는다.
+    assert [(r.doc_id, r.score) for r in results] == [("/a.md", 0.90), ("/b.md", 0.10)]
+
+
+def test_document_outside_top_k_is_pulled_in_by_the_graph() -> None:
+    """코사인 top-k 밖 문서가 확산으로 후보가 되고 점수는 `시드 × α`다 (§3 항목1)."""
+    ranked = [_hit("/a.md", 0.90, "온보딩"), _hit("/z.md", 0.30), _hit("/b.md", 0.10, "채용계획")]
+    edges = [_tagged("/a.md", "인사"), _tagged("/b.md", "인사")]
+
+    results = rank_hybrid(
+        ranked, edges, labels=LABELS, expand_edges=NO_SIMILARITY, decay=ALPHA, top_k=2
+    )
+
+    assert [r.doc_id for r in results] == ["/a.md", "/b.md"]
+    assert results[1].score == 0.90 * ALPHA
+    # 코사인 상위였던 /z.md 가 밀려나는 것은 재순위화의 의도된 동작이다 (§4.1).
+    assert results[1].expansion is not None
+    assert results[1].expansion.seed_doc_id == "/a.md"
+    assert results[1].expansion.seed_title == "온보딩"
+    assert results[1].expansion.cosine == 0.10
+
+
+def test_seed_keeps_expansion_none_even_when_it_is_also_a_neighbor() -> None:
+    """경계는 «후보 진입 경로»다 — 시드는 다른 시드의 이웃이어도 근거 줄을 갖지 않는다 (§4.5)."""
+    ranked = [_hit("/a.md", 0.90), _hit("/b.md", 0.80)]
+    edges = [_tagged("/a.md", "인사"), _tagged("/b.md", "인사")]
+
+    results = rank_hybrid(
+        ranked, edges, labels=LABELS, expand_edges=NO_SIMILARITY, decay=ALPHA, top_k=2
+    )
+
+    assert [r.expansion for r in results] == [None, None]
+
+
+def test_expansion_keeps_evidence_even_when_its_own_cosine_wins() -> None:
+    """자기 코사인이 `max()`를 이겨도 확산 진입 문서는 근거를 갖는다 (§4.5 표).
+
+    이 경우는 확산 문서의 코사인이 **최하위 시드와 동점**일 때 드러난다 — 그때만 계층 정렬
+    키(공유 태그)가 시드를 밀어내고 확산 문서를 결과에 올린다. 점수 출처로 근거를 갈랐다면
+    이 문서는 코사인 top-k 밖인데도 설명 없이 놓였을 것이다.
+    """
+    ranked = [_hit("/a.md", 0.50), _hit("/x.md", 0.44), _hit("/b.md", 0.44)]
+    edges = [_tagged("/a.md", "인사"), _tagged("/b.md", "인사")]
+
+    results = rank_hybrid(
+        ranked, edges, labels=LABELS, expand_edges=NO_SIMILARITY, decay=ALPHA, top_k=2
+    )
+    expanded = next(r for r in results if r.doc_id == "/b.md")
+
+    assert [r.doc_id for r in results] == ["/a.md", "/b.md"]  # 시드 /x.md 를 밀어냈다
+    assert expanded.score == 0.44  # 0.50 × 0.7 = 0.35 보다 자기 코사인이 크다
+    assert expanded.expansion is not None
+    assert expanded.expansion.cosine == 0.44
+
+
+def test_expansion_never_outranks_its_seed() -> None:
+    """§3 항목4 — 열린 구간 `0 < α < 1`에서 확산 문서는 자기 시드를 추월하지 못한다."""
+    ranked = [_hit("/a.md", 0.90), _hit("/x.md", 0.80), _hit("/b.md", 0.70)]
+    edges = [_tagged("/a.md", "인사"), _tagged("/b.md", "인사")]
+
+    results = rank_hybrid(
+        ranked, edges, labels=LABELS, expand_edges=NO_SIMILARITY, decay=0.95, top_k=2
+    )
+
+    for result in results:
+        assert result.expansion is None or result.score <= result.expansion.seed_score
+
+
+def test_shared_tags_and_entities_are_labels_of_the_base_seed_relation() -> None:
+    ranked = [_hit("/a.md", 0.90, "온보딩"), _hit("/x.md", 0.50), _hit("/b.md", 0.10)]
+    edges = [
+        _tagged("/a.md", "인사"),
+        _tagged("/b.md", "인사"),
+        _entity("/a.md", "인사팀"),
+        _entity("/b.md", "인사팀"),
+        _references("/b.md", "/a.md"),
+        _references("/a.md", "/b.md"),
+    ]
+
+    results = rank_hybrid(
+        ranked, edges, labels=LABELS, expand_edges=NO_SIMILARITY, decay=ALPHA, top_k=2
+    )
+    expansion = next(r for r in results if r.doc_id == "/b.md").expansion
+
+    assert expansion is not None
+    assert expansion.shared_tags == ["인사"]
+    assert expansion.shared_entities == ["인사팀"]
+    assert expansion.reference is ReferenceDirection.MUTUAL
+
+
+def test_reference_direction_is_read_from_the_expansion_document_side() -> None:
+    """줄의 주인은 확산 문서다 — 확산 문서 → 시드가 `OUTGOING`이다 (§4.6)."""
+    ranked = [_hit("/a.md", 0.90), _hit("/x.md", 0.50), _hit("/b.md", 0.10)]
+
+    outgoing = rank_hybrid(
+        ranked,
+        [_references("/b.md", "/a.md")],
+        labels=LABELS,
+        expand_edges=NO_SIMILARITY,
+        decay=ALPHA,
+        top_k=2,
+    )
+    incoming = rank_hybrid(
+        ranked,
+        [_references("/a.md", "/b.md")],
+        labels=LABELS,
+        expand_edges=NO_SIMILARITY,
+        decay=ALPHA,
+        top_k=2,
+    )
+
+    assert outgoing[1].expansion is not None
+    assert outgoing[1].expansion.reference is ReferenceDirection.OUTGOING
+    assert incoming[1].expansion is not None
+    assert incoming[1].expansion.reference is ReferenceDirection.INCOMING
+
+
+def test_tie_break_follows_the_hierarchical_keys() -> None:
+    """동점 그룹은 참조 → 공유 엔티티 수 → 공유 태그 수 → 자기 코사인 → doc_id 순 (§4.3, §3 항목5)."""
+    ranked = [_hit("/seed.md", 0.90), _hit("/x.md", 0.50)]
+    edges = [
+        _tagged("/seed.md", "인사"),
+        _entity("/seed.md", "인사팀"),
+        _references("/ref.md", "/seed.md"),
+        # 넷 다 시드의 태그를 공유해 점수가 `0.90 × α` 로 같다.
+        _tagged("/ref.md", "인사"),
+        _tagged("/ent.md", "인사"),
+        _entity("/ent.md", "인사팀"),
+        _tagged("/tag.md", "인사"),
+        _tagged("/aaa.md", "인사"),
+    ]
+
+    results = rank_hybrid(
+        ranked, edges, labels=LABELS, expand_edges=NO_SIMILARITY, decay=ALPHA, top_k=5
+    )
+
+    assert [r.doc_id for r in results] == [
+        "/seed.md",  # 시드 (코사인 0.90)
+        "/ref.md",  # ① 참조 관계
+        "/ent.md",  # ② 공유 엔티티 1개
+        "/aaa.md",  # ⑤ doc_id 사전순 — 벡터가 없어 코사인은 둘 다 최하위
+        "/tag.md",
+    ]
+    assert {r.score for r in results if r.expansion} == {0.90 * ALPHA}
+
+
+def test_own_cosine_breaks_ties_before_doc_id() -> None:
+    """정렬 키 4 — 벡터가 없는 확산 문서는 자기 코사인이 최하위로 취급된다 (§4.3·§5)."""
+    ranked = [
+        _hit("/seed.md", 0.90),
+        _hit("/x1.md", 0.50),
+        _hit("/x2.md", 0.40),
+        _hit("/zzz.md", 0.10),
+    ]
+    edges = [
+        _tagged("/seed.md", "인사"),
+        _tagged("/zzz.md", "인사"),  # 벡터 있음 (코사인 0.10 — 0.90 × α 에 밀려 점수는 동점)
+        _tagged("/aaa.md", "인사"),  # 벡터 없음
+    ]
+
+    results = rank_hybrid(
+        ranked, edges, labels=LABELS, expand_edges=NO_SIMILARITY, decay=ALPHA, top_k=3
+    )
+
+    # 사전순으로는 /aaa.md 가 앞이지만 코사인이 있는 /zzz.md 가 먼저다.
+    assert [r.doc_id for r in results] == ["/seed.md", "/zzz.md", "/aaa.md"]
+    assert {r.score for r in results if r.expansion} == {0.90 * ALPHA}
+    assert next(r for r in results if r.doc_id == "/aaa.md").expansion.cosine is None
+
+
+def test_base_seed_is_the_highest_scoring_adjacent_seed() -> None:
+    """여러 시드의 이웃이면 가장 높은 점수를 준 시드가 근거·정렬의 기준이다 (§4.3)."""
+    ranked = [_hit("/high.md", 0.90, "높은쪽"), _hit("/low.md", 0.60, "낮은쪽"), _hit("/x.md", 0.40)]
+    edges = [
+        _tagged("/high.md", "인사"),
+        _tagged("/low.md", "인사"),
+        _tagged("/b.md", "인사"),
+    ]
+
+    results = rank_hybrid(
+        ranked, edges, labels=LABELS, expand_edges=NO_SIMILARITY, decay=ALPHA, top_k=2
+    )
+    expansion = next(r for r in results if r.doc_id == "/b.md").expansion
+
+    assert expansion is not None
+    assert expansion.seed_doc_id == "/high.md"
+    assert expansion.seed_score == 0.90
+
+
+def test_base_seed_ties_break_on_seed_doc_id() -> None:
+    ranked = [_hit("/b_seed.md", 0.90), _hit("/a_seed.md", 0.90), _hit("/x.md", 0.40)]
+    edges = [
+        _tagged("/b_seed.md", "인사"),
+        _tagged("/a_seed.md", "인사"),
+        _tagged("/target.md", "인사"),
+    ]
+
+    results = rank_hybrid(
+        ranked, edges, labels=LABELS, expand_edges=NO_SIMILARITY, decay=ALPHA, top_k=3
+    )
+    expansion = next(r for r in results if r.doc_id == "/target.md").expansion
+
+    assert expansion is not None
+    assert expansion.seed_doc_id == "/a_seed.md"
+
+
+def test_dropping_references_from_expand_edges_removes_reference_only_documents() -> None:
+    """§3 항목6 — `--expand-edges`에서 `REFERENCES`를 빼면 참조로만 이어진 문서가 사라진다."""
+    ranked = [_hit("/a.md", 0.90), _hit("/x.md", 0.40)]
+    edges = [_references("/a.md", "/b.md")]
+
+    with_refs = rank_hybrid(
+        ranked, edges, labels=LABELS, expand_edges=NO_SIMILARITY, decay=ALPHA, top_k=2
+    )
+    without_refs = rank_hybrid(
+        ranked,
+        edges,
+        labels=LABELS,
+        expand_edges=frozenset({EdgeType.TAGGED_WITH, EdgeType.CONTAINS_ENTITY}),
+        decay=ALPHA,
+        top_k=2,
+    )
+
+    assert {r.doc_id for r in with_refs} == {"/a.md", "/b.md"}
+    assert {r.doc_id for r in without_refs} == {"/a.md", "/x.md"}
+
+
+def test_similarity_edges_expand_only_when_enabled() -> None:
+    ranked = [_hit("/a.md", 0.90), _hit("/x.md", 0.40)]
+    edges = [
+        GraphEdge(src="/a.md", dst="/b.md", type=EdgeType.SEMANTICALLY_SIMILAR, weight=0.8)
+    ]
+
+    off = rank_hybrid(
+        ranked, edges, labels=LABELS, expand_edges=NO_SIMILARITY, decay=ALPHA, top_k=2
+    )
+    on = rank_hybrid(
+        ranked, edges, labels=LABELS, expand_edges=ALL_EDGES, decay=ALPHA, top_k=2
+    )
+
+    assert {r.doc_id for r in off} == {"/a.md", "/x.md"}
+    assert {r.doc_id for r in on} == {"/a.md", "/b.md"}
+
+
+def test_result_count_never_exceeds_top_k() -> None:
+    """§3 항목3 — 확산으로 후보가 넘쳐도 반환 길이는 `top_k` 이하다."""
+    ranked = [_hit("/a.md", 0.90)]
+    edges = [_tagged("/a.md", "인사")] + [_tagged(f"/d{i}.md", "인사") for i in range(20)]
+
+    results = rank_hybrid(
+        ranked, edges, labels=LABELS, expand_edges=NO_SIMILARITY, decay=ALPHA, top_k=5
+    )
+
+    assert len(results) == 5
+
+
+def test_top_k_zero_returns_nothing() -> None:
+    """v0.4의 clamp 동작을 그대로 둔다 (§5)."""
+    ranked = [_hit("/a.md", 0.90)]
+
+    assert rank_hybrid(
+        ranked, [], labels=LABELS, expand_edges=NO_SIMILARITY, decay=ALPHA, top_k=0
+    ) == []
+    assert rank_hybrid(
+        ranked, [], labels=LABELS, expand_edges=NO_SIMILARITY, decay=ALPHA, top_k=-3
+    ) == []
+
+
+def test_seed_missing_from_the_graph_keeps_its_cosine_score() -> None:
+    """§5 — 패스1과 패스2 사이에서 scan이 죽어 시드가 `nodes`에 없어도 조용히 지나간다."""
+    ranked = [_hit("/a.md", 0.90), _hit("/b.md", 0.50)]
+
+    results = rank_hybrid(
+        ranked, [], labels={}, expand_edges=NO_SIMILARITY, decay=ALPHA, top_k=2
+    )
+
+    assert [(r.doc_id, r.score, r.expansion) for r in results] == [
+        ("/a.md", 0.90, None),
+        ("/b.md", 0.50, None),
+    ]
+
+
+def test_expansion_without_a_vector_uses_the_graph_label_for_display() -> None:
+    """벡터 인덱스에 없는 확산 문서의 표시 라벨은 그래프 `nodes.label`에서만 온다 (§4.7)."""
+    ranked = [_hit("/a.md", 0.90)]
+    edges = [_tagged("/a.md", "인사"), _tagged("/c.md", "인사")]
+
+    results = rank_hybrid(
+        ranked, edges, labels=LABELS, expand_edges=NO_SIMILARITY, decay=ALPHA, top_k=2
+    )
+    expanded = next(r for r in results if r.doc_id == "/c.md")
+
+    assert expanded.metadata == {"title": "메모"}  # source_path 는 없다 — doc_id 로 대체된다
+    assert expanded.expansion is not None
+    assert expanded.expansion.cosine is None
+    assert expanded.score == 0.90 * ALPHA
+
+
+def test_a_document_is_never_its_own_neighbor() -> None:
+    """v0.6이 자기 루프 엣지를 만들지 않으므로 추가 처리가 필요 없다 — 그래도 방어한다 (§4.2)."""
+    ranked = [_hit("/a.md", 0.90)]
+    edges = [_references("/a.md", "/a.md"), _tagged("/a.md", "인사")]
+
+    results = rank_hybrid(
+        ranked, edges, labels=LABELS, expand_edges=NO_SIMILARITY, decay=ALPHA, top_k=3
+    )
+
+    assert [r.doc_id for r in results] == ["/a.md"]
