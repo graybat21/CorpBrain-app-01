@@ -597,7 +597,7 @@ def _run_search(args: argparse.Namespace) -> int:
         expand_edges = (
             core.DEFAULT_EXPAND_EDGES
             if args.expand_edges is None
-            # 파싱도 코어가 맡는다 — CLI는 문자열을 그대로 넘긴다 (§4.4 · T10).
+            # 파싱 규칙은 코어가 소유한다 — CLI는 자체 파서를 두지 않고 이것을 부른다 (§4.4 · T10).
             else core.parse_expand_edges(args.expand_edges)
         )
         results = core.search_index(
