@@ -1,0 +1,642 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CorpBrain v0.6 GUI - 100% 로컬 AI 지식 관리 솔루션</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="bg-grain" aria-hidden="true"></div>
+
+  <!-- =========================================================================
+       Left Sidebar: Projects & Workspace Explorer (Slim & Focused)
+       ========================================================================= -->
+  <aside id="app-sidebar">
+    <!-- Brand Section -->
+    <div class="brand-section">
+      <div class="brand-left">
+        <div class="brand-icon">🧠</div>
+        <div class="brand-info">
+          <h1>CorpBrain</h1>
+        </div>
+      </div>
+      <span class="brand-badge">v0.6 Preview</span>
+    </div>
+
+    <div class="sidebar-scroll-area">
+      <!-- 1. Quick Project Search -->
+      <div class="sidebar-search-box">
+        <span class="sidebar-search-icon">🔍</span>
+        <input type="text" class="sidebar-search-input" id="project-search-input" placeholder="프로젝트/폴더 검색...">
+      </div>
+
+      <!-- 2. Projects / Workspace Directory Section -->
+      <div class="projects-header">
+        <span class="projects-title">Projects</span>
+        <div class="projects-actions">
+          <button class="btn-icon-subtle" title="새 프로젝트 추가" id="btn-add-project">➕</button>
+        </div>
+      </div>
+
+      <div class="project-list" id="project-list-container">
+        
+        <!-- Project 1: CorpBrain-app-01 (Active) -->
+        <div class="project-card-item active" data-project-id="p1">
+          <div class="project-card-top">
+            <span class="project-card-icon">📁</span>
+            <span class="project-card-name">CorpBrain-app-01</span>
+            <span class="project-card-badge">기본</span>
+          </div>
+          <div class="project-card-branch">
+            <div class="branch-dot"></div>
+            <span>feat/v0.5-cloud-opt-in</span>
+          </div>
+          <div class="project-card-meta">
+            <span>42 docs</span>
+            <span>170 nodes</span>
+          </div>
+        </div>
+
+        <!-- Project 2: CorpBrain-app -->
+        <div class="project-card-item" data-project-id="p2">
+          <div class="project-card-top">
+            <span class="project-card-icon" style="color:var(--accent-cyan)">📁</span>
+            <span class="project-card-name">CorpBrain-app</span>
+            <span class="project-card-badge">기본</span>
+          </div>
+          <div class="project-card-branch">
+            <div class="branch-dot" style="background:var(--accent-cyan); box-shadow:0 0 6px var(--accent-cyan)"></div>
+            <span>main</span>
+          </div>
+          <div class="project-card-meta">
+            <span>18 docs</span>
+            <span>63 nodes</span>
+          </div>
+        </div>
+
+        <!-- Project 3: HR-KnowledgeBase -->
+        <div class="project-card-item" data-project-id="p3">
+          <div class="project-card-top">
+            <span class="project-card-icon" style="color:var(--accent-purple)">📁</span>
+            <span class="project-card-name">HR-KnowledgeBase</span>
+            <span class="project-card-badge">기본</span>
+          </div>
+          <div class="project-card-branch">
+            <div class="branch-dot" style="background:var(--accent-purple); box-shadow:0 0 6px var(--accent-purple)"></div>
+            <span>main</span>
+          </div>
+          <div class="project-card-meta">
+            <span>12 docs</span>
+            <span>50 nodes</span>
+          </div>
+        </div>
+
+        <!-- Project 4: Legal-Compliance-2026 -->
+        <div class="project-card-item" data-project-id="p4">
+          <div class="project-card-top">
+            <span class="project-card-icon" style="color:var(--accent-rose)">📁</span>
+            <span class="project-card-name">Legal-Compliance-2026</span>
+          </div>
+          <div class="project-card-branch">
+            <div class="branch-dot" style="background:var(--accent-rose); box-shadow:0 0 6px var(--accent-rose)"></div>
+            <span>v0.4-vector</span>
+          </div>
+          <div class="project-card-meta">
+            <span>24 docs</span>
+            <span>88 nodes</span>
+          </div>
+        </div>
+
+      </div>
+
+      <button class="btn-add-project-sidebar" id="btn-add-folder">
+        <span>➕</span>
+        <span>새 로컬 프로젝트 폴더 열기</span>
+      </button>
+
+    </div>
+
+    <!-- 3. Sidebar Global Footer -->
+    <div class="sidebar-global-footer">
+      <div class="global-nav-item" data-view="settings">
+        <span>⚙️</span>
+        <span>시스템 보안 및 설정 (Settings)</span>
+      </div>
+
+      <div class="local-indicator">
+        <div style="display:flex; align-items:center; gap:6px;">
+          <div class="pulse-dot"></div>
+          <span>100% Local Guard</span>
+        </div>
+        <span style="font-size:10px; color:var(--text-muted)">127.0.0.1</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- =========================================================================
+       Main Workspace with 2-Row Top Header & Horizontal Tabs
+       ========================================================================= -->
+  <main id="app-main">
+    <!-- Top 2-Row Header -->
+    <header id="app-header">
+      <!-- Row 1: Workspace Title & Actions -->
+      <div class="header-top-row">
+        <div class="header-workspace-info">
+          <div class="header-workspace-title">
+            <span>📁</span>
+            <span id="current-project-title">CorpBrain-app-01</span>
+          </div>
+          <span class="header-branch-pill" id="current-project-branch">feat/v0.5-cloud-opt-in</span>
+        </div>
+
+        <div class="header-actions">
+          <div class="status-chip success">
+            <span>●</span>
+            <span>Gateway: Secure</span>
+          </div>
+          <button class="btn btn-secondary btn-sm" onclick="switchView('scan')">⚡ 빠른 스캔</button>
+        </div>
+      </div>
+
+      <!-- Row 2: Top Horizontal Workspace Navigation Tabs (GitHub / Linear Style) -->
+      <nav class="project-top-tabs">
+        <div class="tab-item active" data-view="dashboard">
+          <span class="tab-icon">📊</span>
+          <span>대시보드</span>
+          <span class="tab-badge" id="tab-badge-dashboard">Overview</span>
+        </div>
+        <div class="tab-item" data-view="scan">
+          <span class="tab-icon">🚀</span>
+          <span>플랜 & 스캔</span>
+          <span class="tab-badge" id="tab-badge-scan">Hub</span>
+        </div>
+        <div class="tab-item" data-view="graph">
+          <span class="tab-icon">🕸️</span>
+          <span>지식그래프</span>
+          <span class="tab-badge" id="tab-badge-graph" style="background:rgba(0,242,254,0.15); color:var(--accent-cyan)">v0.6</span>
+        </div>
+        <div class="tab-item" data-view="wiki">
+          <span class="tab-icon">📖</span>
+          <span>위키 탐색기</span>
+          <span class="tab-badge" id="tab-badge-wiki">42</span>
+        </div>
+        <div class="tab-item" data-view="search">
+          <span class="tab-icon">🔍</span>
+          <span>지식 검색</span>
+          <span class="tab-badge" id="tab-badge-search">RAG</span>
+        </div>
+      </nav>
+    </header>
+
+    <!-- =======================================================================
+         View 1: Dashboard View
+         ======================================================================= -->
+    <section id="view-dashboard" class="view-content active">
+      <div class="dashboard-grid">
+        
+        <!-- Doctor Health Checks -->
+        <div class="doctor-cards-grid">
+          <div class="doctor-card">
+            <div class="doctor-card-icon ollama">🦙</div>
+            <div class="doctor-card-content">
+              <div class="doctor-card-title">Ollama Engine</div>
+              <div class="doctor-card-value">127.0.0.1:11434</div>
+              <div class="doctor-card-sub">qwen2.5:7b-instruct</div>
+            </div>
+          </div>
+
+          <div class="doctor-card">
+            <div class="doctor-card-icon gpu">⚡</div>
+            <div class="doctor-card-content">
+              <div class="doctor-card-title">GPU Acceleration</div>
+              <div class="doctor-card-value">RTX 4090 (24GB)</div>
+              <div class="doctor-card-sub">CUDA 12.4 가속 감지됨</div>
+            </div>
+          </div>
+
+          <div class="doctor-card">
+            <div class="doctor-card-icon embed">📐</div>
+            <div class="doctor-card-content">
+              <div class="doctor-card-title">Vector Embedding</div>
+              <div class="doctor-card-value">nomic-embed-text</div>
+              <div class="doctor-card-sub">768차원 코사인 인덱스</div>
+            </div>
+          </div>
+
+          <div class="doctor-card">
+            <div class="doctor-card-icon cloud">☁️</div>
+            <div class="doctor-card-content">
+              <div class="doctor-card-title">Cloud Opt-in</div>
+              <div class="doctor-card-value">Anthropic API</div>
+              <div class="doctor-card-sub">동의 완료 (Granted)</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Metrics Row -->
+        <div class="metrics-row">
+          <div class="metric-box">
+            <div class="metric-header">
+              <span class="metric-title">생성된 위키 문서</span>
+              <span>📄</span>
+            </div>
+            <div class="metric-number" id="metric-wiki-count">42</div>
+            <div class="metric-desc">DOCX, PDF, MD 문서 요약</div>
+          </div>
+
+          <div class="metric-box emerald">
+            <div class="metric-header">
+              <span class="metric-title">추출된 핵심 엔티티</span>
+              <span>🏢</span>
+            </div>
+            <div class="metric-number" id="metric-entity-count">128</div>
+            <div class="metric-desc">부서, 프로젝트, 시스템 개체</div>
+          </div>
+
+          <div class="metric-box purple">
+            <div class="metric-header">
+              <span class="metric-title">지식그래프 노드 / 엣지</span>
+              <span>🕸️</span>
+            </div>
+            <div class="metric-number" id="metric-graph-count">170 / 342</div>
+            <div class="metric-desc">다차원 지식 연결망 구축</div>
+          </div>
+
+          <div class="metric-box amber">
+            <div class="metric-header">
+              <span class="metric-title">보안 PII 마스킹</span>
+              <span>🔒</span>
+            </div>
+            <div class="metric-number" id="metric-pii-count">18</div>
+            <div class="metric-desc">주민번호, 계좌 등 7종 자동 보호</div>
+          </div>
+        </div>
+
+        <!-- Bottom Grid -->
+        <div class="dashboard-bottom-grid">
+          <!-- Recent Activity -->
+          <div class="dash-panel">
+            <div class="dash-panel-header">
+              <div class="dash-panel-title"><span>⏱️</span> 최근 스캔 및 인덱싱 활동</div>
+            </div>
+            <div class="activity-list" id="dashboard-activity-list">
+              <!-- Rendered by JS -->
+            </div>
+          </div>
+
+          <!-- Quick Wiki Cards -->
+          <div class="dash-panel">
+            <div class="dash-panel-header">
+              <div class="dash-panel-title"><span>📚</span> 추천 위키 문서 퀵 열람</div>
+              <button class="btn btn-outline btn-sm" onclick="switchView('wiki')">전체 보기</button>
+            </div>
+            <div class="wiki-card-grid" id="quick-wiki-container">
+              <!-- Dynamically Populated -->
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- =======================================================================
+         View 2: Plan & Scan Hub
+         ======================================================================= -->
+    <section id="view-scan" class="view-content">
+      <div class="scan-container">
+        
+        <!-- Scan Config Form -->
+        <div class="config-card">
+          <div class="form-grid">
+            <div class="form-group">
+              <label class="form-label">📂 스캔 대상 입력 폴더 (Input Folder)</label>
+              <input type="text" class="form-input" value="./CorpBrain-app-01/inbox" id="scan-input-folder">
+            </div>
+            <div class="form-group">
+              <label class="form-label">📁 위키 출력 폴더 (Output Folder)</label>
+              <input type="text" class="form-input" value="./CorpBrain-app-01/corpbrain_wiki" id="scan-output-folder">
+            </div>
+            <div class="form-group">
+              <label class="form-label">🤖 요약 엔진 (Summarize Engine)</label>
+              <select class="form-select" id="scan-engine-select">
+                <option value="local">Local (Ollama - qwen2.5:7b-instruct)</option>
+                <option value="cloud">Cloud (Anthropic Claude Haiku - 옵트인 동의 완료)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">📐 임베딩 모델 (Vector Embedding)</label>
+              <input type="text" class="form-input" value="nomic-embed-text (로컬 고정)" readonly style="color:var(--text-muted)">
+            </div>
+          </div>
+
+          <div class="gate-toggles">
+            <label class="toggle-label">
+              <input type="checkbox" checked id="gate-gpu"> GPU 가속 필수 검사 (v0.3 Gate)
+            </label>
+            <label class="toggle-label">
+              <input type="checkbox" checked id="gate-size"> 최대 파일 크기 제한 (20MB)
+            </label>
+            <label class="toggle-label">
+              <input type="checkbox" checked id="gate-token"> 토큰 예산 상한 제한 (200,000 Tokens)
+            </label>
+          </div>
+
+          <div class="scan-actions-bar">
+            <button class="btn btn-secondary" id="btn-run-plan">📊 Pre-scan 계량 실행 (Plan)</button>
+            <button class="btn btn-primary" id="btn-run-scan">⚡ 전체 스캔 및 위키 생성 시작 (Scan)</button>
+          </div>
+        </div>
+
+        <!-- Pre-Scan (Plan) Report Card -->
+        <div class="plan-report-card" id="plan-report-card" style="display:none;">
+          <div class="dash-panel-title" style="margin-bottom:12px;">📊 Pre-Scan 계량 리포트 (LLM/네트워크 0회)</div>
+          
+          <div class="plan-stats-bar">
+            <div class="plan-stat-item">
+              <div class="plan-stat-label">스캔 대상 파일</div>
+              <div class="plan-stat-val" id="plan-stat-files">5개 문서</div>
+            </div>
+            <div class="plan-stat-item">
+              <div class="plan-stat-label">예상 총 토큰 수</div>
+              <div class="plan-stat-val" id="plan-stat-tokens">24,500 Tokens</div>
+            </div>
+            <div class="plan-stat-item">
+              <div class="plan-stat-label">GPU 예상 소요시간</div>
+              <div class="plan-stat-val" id="plan-stat-time">약 18초</div>
+            </div>
+            <div class="plan-stat-item">
+              <div class="plan-stat-label">게이트 판정</div>
+              <div class="plan-stat-val" style="color:var(--accent-emerald)">PASS (모두 통과)</div>
+            </div>
+          </div>
+
+          <div class="table-wrapper">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>파일명</th>
+                  <th>형식</th>
+                  <th>파일 크기</th>
+                  <th>중요도 점수</th>
+                  <th>예상 토큰</th>
+                  <th>게이트 판정</th>
+                </tr>
+              </thead>
+              <tbody id="plan-table-tbody">
+                <tr>
+                  <td>hr/remote_work_policy.docx</td>
+                  <td>.docx</td>
+                  <td>1.4 MB</td>
+                  <td><span class="badge-status pass">88점 (높음)</span></td>
+                  <td>4,200 t</td>
+                  <td><span class="badge-status pass">PASS</span></td>
+                </tr>
+                <tr>
+                  <td>hr/annual_leave_2026.pdf</td>
+                  <td>.pdf</td>
+                  <td>890 KB</td>
+                  <td><span class="badge-status pass">75점 (보통)</span></td>
+                  <td>2,800 t</td>
+                  <td><span class="badge-status pass">PASS</span></td>
+                </tr>
+                <tr>
+                  <td>security/vpn_access_guide.pdf</td>
+                  <td>.pdf</td>
+                  <td>3.2 MB</td>
+                  <td><span class="badge-status pass">92점 (최상)</span></td>
+                  <td>8,500 t</td>
+                  <td><span class="badge-status pass">PASS</span></td>
+                </tr>
+                <tr>
+                  <td>security/pii_handling_standard.docx</td>
+                  <td>.docx</td>
+                  <td>1.8 MB</td>
+                  <td><span class="badge-status pass">85점 (높음)</span></td>
+                  <td>5,100 t</td>
+                  <td><span class="badge-status pass">PASS</span></td>
+                </tr>
+                <tr>
+                  <td>rnd/corpbain_arch_spec.md</td>
+                  <td>.md</td>
+                  <td>1.1 MB</td>
+                  <td><span class="badge-status pass">90점 (최상)</span></td>
+                  <td>3,900 t</td>
+                  <td><span class="badge-status pass">PASS</span></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Live Scan Progress Stream Card -->
+        <div class="scan-progress-card" id="scan-progress-card" style="display:none;">
+          <div class="progress-header">
+            <div class="dash-panel-title">⚡ 실시간 파이프라인 처리 스트림</div>
+            <div style="font-weight:700; color:var(--accent-cyan);" id="scan-progress-percent">0%</div>
+          </div>
+          <div class="progress-bar-container">
+            <div class="progress-bar-fill" id="scan-progress-fill"></div>
+          </div>
+          <div class="stream-log-box" id="scan-log-stream">
+            <!-- Log entries stream -->
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- =======================================================================
+         View 3: Knowledge Graph View (v0.6 Signature)
+         ======================================================================= -->
+    <section id="view-graph" class="view-content" style="padding:16px;">
+      <div class="graph-view-wrapper">
+        <canvas id="graph-canvas"></canvas>
+
+        <!-- Canvas Controls -->
+        <div class="graph-toolbar">
+          <button class="btn btn-secondary btn-sm" id="btn-zoom-in">➕ 줌 인</button>
+          <button class="btn btn-secondary btn-sm" id="btn-zoom-out">➖ 줌 아웃</button>
+          <button class="btn btn-secondary btn-sm" id="btn-zoom-reset">🎯 중앙 정렬</button>
+        </div>
+
+        <!-- Legend -->
+        <div class="graph-legend">
+          <div class="legend-item">
+            <div class="legend-dot doc"></div>
+            <span id="legend-doc-count">문서 노드 (42)</span>
+          </div>
+          <div class="legend-item">
+            <div class="legend-dot entity"></div>
+            <span id="legend-entity-count">엔티티 노드 (128)</span>
+          </div>
+          <div class="legend-item">
+            <div class="legend-dot tag"></div>
+            <span id="legend-tag-count">분류 태그 (18)</span>
+          </div>
+        </div>
+
+        <!-- Side Inspector Panel -->
+        <div class="graph-inspector-panel" id="graph-inspector-panel">
+          <div class="inspector-header">
+            <div>
+              <div class="inspector-type" id="inspector-node-type">DOCUMENT</div>
+              <div class="inspector-title" id="inspector-node-title">문서 제목</div>
+            </div>
+            <button class="close-btn" id="btn-close-inspector">&times;</button>
+          </div>
+
+          <div class="inspector-section-title">📌 핵심 요약</div>
+          <div class="inspector-summary" id="inspector-summary-text">
+            문서 요약 정보가 표시됩니다.
+          </div>
+
+          <div class="inspector-section-title">🔗 연결된 지식 노드 (이웃 관계)</div>
+          <div class="connected-nodes-list" id="inspector-connected-list">
+            <!-- Connected items -->
+          </div>
+
+          <button class="btn btn-primary btn-sm" id="btn-open-wiki-from-graph" style="margin-top:auto;">
+            📖 위키 리더에서 전체 문서 열기
+          </button>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- =======================================================================
+         View 4: Wiki Explorer & Reader
+         ======================================================================= -->
+    <section id="view-wiki" class="view-content" style="padding:16px;">
+      <div class="wiki-split-layout">
+        
+        <!-- Left: Tree Panel -->
+        <div class="wiki-tree-panel">
+          <input type="text" class="tree-search-input" placeholder="위키 문서 검색...">
+          <div id="wiki-tree-container" style="display:flex; flex-direction:column; gap:12px;">
+            <!-- Tree list rendered by JS -->
+          </div>
+        </div>
+
+        <!-- Center: Markdown Reader Main -->
+        <div class="wiki-reader-main" id="wiki-reader-content">
+          <!-- Rendered by JS -->
+        </div>
+
+        <!-- Right: Wiki Context Panel -->
+        <div class="wiki-context-panel">
+          <div class="dash-panel-title" style="font-size:13px;">📋 문서 메타 정보</div>
+          <div style="font-size:12px; color:var(--text-secondary); line-height:1.6;">
+            <div>원문 형식: <strong style="color:var(--text-primary)" id="meta-doc-format">DOCX 텍스트</strong></div>
+            <div>스캔 소요: <strong style="color:var(--text-primary)">2.4초</strong></div>
+            <div>임베딩 차원: <strong style="color:var(--text-primary)">768 dim</strong></div>
+          </div>
+
+          <div class="dash-panel-title" style="font-size:13px; margin-top:10px;">🔒 PII 마스킹 이력</div>
+          <div style="font-size:11px; color:var(--accent-amber); background:rgba(245,158,11,0.1); padding:8px; border-radius:var(--radius-sm); border:1px solid rgba(245,158,11,0.2);">
+            • 휴대전화번호 1건 마스킹<br>
+            • 사내 이메일 1건 마스킹
+          </div>
+
+          <div class="dash-panel-title" style="font-size:13px; margin-top:10px;">🕸️ 지식그래프 연관 문서</div>
+          <div class="connected-nodes-list">
+            <div class="connected-node-item" onclick="switchView('graph')">
+              <span>사내 보안 인증 가이드</span>
+              <span class="badge-status pass">ref</span>
+            </div>
+            <div class="connected-node-item" onclick="switchView('graph')">
+              <span>2026 연차 휴가 규정</span>
+              <span class="badge-status pass">tag</span>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- =======================================================================
+         View 5: Hybrid Search
+         ======================================================================= -->
+    <section id="view-search" class="view-content">
+      <div class="search-view-container">
+        
+        <div class="search-input-box">
+          <span class="search-icon-pos">🔍</span>
+          <input type="text" id="hybrid-search-input" placeholder="현재 프로젝트 문서에서 검색할 키워드를 입력하세요... (예: 재택근무 코어타임, VPN 접속)">
+        </div>
+
+        <div class="search-suggestions">
+          <span>추천 검색어:</span>
+          <span class="suggestion-chip">재택근무 규정</span>
+          <span class="suggestion-chip">VPN 접속 및 2단계 인증</span>
+          <span class="suggestion-chip">CorpBrain 아키텍처</span>
+          <span class="suggestion-chip">개인정보 PII 표준</span>
+        </div>
+
+        <div class="search-results-list" id="hybrid-search-results">
+          <!-- Populated by JS -->
+        </div>
+
+      </div>
+    </section>
+
+    <!-- =======================================================================
+         View 6: Settings & Governance (Global Scope)
+         ======================================================================= -->
+    <section id="view-settings" class="view-content">
+      <div class="settings-container">
+        
+        <!-- Cloud Opt-in Consent -->
+        <div class="settings-card">
+          <div class="settings-card-title"><span>☁️</span> 클라우드 엔진 옵트인 동의 관리 (corpbrain consent)</div>
+          <div class="settings-card-desc">
+            기본 동작은 100% 로컬(Ollama)이며, 동의를 부여한 경우에만 Anthropic API 클라우드 요약 경로를 사용합니다.
+          </div>
+
+          <div class="consent-toggle-row">
+            <div>
+              <div style="font-weight:600; font-size:14px;">클라우드 요약 엔진 사용 동의 (Anthropic Claude)</div>
+              <div style="font-size:12px; color:var(--text-muted); margin-top:2px;" id="cloud-consent-status">동의 부여됨 (Granted)</div>
+            </div>
+            <label class="switch">
+              <input type="checkbox" checked id="cloud-consent-toggle">
+              <span class="slider"></span>
+            </label>
+          </div>
+        </div>
+
+        <!-- PII Rules -->
+        <div class="settings-card">
+          <div class="settings-card-title"><span>🔒</span> 한국 특화 7종 PII 마스킹 규칙 및 실시간 테스터</div>
+          <div class="settings-card-desc">
+            외부 클라우드 전송 전 단일 관문(Gateway)에서 정규식 기반으로 자동 탐지 및 마스킹 처리됩니다.
+          </div>
+
+          <div class="pii-rules-grid">
+            <div class="pii-rule-item">1. 주민등록번호</div>
+            <div class="pii-rule-item">2. 휴대전화번호</div>
+            <div class="pii-rule-item">3. 이메일 주소</div>
+            <div class="pii-rule-item">4. 계좌번호</div>
+            <div class="pii-rule-item">5. 신용카드번호</div>
+            <div class="pii-rule-item">6. 사업자등록번호</div>
+          </div>
+
+          <div class="pii-tester-box">
+            <label class="form-label">실시간 PII 마스킹 테스트 인풋:</label>
+            <input type="text" class="form-input" id="pii-test-input" value="담당자 홍길동(010-1234-5678, test@corp.com) 주민번호 900101-1234567">
+            <label class="form-label" style="margin-top:8px;">마스킹 처리 결과 (Gateway 통과 Payload):</label>
+            <input type="text" class="form-input" id="pii-test-output" value="담당자 홍길동([PII: 휴대전화번호:***], [PII: 이메일:***]) 주민번호 [PII: 주민등록번호:***]" readonly style="color:var(--accent-amber)">
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
