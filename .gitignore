@@ -23,6 +23,12 @@ CLAUDE.local.md
 !.claude/commands/spec.md
 !.claude/commands/spec-check.md
 
+# impeccable 스킬의 로컬 산출물 — 크리틱 리포트·탐지기 캐시·false positive 무시 목록.
+# 실행할 때마다 타임스탬프 파일이 쌓이고 대상 파일 경로를 그대로 박아 두므로(리팩터링하면
+# 바로 어긋난다) 리포지토리에 두지 않는다. 설계 판단으로 남길 것이 있으면 gui_preview 쪽
+# 문서에 사람이 옮겨 적는다.
+.impeccable/
+
 # CorpBrain generated output
 corpbrain_wiki/
 
