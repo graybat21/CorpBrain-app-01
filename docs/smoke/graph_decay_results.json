@@ -3,8 +3,8 @@
     "setting": "no-graph",
     "graph_decay": null,
     "top1_hit_rate": 0.0,
-    "mrr": 0.2388888888888889,
-    "recall_at_3": 0.43333333333333335,
+    "mrr": 0.20555555555555557,
+    "recall_at_3": 0.4,
     "queries": [
       {
         "query": "헬스장 비용을 회사가 지원해 주나",
@@ -120,14 +120,13 @@
       {
         "query": "외부 대행사가 만든 산출물은 누가 확인하나",
         "relevant": [
-          "마케팅/소셜미디어전략.md",
           "마케팅/파트너십제휴.md"
         ],
         "expanded": [],
         "top1_doc": "/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/감사대응.md",
         "top1_hit": false,
-        "reciprocal_rank": 0.5,
-        "recall_at_3": 0.5
+        "reciprocal_rank": 0.0,
+        "recall_at_3": 0.0
       },
       {
         "query": "우리 색이 정해져 있나",
@@ -180,8 +179,8 @@
       "setting": "α=0.5",
       "graph_decay": 0.5,
       "top1_hit_rate": 0.0,
-      "mrr": 0.2388888888888889,
-      "recall_at_3": 0.43333333333333335,
+      "mrr": 0.20555555555555557,
+      "recall_at_3": 0.4,
       "queries": [
         {
           "query": "헬스장 비용을 회사가 지원해 주나",
@@ -297,14 +296,13 @@
         {
           "query": "외부 대행사가 만든 산출물은 누가 확인하나",
           "relevant": [
-            "마케팅/소셜미디어전략.md",
             "마케팅/파트너십제휴.md"
           ],
           "expanded": [],
           "top1_doc": "/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/감사대응.md",
           "top1_hit": false,
-          "reciprocal_rank": 0.5,
-          "recall_at_3": 0.5
+          "reciprocal_rank": 0.0,
+          "recall_at_3": 0.0
         },
         {
           "query": "우리 색이 정해져 있나",
@@ -356,8 +354,8 @@
       "setting": "α=0.55",
       "graph_decay": 0.55,
       "top1_hit_rate": 0.0,
-      "mrr": 0.2388888888888889,
-      "recall_at_3": 0.43333333333333335,
+      "mrr": 0.20555555555555557,
+      "recall_at_3": 0.4,
       "queries": [
         {
           "query": "헬스장 비용을 회사가 지원해 주나",
@@ -473,14 +471,13 @@
         {
           "query": "외부 대행사가 만든 산출물은 누가 확인하나",
           "relevant": [
-            "마케팅/소셜미디어전략.md",
             "마케팅/파트너십제휴.md"
           ],
           "expanded": [],
           "top1_doc": "/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/감사대응.md",
           "top1_hit": false,
-          "reciprocal_rank": 0.5,
-          "recall_at_3": 0.5
+          "reciprocal_rank": 0.0,
+          "recall_at_3": 0.0
         },
         {
           "query": "우리 색이 정해져 있나",
@@ -532,8 +529,8 @@
       "setting": "α=0.6",
       "graph_decay": 0.6,
       "top1_hit_rate": 0.0,
-      "mrr": 0.2388888888888889,
-      "recall_at_3": 0.43333333333333335,
+      "mrr": 0.20555555555555557,
+      "recall_at_3": 0.4,
       "queries": [
         {
           "query": "헬스장 비용을 회사가 지원해 주나",
@@ -652,14 +649,13 @@
         {
           "query": "외부 대행사가 만든 산출물은 누가 확인하나",
           "relevant": [
-            "마케팅/소셜미디어전략.md",
             "마케팅/파트너십제휴.md"
           ],
           "expanded": [],
           "top1_doc": "/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/감사대응.md",
           "top1_hit": false,
-          "reciprocal_rank": 0.5,
-          "recall_at_3": 0.5
+          "reciprocal_rank": 0.0,
+          "recall_at_3": 0.0
         },
         {
           "query": "우리 색이 정해져 있나",
@@ -711,8 +707,8 @@
       "setting": "α=0.65",
       "graph_decay": 0.65,
       "top1_hit_rate": 0.0,
-      "mrr": 0.2388888888888889,
-      "recall_at_3": 0.43333333333333335,
+      "mrr": 0.20555555555555557,
+      "recall_at_3": 0.4,
       "queries": [
         {
           "query": "헬스장 비용을 회사가 지원해 주나",
@@ -831,14 +827,13 @@
         {
           "query": "외부 대행사가 만든 산출물은 누가 확인하나",
           "relevant": [
-            "마케팅/소셜미디어전략.md",
             "마케팅/파트너십제휴.md"
           ],
           "expanded": [],
           "top1_doc": "/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/감사대응.md",
           "top1_hit": false,
-          "reciprocal_rank": 0.5,
-          "recall_at_3": 0.5
+          "reciprocal_rank": 0.0,
+          "recall_at_3": 0.0
         },
         {
           "query": "우리 색이 정해져 있나",
@@ -890,8 +885,8 @@
       "setting": "α=0.7",
       "graph_decay": 0.7,
       "top1_hit_rate": 0.0,
-      "mrr": 0.2388888888888889,
-      "recall_at_3": 0.4,
+      "mrr": 0.20555555555555557,
+      "recall_at_3": 0.36666666666666664,
       "queries": [
         {
           "query": "헬스장 비용을 회사가 지원해 주나",
@@ -1014,14 +1009,13 @@
         {
           "query": "외부 대행사가 만든 산출물은 누가 확인하나",
           "relevant": [
-            "마케팅/소셜미디어전략.md",
             "마케팅/파트너십제휴.md"
           ],
           "expanded": [],
           "top1_doc": "/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/감사대응.md",
           "top1_hit": false,
-          "reciprocal_rank": 0.5,
-          "recall_at_3": 0.5
+          "reciprocal_rank": 0.0,
+          "recall_at_3": 0.0
         },
         {
           "query": "우리 색이 정해져 있나",
@@ -1073,8 +1067,8 @@
       "setting": "α=0.75",
       "graph_decay": 0.75,
       "top1_hit_rate": 0.0,
-      "mrr": 0.2388888888888889,
-      "recall_at_3": 0.4,
+      "mrr": 0.20555555555555557,
+      "recall_at_3": 0.36666666666666664,
       "queries": [
         {
           "query": "헬스장 비용을 회사가 지원해 주나",
@@ -1200,14 +1194,13 @@
         {
           "query": "외부 대행사가 만든 산출물은 누가 확인하나",
           "relevant": [
-            "마케팅/소셜미디어전략.md",
             "마케팅/파트너십제휴.md"
           ],
           "expanded": [],
           "top1_doc": "/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/감사대응.md",
           "top1_hit": false,
-          "reciprocal_rank": 0.5,
-          "recall_at_3": 0.5
+          "reciprocal_rank": 0.0,
+          "recall_at_3": 0.0
         },
         {
           "query": "우리 색이 정해져 있나",
@@ -1259,8 +1252,8 @@
       "setting": "α=0.8",
       "graph_decay": 0.8,
       "top1_hit_rate": 0.0,
-      "mrr": 0.2388888888888889,
-      "recall_at_3": 0.4,
+      "mrr": 0.20555555555555557,
+      "recall_at_3": 0.36666666666666664,
       "queries": [
         {
           "query": "헬스장 비용을 회사가 지원해 주나",
@@ -1386,7 +1379,6 @@
         {
           "query": "외부 대행사가 만든 산출물은 누가 확인하나",
           "relevant": [
-            "마케팅/소셜미디어전략.md",
             "마케팅/파트너십제휴.md"
           ],
           "expanded": [
@@ -1394,8 +1386,8 @@
           ],
           "top1_doc": "/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/감사대응.md",
           "top1_hit": false,
-          "reciprocal_rank": 0.5,
-          "recall_at_3": 0.5
+          "reciprocal_rank": 0.0,
+          "recall_at_3": 0.0
         },
         {
           "query": "우리 색이 정해져 있나",
@@ -1447,8 +1439,8 @@
       "setting": "α=0.85",
       "graph_decay": 0.85,
       "top1_hit_rate": 0.0,
-      "mrr": 0.2388888888888889,
-      "recall_at_3": 0.4,
+      "mrr": 0.20555555555555557,
+      "recall_at_3": 0.36666666666666664,
       "queries": [
         {
           "query": "헬스장 비용을 회사가 지원해 주나",
@@ -1580,7 +1572,6 @@
         {
           "query": "외부 대행사가 만든 산출물은 누가 확인하나",
           "relevant": [
-            "마케팅/소셜미디어전략.md",
             "마케팅/파트너십제휴.md"
           ],
           "expanded": [
@@ -1588,8 +1579,8 @@
           ],
           "top1_doc": "/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/감사대응.md",
           "top1_hit": false,
-          "reciprocal_rank": 0.5,
-          "recall_at_3": 0.5
+          "reciprocal_rank": 0.0,
+          "recall_at_3": 0.0
         },
         {
           "query": "우리 색이 정해져 있나",
@@ -1643,8 +1634,8 @@
       "setting": "α=0.9",
       "graph_decay": 0.9,
       "top1_hit_rate": 0.0,
-      "mrr": 0.22333333333333333,
-      "recall_at_3": 0.26666666666666666,
+      "mrr": 0.19,
+      "recall_at_3": 0.23333333333333334,
       "queries": [
         {
           "query": "헬스장 비용을 회사가 지원해 주나",
@@ -1786,7 +1777,6 @@
         {
           "query": "외부 대행사가 만든 산출물은 누가 확인하나",
           "relevant": [
-            "마케팅/소셜미디어전략.md",
             "마케팅/파트너십제휴.md"
           ],
           "expanded": [
@@ -1795,8 +1785,8 @@
           ],
           "top1_doc": "/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/감사대응.md",
           "top1_hit": false,
-          "reciprocal_rank": 0.5,
-          "recall_at_3": 0.5
+          "reciprocal_rank": 0.0,
+          "recall_at_3": 0.0
         },
         {
           "query": "우리 색이 정해져 있나",
@@ -2000,7 +1990,6 @@
         {
           "query": "외부 대행사가 만든 산출물은 누가 확인하나",
           "relevant": [
-            "마케팅/소셜미디어전략.md",
             "마케팅/파트너십제휴.md"
           ],
           "expanded": [

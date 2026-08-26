@@ -11,72 +11,72 @@
         "setting": "no-graph",
         "graph_decay": null,
         "top1_hit_rate": 0.0,
-        "mrr": 0.2388888888888889,
-        "recall_at_3": 0.43333333333333335
+        "mrr": 0.20555555555555557,
+        "recall_at_3": 0.4
       },
       "sweep": [
         {
           "setting": "α=0.5",
           "graph_decay": 0.5,
           "top1_hit_rate": 0.0,
-          "mrr": 0.2388888888888889,
-          "recall_at_3": 0.43333333333333335
+          "mrr": 0.20555555555555557,
+          "recall_at_3": 0.4
         },
         {
           "setting": "α=0.55",
           "graph_decay": 0.55,
           "top1_hit_rate": 0.0,
-          "mrr": 0.2388888888888889,
-          "recall_at_3": 0.43333333333333335
+          "mrr": 0.20555555555555557,
+          "recall_at_3": 0.4
         },
         {
           "setting": "α=0.6",
           "graph_decay": 0.6,
           "top1_hit_rate": 0.0,
-          "mrr": 0.2388888888888889,
-          "recall_at_3": 0.43333333333333335
+          "mrr": 0.20555555555555557,
+          "recall_at_3": 0.4
         },
         {
           "setting": "α=0.65",
           "graph_decay": 0.65,
           "top1_hit_rate": 0.0,
-          "mrr": 0.2388888888888889,
-          "recall_at_3": 0.43333333333333335
+          "mrr": 0.20555555555555557,
+          "recall_at_3": 0.4
         },
         {
           "setting": "α=0.7",
           "graph_decay": 0.7,
           "top1_hit_rate": 0.0,
-          "mrr": 0.2388888888888889,
-          "recall_at_3": 0.4
+          "mrr": 0.20555555555555557,
+          "recall_at_3": 0.36666666666666664
         },
         {
           "setting": "α=0.75",
           "graph_decay": 0.75,
           "top1_hit_rate": 0.0,
-          "mrr": 0.2388888888888889,
-          "recall_at_3": 0.4
+          "mrr": 0.20555555555555557,
+          "recall_at_3": 0.36666666666666664
         },
         {
           "setting": "α=0.8",
           "graph_decay": 0.8,
           "top1_hit_rate": 0.0,
-          "mrr": 0.2388888888888889,
-          "recall_at_3": 0.4
+          "mrr": 0.20555555555555557,
+          "recall_at_3": 0.36666666666666664
         },
         {
           "setting": "α=0.85",
           "graph_decay": 0.85,
           "top1_hit_rate": 0.0,
-          "mrr": 0.2388888888888889,
-          "recall_at_3": 0.4
+          "mrr": 0.20555555555555557,
+          "recall_at_3": 0.36666666666666664
         },
         {
           "setting": "α=0.9",
           "graph_decay": 0.9,
           "top1_hit_rate": 0.0,
-          "mrr": 0.22333333333333333,
-          "recall_at_3": 0.26666666666666666
+          "mrr": 0.19,
+          "recall_at_3": 0.23333333333333334
         },
         {
           "setting": "α=0.95",
@@ -97,72 +97,72 @@
         "setting": "no-graph",
         "graph_decay": null,
         "top1_hit_rate": 0.0,
-        "mrr": 0.2388888888888889,
-        "recall_at_3": 0.43333333333333335
+        "mrr": 0.20555555555555557,
+        "recall_at_3": 0.4
       },
       "sweep": [
         {
           "setting": "α=0.5",
           "graph_decay": 0.5,
           "top1_hit_rate": 0.0,
-          "mrr": 0.2388888888888889,
-          "recall_at_3": 0.43333333333333335
+          "mrr": 0.20555555555555557,
+          "recall_at_3": 0.4
         },
         {
           "setting": "α=0.55",
           "graph_decay": 0.55,
           "top1_hit_rate": 0.0,
-          "mrr": 0.2388888888888889,
-          "recall_at_3": 0.43333333333333335
+          "mrr": 0.20555555555555557,
+          "recall_at_3": 0.4
         },
         {
           "setting": "α=0.6",
           "graph_decay": 0.6,
           "top1_hit_rate": 0.0,
-          "mrr": 0.2388888888888889,
-          "recall_at_3": 0.43333333333333335
+          "mrr": 0.20555555555555557,
+          "recall_at_3": 0.4
         },
         {
           "setting": "α=0.65",
           "graph_decay": 0.65,
           "top1_hit_rate": 0.0,
-          "mrr": 0.2388888888888889,
-          "recall_at_3": 0.43333333333333335
+          "mrr": 0.20555555555555557,
+          "recall_at_3": 0.4
         },
         {
           "setting": "α=0.7",
           "graph_decay": 0.7,
           "top1_hit_rate": 0.0,
-          "mrr": 0.2388888888888889,
-          "recall_at_3": 0.4
+          "mrr": 0.20555555555555557,
+          "recall_at_3": 0.36666666666666664
         },
         {
           "setting": "α=0.75",
           "graph_decay": 0.75,
           "top1_hit_rate": 0.0,
-          "mrr": 0.2388888888888889,
-          "recall_at_3": 0.4
+          "mrr": 0.20555555555555557,
+          "recall_at_3": 0.36666666666666664
         },
         {
           "setting": "α=0.8",
           "graph_decay": 0.8,
           "top1_hit_rate": 0.0,
-          "mrr": 0.2388888888888889,
-          "recall_at_3": 0.4
+          "mrr": 0.20555555555555557,
+          "recall_at_3": 0.36666666666666664
         },
         {
           "setting": "α=0.85",
           "graph_decay": 0.85,
           "top1_hit_rate": 0.0,
-          "mrr": 0.2388888888888889,
-          "recall_at_3": 0.4
+          "mrr": 0.20555555555555557,
+          "recall_at_3": 0.36666666666666664
         },
         {
           "setting": "α=0.9",
           "graph_decay": 0.9,
           "top1_hit_rate": 0.0,
-          "mrr": 0.22333333333333333,
-          "recall_at_3": 0.26666666666666666
+          "mrr": 0.19,
+          "recall_at_3": 0.23333333333333334
         },
         {
           "setting": "α=0.95",
@@ -183,79 +183,79 @@
         "setting": "no-graph",
         "graph_decay": null,
         "top1_hit_rate": 0.0,
-        "mrr": 0.2388888888888889,
-        "recall_at_3": 0.43333333333333335
+        "mrr": 0.20555555555555557,
+        "recall_at_3": 0.4
       },
       "sweep": [
         {
           "setting": "α=0.5",
           "graph_decay": 0.5,
           "top1_hit_rate": 0.0,
-          "mrr": 0.2388888888888889,
-          "recall_at_3": 0.43333333333333335
+          "mrr": 0.20555555555555557,
+          "recall_at_3": 0.4
         },
         {
           "setting": "α=0.55",
           "graph_decay": 0.55,
           "top1_hit_rate": 0.0,
-          "mrr": 0.2388888888888889,
-          "recall_at_3": 0.43333333333333335
+          "mrr": 0.20555555555555557,
+          "recall_at_3": 0.4
         },
         {
           "setting": "α=0.6",
           "graph_decay": 0.6,
           "top1_hit_rate": 0.0,
-          "mrr": 0.2388888888888889,
-          "recall_at_3": 0.43333333333333335
+          "mrr": 0.20555555555555557,
+          "recall_at_3": 0.4
         },
         {
           "setting": "α=0.65",
           "graph_decay": 0.65,
           "top1_hit_rate": 0.0,
-          "mrr": 0.2388888888888889,
-          "recall_at_3": 0.43333333333333335
+          "mrr": 0.20555555555555557,
+          "recall_at_3": 0.4
         },
         {
           "setting": "α=0.7",
           "graph_decay": 0.7,
           "top1_hit_rate": 0.0,
-          "mrr": 0.2388888888888889,
-          "recall_at_3": 0.43333333333333335
+          "mrr": 0.20555555555555557,
+          "recall_at_3": 0.4
         },
         {
           "setting": "α=0.75",
           "graph_decay": 0.75,
           "top1_hit_rate": 0.0,
-          "mrr": 0.2388888888888889,
-          "recall_at_3": 0.43333333333333335
+          "mrr": 0.20555555555555557,
+          "recall_at_3": 0.4
         },
         {
           "setting": "α=0.8",
           "graph_decay": 0.8,
           "top1_hit_rate": 0.0,
-          "mrr": 0.2388888888888889,
-          "recall_at_3": 0.43333333333333335
+          "mrr": 0.20555555555555557,
+          "recall_at_3": 0.4
         },
         {
           "setting": "α=0.85",
           "graph_decay": 0.85,
           "top1_hit_rate": 0.0,
-          "mrr": 0.2388888888888889,
-          "recall_at_3": 0.43333333333333335
+          "mrr": 0.20555555555555557,
+          "recall_at_3": 0.4
         },
         {
           "setting": "α=0.9",
           "graph_decay": 0.9,
           "top1_hit_rate": 0.0,
-          "mrr": 0.22222222222222224,
-          "recall_at_3": 0.36666666666666664
+          "mrr": 0.1888888888888889,
+          "recall_at_3": 0.3333333333333333
         },
         {
           "setting": "α=0.95",
           "graph_decay": 0.95,
           "top1_hit_rate": 0.0,
-          "mrr": 0.22444444444444445,
-          "recall_at_3": 0.36666666666666664
+          "mrr": 0.20222222222222222,
+          "recall_at_3": 0.3333333333333333
         }
       ]
     },
@@ -269,72 +269,72 @@
         "setting": "no-graph",
         "graph_decay": null,
         "top1_hit_rate": 0.0,
-        "mrr": 0.2388888888888889,
-        "recall_at_3": 0.43333333333333335
+        "mrr": 0.20555555555555557,
+        "recall_at_3": 0.4
       },
       "sweep": [
         {
           "setting": "α=0.5",
           "graph_decay": 0.5,
           "top1_hit_rate": 0.0,
-          "mrr": 0.2388888888888889,
-          "recall_at_3": 0.43333333333333335
+          "mrr": 0.20555555555555557,
+          "recall_at_3": 0.4
         },
         {
           "setting": "α=0.55",
           "graph_decay": 0.55,
           "top1_hit_rate": 0.0,
-          "mrr": 0.2388888888888889,
-          "recall_at_3": 0.43333333333333335
+          "mrr": 0.20555555555555557,
+          "recall_at_3": 0.4
         },
         {
           "setting": "α=0.6",
           "graph_decay": 0.6,
           "top1_hit_rate": 0.0,
-          "mrr": 0.2388888888888889,
-          "recall_at_3": 0.43333333333333335
+          "mrr": 0.20555555555555557,
+          "recall_at_3": 0.4
         },
         {
           "setting": "α=0.65",
           "graph_decay": 0.65,
           "top1_hit_rate": 0.0,
-          "mrr": 0.2388888888888889,
-          "recall_at_3": 0.43333333333333335
+          "mrr": 0.20555555555555557,
+          "recall_at_3": 0.4
         },
         {
           "setting": "α=0.7",
           "graph_decay": 0.7,
           "top1_hit_rate": 0.0,
-          "mrr": 0.2388888888888889,
-          "recall_at_3": 0.4
+          "mrr": 0.20555555555555557,
+          "recall_at_3": 0.36666666666666664
         },
         {
           "setting": "α=0.75",
           "graph_decay": 0.75,
           "top1_hit_rate": 0.0,
-          "mrr": 0.2388888888888889,
-          "recall_at_3": 0.4
+          "mrr": 0.20555555555555557,
+          "recall_at_3": 0.36666666666666664
         },
         {
           "setting": "α=0.8",
           "graph_decay": 0.8,
           "top1_hit_rate": 0.0,
-          "mrr": 0.2388888888888889,
-          "recall_at_3": 0.4
+          "mrr": 0.20555555555555557,
+          "recall_at_3": 0.36666666666666664
         },
         {
           "setting": "α=0.85",
           "graph_decay": 0.85,
           "top1_hit_rate": 0.0,
-          "mrr": 0.2388888888888889,
-          "recall_at_3": 0.4
+          "mrr": 0.20555555555555557,
+          "recall_at_3": 0.36666666666666664
         },
         {
           "setting": "α=0.9",
           "graph_decay": 0.9,
           "top1_hit_rate": 0.0,
-          "mrr": 0.22333333333333333,
-          "recall_at_3": 0.26666666666666666
+          "mrr": 0.19,
+          "recall_at_3": 0.23333333333333334
         },
         {
           "setting": "α=0.95",
@@ -355,79 +355,79 @@
         "setting": "no-graph",
         "graph_decay": null,
         "top1_hit_rate": 0.0,
-        "mrr": 0.2388888888888889,
-        "recall_at_3": 0.43333333333333335
+        "mrr": 0.20555555555555557,
+        "recall_at_3": 0.4
       },
       "sweep": [
         {
           "setting": "α=0.5",
           "graph_decay": 0.5,
           "top1_hit_rate": 0.0,
-          "mrr": 0.2388888888888889,
-          "recall_at_3": 0.43333333333333335
+          "mrr": 0.20555555555555557,
+          "recall_at_3": 0.4
         },
         {
           "setting": "α=0.55",
           "graph_decay": 0.55,
           "top1_hit_rate": 0.0,
-          "mrr": 0.2388888888888889,
-          "recall_at_3": 0.43333333333333335
+          "mrr": 0.20555555555555557,
+          "recall_at_3": 0.4
         },
         {
           "setting": "α=0.6",
           "graph_decay": 0.6,
           "top1_hit_rate": 0.0,
-          "mrr": 0.2388888888888889,
-          "recall_at_3": 0.43333333333333335
+          "mrr": 0.20555555555555557,
+          "recall_at_3": 0.4
         },
         {
           "setting": "α=0.65",
           "graph_decay": 0.65,
           "top1_hit_rate": 0.0,
-          "mrr": 0.2388888888888889,
-          "recall_at_3": 0.43333333333333335
+          "mrr": 0.20555555555555557,
+          "recall_at_3": 0.4
         },
         {
           "setting": "α=0.7",
           "graph_decay": 0.7,
           "top1_hit_rate": 0.0,
-          "mrr": 0.2388888888888889,
-          "recall_at_3": 0.43333333333333335
+          "mrr": 0.20555555555555557,
+          "recall_at_3": 0.4
         },
         {
           "setting": "α=0.75",
           "graph_decay": 0.75,
           "top1_hit_rate": 0.0,
-          "mrr": 0.2388888888888889,
-          "recall_at_3": 0.43333333333333335
+          "mrr": 0.20555555555555557,
+          "recall_at_3": 0.4
         },
         {
           "setting": "α=0.8",
           "graph_decay": 0.8,
           "top1_hit_rate": 0.0,
-          "mrr": 0.2388888888888889,
-          "recall_at_3": 0.43333333333333335
+          "mrr": 0.20555555555555557,
+          "recall_at_3": 0.4
         },
         {
           "setting": "α=0.85",
           "graph_decay": 0.85,
           "top1_hit_rate": 0.0,
-          "mrr": 0.2388888888888889,
-          "recall_at_3": 0.43333333333333335
+          "mrr": 0.20555555555555557,
+          "recall_at_3": 0.4
         },
         {
           "setting": "α=0.9",
           "graph_decay": 0.9,
           "top1_hit_rate": 0.0,
-          "mrr": 0.23333333333333334,
-          "recall_at_3": 0.36666666666666664
+          "mrr": 0.21333333333333335,
+          "recall_at_3": 0.3333333333333333
         },
         {
           "setting": "α=0.95",
           "graph_decay": 0.95,
           "top1_hit_rate": 0.0,
-          "mrr": 0.25,
-          "recall_at_3": 0.36666666666666664
+          "mrr": 0.23333333333333334,
+          "recall_at_3": 0.3333333333333333
         }
       ]
     },
@@ -441,72 +441,72 @@
         "setting": "no-graph",
         "graph_decay": null,
         "top1_hit_rate": 0.0,
-        "mrr": 0.22222222222222224,
-        "recall_at_3": 0.43333333333333335
+        "mrr": 0.1888888888888889,
+        "recall_at_3": 0.4
       },
       "sweep": [
         {
           "setting": "α=0.5",
           "graph_decay": 0.5,
           "top1_hit_rate": 0.0,
-          "mrr": 0.22222222222222224,
-          "recall_at_3": 0.43333333333333335
+          "mrr": 0.1888888888888889,
+          "recall_at_3": 0.4
         },
         {
           "setting": "α=0.55",
           "graph_decay": 0.55,
           "top1_hit_rate": 0.0,
-          "mrr": 0.22222222222222224,
-          "recall_at_3": 0.43333333333333335
+          "mrr": 0.1888888888888889,
+          "recall_at_3": 0.4
         },
         {
           "setting": "α=0.6",
           "graph_decay": 0.6,
           "top1_hit_rate": 0.0,
-          "mrr": 0.22222222222222224,
-          "recall_at_3": 0.43333333333333335
+          "mrr": 0.1888888888888889,
+          "recall_at_3": 0.4
         },
         {
           "setting": "α=0.65",
           "graph_decay": 0.65,
           "top1_hit_rate": 0.0,
-          "mrr": 0.22222222222222224,
-          "recall_at_3": 0.43333333333333335
+          "mrr": 0.1888888888888889,
+          "recall_at_3": 0.4
         },
         {
           "setting": "α=0.7",
           "graph_decay": 0.7,
           "top1_hit_rate": 0.0,
-          "mrr": 0.22222222222222224,
-          "recall_at_3": 0.4
+          "mrr": 0.1888888888888889,
+          "recall_at_3": 0.36666666666666664
         },
         {
           "setting": "α=0.75",
           "graph_decay": 0.75,
           "top1_hit_rate": 0.0,
-          "mrr": 0.22222222222222224,
-          "recall_at_3": 0.4
+          "mrr": 0.1888888888888889,
+          "recall_at_3": 0.36666666666666664
         },
         {
           "setting": "α=0.8",
           "graph_decay": 0.8,
           "top1_hit_rate": 0.0,
-          "mrr": 0.22222222222222224,
-          "recall_at_3": 0.4
+          "mrr": 0.1888888888888889,
+          "recall_at_3": 0.36666666666666664
         },
         {
           "setting": "α=0.85",
           "graph_decay": 0.85,
           "top1_hit_rate": 0.0,
-          "mrr": 0.22222222222222224,
-          "recall_at_3": 0.4
+          "mrr": 0.1888888888888889,
+          "recall_at_3": 0.36666666666666664
         },
         {
           "setting": "α=0.9",
           "graph_decay": 0.9,
           "top1_hit_rate": 0.0,
-          "mrr": 0.16666666666666666,
-          "recall_at_3": 0.26666666666666666
+          "mrr": 0.13333333333333333,
+          "recall_at_3": 0.23333333333333334
         },
         {
           "setting": "α=0.95",
@@ -527,78 +527,78 @@
         "setting": "no-graph",
         "graph_decay": null,
         "top1_hit_rate": 0.0,
-        "mrr": 0.2927248677248677,
-        "recall_at_3": 0.43333333333333335
+        "mrr": 0.26679894179894176,
+        "recall_at_3": 0.4
       },
       "sweep": [
         {
           "setting": "α=0.5",
           "graph_decay": 0.5,
           "top1_hit_rate": 0.0,
-          "mrr": 0.2927248677248677,
-          "recall_at_3": 0.43333333333333335
+          "mrr": 0.26679894179894176,
+          "recall_at_3": 0.4
         },
         {
           "setting": "α=0.55",
           "graph_decay": 0.55,
           "top1_hit_rate": 0.0,
-          "mrr": 0.2927248677248677,
-          "recall_at_3": 0.43333333333333335
+          "mrr": 0.26679894179894176,
+          "recall_at_3": 0.4
         },
         {
           "setting": "α=0.6",
           "graph_decay": 0.6,
           "top1_hit_rate": 0.0,
-          "mrr": 0.2927248677248677,
-          "recall_at_3": 0.43333333333333335
+          "mrr": 0.26679894179894176,
+          "recall_at_3": 0.4
         },
         {
           "setting": "α=0.65",
           "graph_decay": 0.65,
           "top1_hit_rate": 0.0,
-          "mrr": 0.2927248677248677,
-          "recall_at_3": 0.43333333333333335
+          "mrr": 0.26679894179894176,
+          "recall_at_3": 0.4
         },
         {
           "setting": "α=0.7",
           "graph_decay": 0.7,
           "top1_hit_rate": 0.0,
-          "mrr": 0.28439153439153436,
-          "recall_at_3": 0.4
+          "mrr": 0.25846560846560845,
+          "recall_at_3": 0.36666666666666664
         },
         {
           "setting": "α=0.75",
           "graph_decay": 0.75,
           "top1_hit_rate": 0.0,
-          "mrr": 0.28439153439153436,
-          "recall_at_3": 0.4
+          "mrr": 0.25105820105820104,
+          "recall_at_3": 0.36666666666666664
         },
         {
           "setting": "α=0.8",
           "graph_decay": 0.8,
           "top1_hit_rate": 0.0,
-          "mrr": 0.28439153439153436,
-          "recall_at_3": 0.4
+          "mrr": 0.25105820105820104,
+          "recall_at_3": 0.36666666666666664
         },
         {
           "setting": "α=0.85",
           "graph_decay": 0.85,
           "top1_hit_rate": 0.0,
-          "mrr": 0.2741269841269841,
-          "recall_at_3": 0.4
+          "mrr": 0.2407936507936508,
+          "recall_at_3": 0.36666666666666664
         },
         {
           "setting": "α=0.9",
           "graph_decay": 0.9,
           "top1_hit_rate": 0.0,
-          "mrr": 0.22055555555555553,
-          "recall_at_3": 0.3333333333333333
+          "mrr": 0.1872222222222222,
+          "recall_at_3": 0.3
         },
         {
           "setting": "α=0.95",
           "graph_decay": 0.95,
           "top1_hit_rate": 0.0,
-          "mrr": 0.20129629629629628,
+          "mrr": 0.18796296296296297,
           "recall_at_3": 0.3
         }
       ]

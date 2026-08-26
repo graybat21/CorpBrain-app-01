@@ -9,7 +9,7 @@ no-graph,직접 만들지 않고 이미 있는 걸 쓰기로 한 부분은,/User
 no-graph,돈을 얼마 이상 쓰면 대표가 직접 봐야 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/원가분석.md,False,0.0000,0.0000
 no-graph,작년보다 얼마나 더 쓰기로 했나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/법무/계약검토메모.md,False,0.0000,0.0000
 no-graph,다음 분기에는 나아질 거라고 보는 근거는,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/원가분석.md,False,0.3333,1.0000
-no-graph,외부 대행사가 만든 산출물은 누가 확인하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/감사대응.md,False,0.5000,0.5000
+no-graph,외부 대행사가 만든 산출물은 누가 확인하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/감사대응.md,False,0.0000,0.0000
 no-graph,우리 색이 정해져 있나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/소셜미디어전략.md,False,0.5000,1.0000
 no-graph,행사는 몇 번 여나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/파트너십제휴.md,False,0.5000,1.0000
 no-graph,매달 마지막에 하는 일이 있나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/브랜드가이드.md,False,0.0000,0.0000
@@ -24,7 +24,7 @@ no-graph,이름이 안 적힌 음식은 어떻게 처리되나,/Users/doctorf/or
 α=0.5,돈을 얼마 이상 쓰면 대표가 직접 봐야 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/원가분석.md,False,0.0000,0.0000
 α=0.5,작년보다 얼마나 더 쓰기로 했나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/법무/계약검토메모.md,False,0.0000,0.0000
 α=0.5,다음 분기에는 나아질 거라고 보는 근거는,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/원가분석.md,False,0.3333,1.0000
-α=0.5,외부 대행사가 만든 산출물은 누가 확인하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/감사대응.md,False,0.5000,0.5000
+α=0.5,외부 대행사가 만든 산출물은 누가 확인하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/감사대응.md,False,0.0000,0.0000
 α=0.5,우리 색이 정해져 있나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/소셜미디어전략.md,False,0.5000,1.0000
 α=0.5,행사는 몇 번 여나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/파트너십제휴.md,False,0.5000,1.0000
 α=0.5,매달 마지막에 하는 일이 있나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/브랜드가이드.md,False,0.0000,0.0000
@@ -39,7 +39,7 @@ no-graph,이름이 안 적힌 음식은 어떻게 처리되나,/Users/doctorf/or
 α=0.55,돈을 얼마 이상 쓰면 대표가 직접 봐야 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/원가분석.md,False,0.0000,0.0000
 α=0.55,작년보다 얼마나 더 쓰기로 했나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/법무/계약검토메모.md,False,0.0000,0.0000
 α=0.55,다음 분기에는 나아질 거라고 보는 근거는,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/원가분석.md,False,0.3333,1.0000
-α=0.55,외부 대행사가 만든 산출물은 누가 확인하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/감사대응.md,False,0.5000,0.5000
+α=0.55,외부 대행사가 만든 산출물은 누가 확인하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/감사대응.md,False,0.0000,0.0000
 α=0.55,우리 색이 정해져 있나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/소셜미디어전략.md,False,0.5000,1.0000
 α=0.55,행사는 몇 번 여나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/파트너십제휴.md,False,0.5000,1.0000
 α=0.55,매달 마지막에 하는 일이 있나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/브랜드가이드.md,False,0.0000,0.0000
@@ -54,7 +54,7 @@ no-graph,이름이 안 적힌 음식은 어떻게 처리되나,/Users/doctorf/or
 α=0.6,돈을 얼마 이상 쓰면 대표가 직접 봐야 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/원가분석.md,False,0.0000,0.0000
 α=0.6,작년보다 얼마나 더 쓰기로 했나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/법무/계약검토메모.md,False,0.0000,0.0000
 α=0.6,다음 분기에는 나아질 거라고 보는 근거는,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/원가분석.md,False,0.3333,1.0000
-α=0.6,외부 대행사가 만든 산출물은 누가 확인하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/감사대응.md,False,0.5000,0.5000
+α=0.6,외부 대행사가 만든 산출물은 누가 확인하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/감사대응.md,False,0.0000,0.0000
 α=0.6,우리 색이 정해져 있나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/소셜미디어전략.md,False,0.5000,1.0000
 α=0.6,행사는 몇 번 여나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/파트너십제휴.md,False,0.5000,1.0000
 α=0.6,매달 마지막에 하는 일이 있나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/브랜드가이드.md,False,0.0000,0.0000
@@ -69,7 +69,7 @@ no-graph,이름이 안 적힌 음식은 어떻게 처리되나,/Users/doctorf/or
 α=0.65,돈을 얼마 이상 쓰면 대표가 직접 봐야 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/원가분석.md,False,0.0000,0.0000
 α=0.65,작년보다 얼마나 더 쓰기로 했나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/법무/계약검토메모.md,False,0.0000,0.0000
 α=0.65,다음 분기에는 나아질 거라고 보는 근거는,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/원가분석.md,False,0.3333,1.0000
-α=0.65,외부 대행사가 만든 산출물은 누가 확인하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/감사대응.md,False,0.5000,0.5000
+α=0.65,외부 대행사가 만든 산출물은 누가 확인하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/감사대응.md,False,0.0000,0.0000
 α=0.65,우리 색이 정해져 있나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/소셜미디어전략.md,False,0.5000,1.0000
 α=0.65,행사는 몇 번 여나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/파트너십제휴.md,False,0.5000,1.0000
 α=0.65,매달 마지막에 하는 일이 있나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/브랜드가이드.md,False,0.0000,0.0000
@@ -84,7 +84,7 @@ no-graph,이름이 안 적힌 음식은 어떻게 처리되나,/Users/doctorf/or
 α=0.7,돈을 얼마 이상 쓰면 대표가 직접 봐야 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/원가분석.md,False,0.0000,0.0000
 α=0.7,작년보다 얼마나 더 쓰기로 했나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/법무/계약검토메모.md,False,0.0000,0.0000
 α=0.7,다음 분기에는 나아질 거라고 보는 근거는,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/원가분석.md,False,0.3333,1.0000
-α=0.7,외부 대행사가 만든 산출물은 누가 확인하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/감사대응.md,False,0.5000,0.5000
+α=0.7,외부 대행사가 만든 산출물은 누가 확인하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/감사대응.md,False,0.0000,0.0000
 α=0.7,우리 색이 정해져 있나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/소셜미디어전략.md,False,0.5000,1.0000
 α=0.7,행사는 몇 번 여나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/파트너십제휴.md,False,0.5000,1.0000
 α=0.7,매달 마지막에 하는 일이 있나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/브랜드가이드.md,False,0.0000,0.0000
@@ -99,7 +99,7 @@ no-graph,이름이 안 적힌 음식은 어떻게 처리되나,/Users/doctorf/or
 α=0.75,돈을 얼마 이상 쓰면 대표가 직접 봐야 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/원가분석.md,False,0.0000,0.0000
 α=0.75,작년보다 얼마나 더 쓰기로 했나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/법무/계약검토메모.md,False,0.0000,0.0000
 α=0.75,다음 분기에는 나아질 거라고 보는 근거는,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/원가분석.md,False,0.3333,1.0000
-α=0.75,외부 대행사가 만든 산출물은 누가 확인하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/감사대응.md,False,0.5000,0.5000
+α=0.75,외부 대행사가 만든 산출물은 누가 확인하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/감사대응.md,False,0.0000,0.0000
 α=0.75,우리 색이 정해져 있나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/소셜미디어전략.md,False,0.5000,1.0000
 α=0.75,행사는 몇 번 여나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/파트너십제휴.md,False,0.5000,1.0000
 α=0.75,매달 마지막에 하는 일이 있나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/브랜드가이드.md,False,0.0000,0.0000
@@ -114,7 +114,7 @@ no-graph,이름이 안 적힌 음식은 어떻게 처리되나,/Users/doctorf/or
 α=0.8,돈을 얼마 이상 쓰면 대표가 직접 봐야 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/원가분석.md,False,0.0000,0.0000
 α=0.8,작년보다 얼마나 더 쓰기로 했나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/법무/계약검토메모.md,False,0.0000,0.0000
 α=0.8,다음 분기에는 나아질 거라고 보는 근거는,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/원가분석.md,False,0.3333,1.0000
-α=0.8,외부 대행사가 만든 산출물은 누가 확인하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/감사대응.md,False,0.5000,0.5000
+α=0.8,외부 대행사가 만든 산출물은 누가 확인하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/감사대응.md,False,0.0000,0.0000
 α=0.8,우리 색이 정해져 있나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/소셜미디어전략.md,False,0.5000,1.0000
 α=0.8,행사는 몇 번 여나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/파트너십제휴.md,False,0.5000,1.0000
 α=0.8,매달 마지막에 하는 일이 있나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/브랜드가이드.md,False,0.0000,0.0000
@@ -129,7 +129,7 @@ no-graph,이름이 안 적힌 음식은 어떻게 처리되나,/Users/doctorf/or
 α=0.85,돈을 얼마 이상 쓰면 대표가 직접 봐야 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/원가분석.md,False,0.0000,0.0000
 α=0.85,작년보다 얼마나 더 쓰기로 했나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/법무/계약검토메모.md,False,0.0000,0.0000
 α=0.85,다음 분기에는 나아질 거라고 보는 근거는,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/원가분석.md,False,0.3333,1.0000
-α=0.85,외부 대행사가 만든 산출물은 누가 확인하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/감사대응.md,False,0.5000,0.5000
+α=0.85,외부 대행사가 만든 산출물은 누가 확인하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/감사대응.md,False,0.0000,0.0000
 α=0.85,우리 색이 정해져 있나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/소셜미디어전략.md,False,0.5000,1.0000
 α=0.85,행사는 몇 번 여나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/파트너십제휴.md,False,0.5000,1.0000
 α=0.85,매달 마지막에 하는 일이 있나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/브랜드가이드.md,False,0.0000,0.0000
@@ -144,7 +144,7 @@ no-graph,이름이 안 적힌 음식은 어떻게 처리되나,/Users/doctorf/or
 α=0.9,돈을 얼마 이상 쓰면 대표가 직접 봐야 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/원가분석.md,False,0.0000,0.0000
 α=0.9,작년보다 얼마나 더 쓰기로 했나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/법무/계약검토메모.md,False,0.2000,0.0000
 α=0.9,다음 분기에는 나아질 거라고 보는 근거는,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/원가분석.md,False,0.2000,0.0000
-α=0.9,외부 대행사가 만든 산출물은 누가 확인하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/감사대응.md,False,0.5000,0.5000
+α=0.9,외부 대행사가 만든 산출물은 누가 확인하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/감사대응.md,False,0.0000,0.0000
 α=0.9,우리 색이 정해져 있나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/소셜미디어전략.md,False,0.5000,1.0000
 α=0.9,행사는 몇 번 여나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/파트너십제휴.md,False,0.5000,1.0000
 α=0.9,매달 마지막에 하는 일이 있나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/브랜드가이드.md,False,0.0000,0.0000
