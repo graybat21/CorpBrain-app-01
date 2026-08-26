@@ -325,7 +325,13 @@ def _expansion_evidence(expansion: GraphExpansion, score: float) -> str:
     parts: list[str] = []
     # 대괄호 안 숫자는 최종 점수다. 두 값이 같으면 알릴 것이 없으므로 코사인을 적지 않는다 —
     # 같은 숫자를 한 줄에서 두 번 적지 않는다 (T2).
-    if expansion.cosine is not None and expansion.cosine != score:
+    #
+    # 비교는 **렌더된 문자열**로 한다. 원시 float 로 비교하면 `max()` 가 `시드 × α` 를 골라
+    # 코사인과 값이 다른데도 소수 셋째 자리까지는 같은 경우를 걸러 내지 못한다 —
+    # 코사인 0.4969 · 시드 0.710 × α 0.7 = 0.497 이면 「[0.497] … 코사인 0.497」 이 나온다.
+    # α 가 클수록 `시드 × α` 가 그 문서의 코사인 바로 위에 내려앉으므로 드문 경우가 아니다.
+    # 사용자에게 알릴 것이 있는가는 화면에 같은 숫자가 두 번 보이는가로 정해진다.
+    if expansion.cosine is not None and f"{expansion.cosine:.3f}" != f"{score:.3f}":
         parts.append(f"코사인 {expansion.cosine:.3f}")
     parts.append(f"시드 «{expansion.seed_title}»")
     if expansion.shared_tags:

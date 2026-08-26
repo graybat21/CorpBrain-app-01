@@ -91,7 +91,20 @@ def check_queries_against_index(labeled: list[Labeled], out_dir: Path) -> list[s
     비어 있지 않으면 스윕을 시작하지 않는다 — 인덱스에 없는 문서를 정답으로 두면 어떤 α도
     그 쿼리를 맞힐 수 없어, 「α가 나쁘다」와 「라벨이 틀렸다」가 구분되지 않는다.
     """
-    store = SqliteVectorStore(index_path_for(out_dir))
+    index_path = index_path_for(out_dir)
+    # 인덱스 **파일이 있는지** 를 먼저 본다. `SqliteVectorStore` 는 여는 것만으로 폴더와 빈
+    # DB를 만들어 두므로(`mkdir` + `CREATE TABLE IF NOT EXISTS`), `--out` 을 잘못 적거나
+    # `scan` 전에 돌리면 그 경로에 빈 인덱스가 남는다. 그 뒤 `corpbrain search --out <오타>`
+    # 는 「인덱스가 없다」가 아니라 「인덱스가 비어 있다」고 답해 사용자를 엉뚱한 곳으로
+    # 보낸다 — 측정 스크립트가 진단 대상을 오염시키는 셈이다.
+    if not index_path.exists():
+        return [
+            (
+                f"인덱스가 없다: {index_path} — `--out` 경로가 맞는지 확인하고, "
+                "아직이라면 먼저 `corpbrain scan` 을 실행한다."
+            )
+        ]
+    store = SqliteVectorStore(index_path)
     try:
         known = set(store.list_ids())
     finally:

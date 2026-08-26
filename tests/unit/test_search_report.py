@@ -170,6 +170,42 @@ def test_cosine_item_is_omitted_when_it_equals_the_bracket_score() -> None:
     assert build_search_lines(results)[2] == "       └ 시드 «온보딩» · 공유 태그 `인사`"
 
 
+def test_cosine_item_is_omitted_when_it_only_renders_the_same_as_the_score() -> None:
+    """원시 float 이 달라도 **화면에 같은 숫자가 보이면** 적지 않는다 (§4.6 · T2).
+
+    `max()` 가 `시드 × α` 를 고르면 점수는 그 문서의 코사인보다 크지만, 차이가 소수 넷째
+    자리에 있으면 둘 다 `0.497` 로 렌더된다. 원시 값으로 비교하던 구현은 이 경우를 통과시켜
+    「[0.497] … 코사인 0.497」 을 냈다 — 같은 숫자를 한 줄에서 두 번 적지 않는다는 규칙이
+    막으려던 바로 그 화면이다. α 가 클수록 `시드 × α` 가 코사인 바로 위에 내려앉으므로
+    드문 경우가 아니다.
+    """
+    cosine = 0.4969
+    score = max(cosine, 0.710 * 0.7)  # 0.49699999999999994 — 코사인과 다르지만 렌더는 같다
+    assert cosine != score
+    assert f"{cosine:.3f}" == f"{score:.3f}"
+
+    results = [
+        _expanded(
+            "/docs/a.md",
+            score,
+            "채용계획",
+            GraphExpansion(
+                seed_doc_id="/docs/seed.md",
+                seed_title="온보딩",
+                seed_score=0.710,
+                cosine=cosine,
+                shared_tags=["인사"],
+                shared_entities=[],
+                reference=ReferenceDirection.NONE,
+            ),
+        )
+    ]
+
+    lines = build_search_lines(results)
+    assert lines[1] == "  1. [0.497] 채용계획 — /docs/a.md"
+    assert lines[2] == "       └ 시드 «온보딩» · 공유 태그 `인사`"
+
+
 def test_reference_wording_names_the_seed_explicitly() -> None:
     """근거 줄에는 문서가 둘 등장하므로 «시드»를 글자로 박는다 (§4.6 · T9).
 
