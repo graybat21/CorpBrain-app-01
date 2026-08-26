@@ -92,6 +92,11 @@ class SearchResult:
     doc_id: str
     score: float
     metadata: dict[str, Any]
+    #: 그래프 확산으로 후보에 올라온 문서의 근거 (v0.7 §4.5). 코사인 top-k로 들어온 시드와
+    #: `--no-graph` 경로는 `None`이다 — 코사인 단독 경로와 타입이 갈리지 않도록 선택 필드
+    #: 하나만 더한다. 실제 타입은 아래 `GraphExpansion`이며, v0.6 `ReferenceDirection`을
+    #: 재사용하므로 그 정의 뒤에 놓여 있다(`from __future__ import annotations`로 전방 참조).
+    expansion: GraphExpansion | None = None
 
 
 @dataclass(frozen=True)
@@ -167,6 +172,34 @@ class ReferenceDirection(StrEnum):
     INCOMING = "incoming"
     #: 서로 참조함.
     MUTUAL = "mutual"
+
+
+@dataclass(frozen=True)
+class GraphExpansion:
+    """그래프 확산으로 후보에 올라온 문서의 근거 (v0.7 스펙 §4.5).
+
+    **경계는 «후보 진입 경로»다.** 점수의 출처가 아니라 그 문서가 어떻게 후보가 되었는가로
+    가른다 — 코사인 top-k로 들어온 시드는 이 값이 `None`이고(다른 시드의 그래프 이웃이기도
+    해도 마찬가지), 확산으로 처음 후보가 된 문서는 최종 점수가 자기 코사인으로 결정됐더라도
+    이 값을 갖는다. 점수 출처로 가르면 «코사인 top-k 밖인데 결과에 나타난 문서»가 근거 없이
+    놓인다.
+
+    `shared_tags`·`shared_entities`는 노드 id가 아니라 **표시 라벨**을 담는다 — v0.6
+    `RelatedDocument`와 같다. 렌더러가 재변환하지 않는다.
+    """
+
+    #: 이 문서를 후보로 끌어올린 기준 시드. 여러 시드의 이웃이면 가장 높은 점수를 준 시드다.
+    seed_doc_id: str
+    seed_title: str
+    seed_score: float
+    #: 확산 문서 자신의 코사인. 벡터 인덱스에 없으면 `None`이다 (§5).
+    cosine: float | None
+    #: 기준 시드와 공유하는 태그·엔티티의 표시 라벨.
+    shared_tags: list[str]
+    shared_entities: list[str]
+    #: 기준 시드와의 `REFERENCES` 방향. 줄의 주인은 **확산 문서**이므로 `OUTGOING`이
+    #: 「시드를 참조함」, `INCOMING`이 「시드가 참조함」이다 (§4.6).
+    reference: ReferenceDirection
 
 
 @dataclass(frozen=True)

@@ -10,16 +10,19 @@ from __future__ import annotations
 
 import unicodedata
 from collections import Counter
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 
+from corpbrain.core.errors import PreconditionError
 from corpbrain.core.models import (
     DocFacts,
     EdgeType,
     GraphEdge,
+    GraphExpansion,
     GraphNode,
     NodeType,
     ReferenceDirection,
     RelatedDocument,
+    SearchResult,
 )
 from corpbrain.core.vectorstore import cosine_similarity
 
@@ -328,3 +331,254 @@ def _documents_sharing_attributes(
         for other, (tags, entities) in attributes.items()
         if other != doc_id and (tags.keys() & mine[0].keys() or entities.keys() & mine[1].keys())
     }
+
+
+# --- v0.7: 하이브리드 검색의 입력 검증 (스펙 §4.1·§4.4·§4.5) --------------------
+
+
+def validate_graph_decay(decay: float) -> float:
+    """감쇠 계수 α가 열린 구간 `0 < α < 1` 안인지 확인하고 그대로 돌려준다 (v0.7 §4.1 · T5).
+
+    검증을 CLI 파서가 아니라 **코어에 두는** 이유는 두 가지다 — 규칙이 한 곳에만 있어야
+    코어를 직접 부르는 후속 어댑터(GUI 등)도 같은 보호를 받고, 「확산 문서는 자기 시드를
+    추월하지 못한다」(§3 항목4)를 보장하는 성질이 순위 계산과 같은 파일에 놓인다.
+
+    **클램프하지 않는다.** α를 스윕해 효과를 재는 §4.8 측정 절차에서, 조용히 다른 값으로
+    바뀐 α는 결과를 설명 불가능하게 만든다.
+
+    Raises:
+        PreconditionError: `0 < α < 1` 밖(경계값 0.0·1.0 포함)이거나 NaN.
+    """
+    if not 0.0 < decay < 1.0:
+        raise PreconditionError(
+            f"--graph-decay 는 0 과 1 사이여야 합니다 (양 끝 제외): {decay} — "
+            f"1 이상이면 확산 문서가 시드를 추월하고, 0 이하면 확산 기여가 사라집니다."
+        )
+    return decay
+
+
+def parse_expand_edges(raw: str) -> frozenset[EdgeType]:
+    """`--expand-edges` 문자열을 엣지 종류 집합으로 파싱한다 (v0.7 §4.4 · T10).
+
+    파싱도 코어가 맡고 CLI는 문자열을 그대로 넘긴다 — `validate_graph_decay`와 같은 이유다.
+    `EdgeType` StrEnum 값을 **그대로** 받고 짧은 별칭을 새로 만들지 않는다. `graph --stats`
+    출력·DB의 `type` 컬럼·이 플래그가 한 문자열이어야 어휘가 갈리지 않는다.
+
+    쉼표 주변 공백은 다듬고 중복은 `frozenset`이 흡수한다. 빈 목록은 받아 주지 않는다 —
+    확산을 끄는 길은 `--no-graph` 하나여야 §3 항목2·7이 다루는 경로가 갈라지지 않는다.
+
+    Raises:
+        PreconditionError: 빈 목록·빈 항목·소문자·목록에 없는 값.
+    """
+    known = [str(edge_type) for edge_type in EdgeType]
+    items = [item.strip() for item in raw.split(",")]
+    if not raw.strip():
+        raise PreconditionError(
+            f"--expand-edges 가 비어 있습니다 — 확산을 끄려면 --no-graph 를 쓰세요. "
+            f"쓸 수 있는 값: {', '.join(known)}"
+        )
+    unknown = [item for item in items if item not in known]
+    if unknown:
+        raise PreconditionError(
+            f"--expand-edges 에 쓸 수 없는 값이 있습니다: {unknown} — "
+            f"쓸 수 있는 값: {', '.join(known)} (대소문자를 그대로 씁니다)"
+        )
+    return frozenset(EdgeType(item) for item in items)
+
+
+# --- v0.7: 하이브리드 검색의 확산 순위 계산 (스펙 §4.1·§4.3·§4.5) --------------
+
+
+def rank_hybrid(
+    ranked: Sequence[SearchResult],
+    edges: Sequence[GraphEdge],
+    *,
+    labels: Mapping[str, str],
+    expand_edges: Collection[EdgeType],
+    decay: float,
+    top_k: int,
+) -> list[SearchResult]:
+    """코사인 순위에 그래프 시드 확산을 얹어 재순위화한다 (v0.7 §4.1).
+
+    `rank_related`와 같은 자리에 둔 이유는 **순위 규칙을 계승하기 때문**이다 — 동점 처리는
+    v0.6의 계층 정렬 키를 그대로 쓰고 새 상수를 도입하지 않는다(§4.3). 이 함수도 순수
+    계산이라 저장소를 열지 않는다. 조회·조립은 `search.py`가 한다.
+
+    Args:
+        ranked: 코사인 내림차순 **전 문서**. 앞 `top_k`개가 시드이고, 나머지는 확산 문서의
+            자기 코사인·표시 메타데이터를 얻는 데 쓴다. 저장소 계약을 넓히지 않기 위해
+            `search(query_vector, top_k=len(list_ids()))`로 한 번에 받아 넘긴다 (§4.7 T1).
+        edges: 시드와 그 태그·엔티티 노드의 이웃 엣지를 모은 것. 중복은 여기서 흡수한다.
+        labels: 노드 id → 표시 라벨. 저장된 `nodes.label`을 그대로 읽은 값이다.
+        expand_edges: 확산에 쓸 엣지 종류. 후보 생성과 근거 계산 **양쪽에** 적용된다 —
+            켜지 않은 종류는 조회하지도 않았으므로 근거로도 적지 않는다.
+        decay: 감쇠 계수 α. 호출자가 `0 < α < 1`을 이미 검증한 뒤 넘긴다 (§4.5).
+        top_k: 시드 개수이자 최종 결과 개수 (§4.4).
+    """
+    top_k = max(0, top_k)  # 음수 --top-k가 슬라이스를 뒤집지 않도록 방어한다 (v0.4 계승).
+    seeds = list(ranked[:top_k])
+    if not seeds:
+        return []
+
+    by_id = {result.doc_id: result for result in ranked}
+    seed_ids = {result.doc_id for result in seeds}
+    usable = [edge for edge in edges if edge.type in expand_edges]
+
+    attributes = _attributes_by_document(usable)
+    holders = _documents_by_attribute(usable)
+    refs = {(edge.src, edge.dst) for edge in usable if edge.type is EdgeType.REFERENCES}
+    similar = _similar_documents(usable)
+
+    #: 확산 문서 → 기준 시드. 「가장 높은 점수를 준 시드」이고 동점은 시드 `doc_id` 사전순이다.
+    base: dict[str, SearchResult] = {}
+    for seed in seeds:
+        for candidate in _neighbors_of(seed.doc_id, attributes, holders, refs, similar):
+            if candidate in seed_ids:
+                continue  # 코사인 top-k로 이미 들어온 문서 — 진입 경로가 시드다 (§4.5)
+            current = base.get(candidate)
+            if current is None or (-seed.score, seed.doc_id) < (
+                -current.score,
+                current.doc_id,
+            ):
+                base[candidate] = seed
+
+    results = list(seeds)
+    results += [
+        _expanded_result(
+            candidate,
+            seed,
+            by_id=by_id,
+            attributes=attributes,
+            refs=refs,
+            labels=labels,
+            decay=decay,
+        )
+        for candidate, seed in sorted(base.items())
+    ]
+    results.sort(key=_hybrid_rank_key)
+    return results[:top_k]
+
+
+def _expanded_result(
+    doc_id: str,
+    seed: SearchResult,
+    *,
+    by_id: Mapping[str, SearchResult],
+    attributes: Mapping[str, tuple[dict[str, None], dict[str, None]]],
+    refs: set[tuple[str, str]],
+    labels: Mapping[str, str],
+    decay: float,
+) -> SearchResult:
+    """확산 문서 1건의 점수·근거·표시 메타데이터를 조립한다 (§4.1·§4.5)."""
+    own = by_id.get(doc_id)
+    cosine = own.score if own is not None else None
+    score = max(cosine, seed.score * decay) if cosine is not None else seed.score * decay
+
+    mine = attributes.get(doc_id, ({}, {}))
+    theirs = attributes.get(seed.doc_id, ({}, {}))
+    outgoing = {seed.doc_id} if (doc_id, seed.doc_id) in refs else set()
+    incoming = {seed.doc_id} if (seed.doc_id, doc_id) in refs else set()
+
+    if own is not None:
+        metadata = own.metadata
+    else:
+        # 벡터가 없는 확산 문서 — 이 경로에서만 그래프 라벨을 표시에 쓴다 (§4.7).
+        metadata = {"title": labels[doc_id]} if doc_id in labels else {}
+
+    return SearchResult(
+        doc_id=doc_id,
+        score=score,
+        metadata=metadata,
+        expansion=GraphExpansion(
+            seed_doc_id=seed.doc_id,
+            seed_title=seed.metadata.get("title") or labels.get(seed.doc_id) or seed.doc_id,
+            seed_score=seed.score,
+            cosine=cosine,
+            shared_tags=sorted(
+                labels.get(node_id, node_id) for node_id in mine[0].keys() & theirs[0].keys()
+            ),
+            shared_entities=sorted(
+                labels.get(node_id, node_id) for node_id in mine[1].keys() & theirs[1].keys()
+            ),
+            reference=_direction(seed.doc_id, outgoing, incoming),
+        ),
+    )
+
+
+def _hybrid_rank_key(result: SearchResult) -> tuple[float, int, int, int, int, float, str]:
+    """1차 키는 점수 내림차순, 동점은 v0.6 `rank_related`의 계층 정렬 키를 계승한다 (§4.3).
+
+    **점수가 정확히 같으면 시드가 확산 문서보다 앞선다** (§4.3 · 2026-08-26 추가). 그래서
+    2번째 축이 「확산으로 들어왔는가」이고, §4.3이 열거한 관계 축들은 그 아래에 온다.
+    §4.3의 키는 전부 「**시드와의** 공유 엔티티 수」처럼 기준 시드를 전제해 쓰여 있어 시드
+    자신에게는 적용할 대상이 없다. 그 축들을 시드에도 억지로 매기면 관계를 가진 확산 문서가
+    동점에서 시드를 이겨, 코사인 top-k 안에 정말로 들어온 문서가 감쇠로 그 자리에 온 문서에
+    밀려 잘려 나간다. §4.1이 「코사인 하위 시드가 밀려나는 것은 의도된 동작」이라고 한 것은
+    확산 문서의 점수가 **더 높을 때**이지 같을 때가 아니다.
+
+    마지막 키가 **`doc_id`(원문 절대경로) 사전순**인 것이 `rank_related`(출력 상대경로)와
+    다르다 — 조회 시점의 코어는 스캔 루트를 모르고 경로 해석 책임도 지지 않는다. 상대경로를
+    얻으려면 검색 1회마다 위키 전체를 열어야 하는데, 동점 처리 하나를 위해 조회 명령의 비용
+    성격을 바꾸는 일이다. 같은 스캔 루트의 문서들은 공통 접두사 뒤를 비교하므로 결과가 같다.
+    """
+    expansion = result.expansion
+    if expansion is None:
+        # 시드끼리는 점수와 `doc_id`만으로 갈린다. 시드의 점수는 곧 자기 코사인이라
+        # §4.3 4번(자기 코사인 내림차순)이 1차 키에 이미 흡수돼 있다.
+        return (-result.score, 0, 0, 0, 0, -result.score, result.doc_id)
+    return (
+        -result.score,
+        1,
+        0 if expansion.reference is not ReferenceDirection.NONE else 1,
+        -len(expansion.shared_entities),
+        -len(expansion.shared_tags),
+        -expansion.cosine if expansion.cosine is not None else float("inf"),
+        result.doc_id,
+    )
+
+
+def _documents_by_attribute(edges: Sequence[GraphEdge]) -> dict[str, dict[str, None]]:
+    """태그·엔티티 노드 → 그 노드를 가진 문서들. 삽입 순서를 보존하는 dict를 집합처럼 쓴다."""
+    table: dict[str, dict[str, None]] = {}
+    for edge in edges:
+        if edge.type in (EdgeType.TAGGED_WITH, EdgeType.CONTAINS_ENTITY):
+            table.setdefault(edge.dst, {})[edge.src] = None
+    return table
+
+
+def _similar_documents(edges: Sequence[GraphEdge]) -> dict[str, dict[str, None]]:
+    """유사도 엣지의 이웃 문서. 대칭 엣지는 한 행만 저장되므로 양쪽 끝을 모두 본다 (v0.6 §4.1)."""
+    table: dict[str, dict[str, None]] = {}
+    for edge in edges:
+        if edge.type is EdgeType.SEMANTICALLY_SIMILAR:
+            table.setdefault(edge.src, {})[edge.dst] = None
+            table.setdefault(edge.dst, {})[edge.src] = None
+    return table
+
+
+def _neighbors_of(
+    doc_id: str,
+    attributes: Mapping[str, tuple[dict[str, None], dict[str, None]]],
+    holders: Mapping[str, dict[str, None]],
+    refs: set[tuple[str, str]],
+    similar: Mapping[str, dict[str, None]],
+) -> list[str]:
+    """이 시드의 **문서 1홉** 이웃. 태그·엔티티 노드 경유는 홉으로 세지 않는다 (§4.1).
+
+    확산 방향은 따지지 않는다 — `REFERENCES`가 방향 있는 엣지라도 어느 방향이든 이웃으로
+    본다. 방향은 근거 문구에만 반영한다 (§4.2).
+    """
+    found: dict[str, None] = {}
+    tags, entities = attributes.get(doc_id, ({}, {}))
+    for node_id in list(tags) + list(entities):
+        for other in holders.get(node_id, {}):
+            found[other] = None
+    for src, dst in refs:
+        if src == doc_id:
+            found[dst] = None
+        elif dst == doc_id:
+            found[src] = None
+    for other in similar.get(doc_id, {}):
+        found[other] = None
+    found.pop(doc_id, None)  # 자기 자신은 이웃이 아니다 (§4.2)
+    return sorted(found)

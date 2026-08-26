@@ -9,6 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from corpbrain.core.models import EdgeType
+
 DEFAULT_OUT_DIR = Path("./corpbrain_wiki")
 DEFAULT_MODEL = "qwen2.5:7b-instruct"
 #: 임베딩 전용 모델 (v0.4 스펙 §4.1). 요약 모델과 별개로 프리플라이트에서 존재를 확인한다.
@@ -54,6 +56,32 @@ MAX_PATH_LENGTH = 260
 DEFAULT_SIMILARITY_THRESHOLD = 0.5717153219583704
 #: 위키 「관련 문서」 섹션에 넣을 최대 항목 수 (v0.6 스펙 §4.7).
 DEFAULT_RELATED_TOP_K = 5
+
+#: 그래프 시드 확산의 감쇠 계수 α (v0.7 스펙 §4.1). 확산 문서의 점수는
+#: `max(자기 코사인, 기준 시드 점수 × α)`이며, 열린 구간 `0 < α < 1`에서만
+#: 「확산 문서는 자기 시드를 추월하지 못한다」가 성립한다.
+#:
+#: **실측으로 확정한 값이다** — 24문서 코퍼스·쿼리 15개로 α를 0.5~0.95 스윕한 결과에
+#: 스펙 §4.8 4번 규칙(top-1 → MRR → Recall@3 → α 작은 쪽)을 적용해 나왔다.
+#: 근거는 `docs/SMOKE.md` 실행 J, 원시 출력은 `docs/smoke/graph_decay_results.{json,csv}`.
+#:
+#: 이 코퍼스에서 **그래프 확산은 코사인 단독보다 나은 결과를 내지 못했다.** 확산이 개입할수록
+#: 지표가 단조 하락해, 규칙이 고른 0.5는 「가장 좋은 개입 강도」가 아니라 **「이 코퍼스에서
+#: 개입이 일어나지 않는 지점」**이다 — α=0.5에서는 확산 문서가 결과에 한 건도 들어오지 않아
+#: 출력이 `--no-graph`와 같다. 원인은 요약 모델이 뽑는 엔티티가 대부분 부서명이라 선택성이
+#: 없다는 것이다 — `인사팀` 하나가 23문서 중 10개를 잇는다. 자세한 내용과 우회법은
+#: `docs/USAGE.md` §6.3에 있다.
+#:
+#: 자동 테스트는 이 상수를 참조하지 않고 `graph_decay=`를 명시적으로 넘긴다 — 코퍼스가
+#: 달라져 이 한 줄을 다시 교체해도 테스트가 깨지지 않게 하기 위함이다.
+DEFAULT_GRAPH_DECAY = 0.5
+
+#: 확산에 쓸 기본 엣지 종류 3종 (v0.7 스펙 §4.2). 임베딩이 포착하지 못하는 신호만 더한다.
+#: `SEMANTICALLY_SIMILAR`는 임베딩 코사인 그 자체라 같은 신호를 두 번 세게 되므로 기본에서
+#: 빠져 있다 — `--expand-edges`로 켤 수 있다.
+DEFAULT_EXPAND_EDGES: frozenset[EdgeType] = frozenset(
+    {EdgeType.TAGGED_WITH, EdgeType.CONTAINS_ENTITY, EdgeType.REFERENCES}
+)
 
 
 @dataclass(frozen=True)
