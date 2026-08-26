@@ -144,12 +144,18 @@ def test_seed_keeps_expansion_none_even_when_it_is_also_a_neighbor() -> None:
     assert [r.expansion for r in results] == [None, None]
 
 
-def test_expansion_keeps_evidence_even_when_its_own_cosine_wins() -> None:
-    """자기 코사인이 `max()`를 이겨도 확산 진입 문서는 근거를 갖는다 (§4.5 표).
+def test_seed_wins_an_exact_score_tie_against_an_expansion_document() -> None:
+    """점수가 정확히 같으면 시드가 남는다 (§4.3 · 2026-08-26 결정).
 
-    이 경우는 확산 문서의 코사인이 **최하위 시드와 동점**일 때 드러난다 — 그때만 계층 정렬
-    키(공유 태그)가 시드를 밀어내고 확산 문서를 결과에 올린다. 점수 출처로 근거를 갈랐다면
-    이 문서는 코사인 top-k 밖인데도 설명 없이 놓였을 것이다.
+    `/b.md` 는 코사인 top-k 밖이고 자기 코사인(0.44)이 `시드 × α`(0.50 × 0.7 = 0.35)를
+    이겨 점수가 최하위 시드 `/x.md` 와 정확히 같아진다. 이때 확산 문서를 앞세우면 **코사인
+    top-k 안에 정말로 들어온 문서가 감쇠로 그 자리에 온 문서에 밀려 잘려 나간다.**
+    §4.1이 「코사인 하위 시드가 밀려나는 것은 의도된 동작」이라고 한 것은 확산 문서의 점수가
+    더 **높을 때**이지 같을 때가 아니다.
+
+    이전 구현은 §4.3의 관계 축(공유 태그·엔티티·참조)을 시드에도 매겨 이 동점에서 확산
+    문서가 이겼다. 그 축들은 전부 「**시드와의** 공유 …」라 시드 자신에게는 적용할 대상이
+    없다는 것이 정정의 근거다.
     """
     ranked = [_hit("/a.md", 0.50), _hit("/x.md", 0.44), _hit("/b.md", 0.44)]
     edges = [_tagged("/a.md", "인사"), _tagged("/b.md", "인사")]
@@ -157,12 +163,32 @@ def test_expansion_keeps_evidence_even_when_its_own_cosine_wins() -> None:
     results = rank_hybrid(
         ranked, edges, labels=LABELS, expand_edges=NO_SIMILARITY, decay=ALPHA, top_k=2
     )
-    expanded = next(r for r in results if r.doc_id == "/b.md")
 
-    assert [r.doc_id for r in results] == ["/a.md", "/b.md"]  # 시드 /x.md 를 밀어냈다
-    assert expanded.score == 0.44  # 0.50 × 0.7 = 0.35 보다 자기 코사인이 크다
-    assert expanded.expansion is not None
-    assert expanded.expansion.cosine == 0.44
+    assert [r.doc_id for r in results] == ["/a.md", "/x.md"]
+    assert [r.expansion for r in results] == [None, None]   # 둘 다 시드로 남았다
+
+
+def test_an_expansion_document_that_enters_always_scores_above_its_own_cosine() -> None:
+    """위 결정의 따름정리 — 결과에 오른 확산 문서의 점수는 늘 `시드 × α` 다 (§4.5 표 주석).
+
+    확산 문서의 코사인은 정의상 최하위 시드의 코사인 이하이므로, 자기 코사인이 `max()`를
+    이긴 문서는 잘해야 최하위 시드와 동점이고 그 동점은 이제 시드가 가져간다. 따라서 결과에
+    남은 확산 문서는 «자기 코사인 < 점수» 를 만족한다. 근거 줄이 코사인을 따로 적는 이유가
+    바로 이것이다 — 대괄호 숫자는 그 문서의 코사인이 아니다.
+    """
+    ranked = [_hit("/a.md", 0.90), _hit("/x.md", 0.50), _hit("/b.md", 0.10)]
+    edges = [_tagged("/a.md", "인사"), _tagged("/b.md", "인사")]
+
+    results = rank_hybrid(
+        ranked, edges, labels=LABELS, expand_edges=NO_SIMILARITY, decay=ALPHA, top_k=2
+    )
+    expanded = [r for r in results if r.expansion is not None]
+
+    assert [r.doc_id for r in results] == ["/a.md", "/b.md"]  # 0.90 × 0.7 = 0.63 > 시드 0.50
+    assert len(expanded) == 1
+    assert expanded[0].expansion is not None
+    assert expanded[0].expansion.cosine is not None
+    assert expanded[0].expansion.cosine < expanded[0].score
 
 
 def test_expansion_never_outranks_its_seed() -> None:

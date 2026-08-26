@@ -505,8 +505,16 @@ def _expanded_result(
     )
 
 
-def _hybrid_rank_key(result: SearchResult) -> tuple[float, int, int, int, float, str]:
+def _hybrid_rank_key(result: SearchResult) -> tuple[float, int, int, int, int, float, str]:
     """1차 키는 점수 내림차순, 동점은 v0.6 `rank_related`의 계층 정렬 키를 계승한다 (§4.3).
+
+    **점수가 정확히 같으면 시드가 확산 문서보다 앞선다** (§4.3 · 2026-08-26 추가). 그래서
+    2번째 축이 「확산으로 들어왔는가」이고, §4.3이 열거한 관계 축들은 그 아래에 온다.
+    §4.3의 키는 전부 「**시드와의** 공유 엔티티 수」처럼 기준 시드를 전제해 쓰여 있어 시드
+    자신에게는 적용할 대상이 없다. 그 축들을 시드에도 억지로 매기면 관계를 가진 확산 문서가
+    동점에서 시드를 이겨, 코사인 top-k 안에 정말로 들어온 문서가 감쇠로 그 자리에 온 문서에
+    밀려 잘려 나간다. §4.1이 「코사인 하위 시드가 밀려나는 것은 의도된 동작」이라고 한 것은
+    확산 문서의 점수가 **더 높을 때**이지 같을 때가 아니다.
 
     마지막 키가 **`doc_id`(원문 절대경로) 사전순**인 것이 `rank_related`(출력 상대경로)와
     다르다 — 조회 시점의 코어는 스캔 루트를 모르고 경로 해석 책임도 지지 않는다. 상대경로를
@@ -515,10 +523,12 @@ def _hybrid_rank_key(result: SearchResult) -> tuple[float, int, int, int, float,
     """
     expansion = result.expansion
     if expansion is None:
-        # 시드는 진입 경로가 코사인이라 시드와의 관계 자체가 없다 — 관계 축을 전부 0으로 둔다.
-        return (-result.score, 1, 0, 0, -result.score, result.doc_id)
+        # 시드끼리는 점수와 `doc_id`만으로 갈린다. 시드의 점수는 곧 자기 코사인이라
+        # §4.3 4번(자기 코사인 내림차순)이 1차 키에 이미 흡수돼 있다.
+        return (-result.score, 0, 0, 0, 0, -result.score, result.doc_id)
     return (
         -result.score,
+        1,
         0 if expansion.reference is not ReferenceDirection.NONE else 1,
         -len(expansion.shared_entities),
         -len(expansion.shared_tags),
