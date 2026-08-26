@@ -1,0 +1,166 @@
+setting,query,top1_doc,top1_hit,reciprocal_rank,recall_at_3
+no-graph,헬스장 비용을 회사가 지원해 주나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/투자계획.md,False,0.5000,1.0000
+no-graph,왜 같은 사람이 계속 맡도록 고정했나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/법무/계약검토메모.md,False,0.0000,0.0000
+no-graph,지난번에 뭐가 문제였길래 이번엔 다르게 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/법무/계약검토메모.md,False,0.0000,0.0000
+no-graph,벡터와 그래프를 왜 서로 다른 파일에 두나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/개발/벡터설계.md,False,0.5000,1.0000
+no-graph,나중에 화면을 붙이려면 무엇을 먼저 정해야 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/인사/온보딩.md,False,0.0000,0.0000
+no-graph,새 기능을 병합하려면 무엇을 갖춰야 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/캠페인기획.md,False,0.0000,0.0000
+no-graph,직접 만들지 않고 이미 있는 걸 쓰기로 한 부분은,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/기타/메모.md,False,0.2500,0.0000
+no-graph,돈을 얼마 이상 쓰면 대표가 직접 봐야 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/원가분석.md,False,0.0000,0.0000
+no-graph,작년보다 얼마나 더 쓰기로 했나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/법무/계약검토메모.md,False,0.0000,0.0000
+no-graph,다음 분기에는 나아질 거라고 보는 근거는,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/원가분석.md,False,0.3333,1.0000
+no-graph,외부 대행사가 만든 산출물은 누가 확인하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/감사대응.md,False,0.5000,0.5000
+no-graph,우리 색이 정해져 있나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/소셜미디어전략.md,False,0.5000,1.0000
+no-graph,행사는 몇 번 여나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/파트너십제휴.md,False,0.5000,1.0000
+no-graph,매달 마지막에 하는 일이 있나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/브랜드가이드.md,False,0.0000,0.0000
+no-graph,이름이 안 적힌 음식은 어떻게 처리되나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/인사/온보딩.md,False,0.5000,1.0000
+α=0.5,헬스장 비용을 회사가 지원해 주나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/투자계획.md,False,0.5000,1.0000
+α=0.5,왜 같은 사람이 계속 맡도록 고정했나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/법무/계약검토메모.md,False,0.0000,0.0000
+α=0.5,지난번에 뭐가 문제였길래 이번엔 다르게 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/법무/계약검토메모.md,False,0.0000,0.0000
+α=0.5,벡터와 그래프를 왜 서로 다른 파일에 두나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/개발/벡터설계.md,False,0.5000,1.0000
+α=0.5,나중에 화면을 붙이려면 무엇을 먼저 정해야 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/인사/온보딩.md,False,0.0000,0.0000
+α=0.5,새 기능을 병합하려면 무엇을 갖춰야 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/캠페인기획.md,False,0.0000,0.0000
+α=0.5,직접 만들지 않고 이미 있는 걸 쓰기로 한 부분은,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/기타/메모.md,False,0.2500,0.0000
+α=0.5,돈을 얼마 이상 쓰면 대표가 직접 봐야 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/원가분석.md,False,0.0000,0.0000
+α=0.5,작년보다 얼마나 더 쓰기로 했나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/법무/계약검토메모.md,False,0.0000,0.0000
+α=0.5,다음 분기에는 나아질 거라고 보는 근거는,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/원가분석.md,False,0.3333,1.0000
+α=0.5,외부 대행사가 만든 산출물은 누가 확인하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/감사대응.md,False,0.5000,0.5000
+α=0.5,우리 색이 정해져 있나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/소셜미디어전략.md,False,0.5000,1.0000
+α=0.5,행사는 몇 번 여나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/파트너십제휴.md,False,0.5000,1.0000
+α=0.5,매달 마지막에 하는 일이 있나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/브랜드가이드.md,False,0.0000,0.0000
+α=0.5,이름이 안 적힌 음식은 어떻게 처리되나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/인사/온보딩.md,False,0.5000,1.0000
+α=0.55,헬스장 비용을 회사가 지원해 주나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/투자계획.md,False,0.5000,1.0000
+α=0.55,왜 같은 사람이 계속 맡도록 고정했나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/법무/계약검토메모.md,False,0.0000,0.0000
+α=0.55,지난번에 뭐가 문제였길래 이번엔 다르게 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/법무/계약검토메모.md,False,0.0000,0.0000
+α=0.55,벡터와 그래프를 왜 서로 다른 파일에 두나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/개발/벡터설계.md,False,0.5000,1.0000
+α=0.55,나중에 화면을 붙이려면 무엇을 먼저 정해야 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/인사/온보딩.md,False,0.0000,0.0000
+α=0.55,새 기능을 병합하려면 무엇을 갖춰야 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/캠페인기획.md,False,0.0000,0.0000
+α=0.55,직접 만들지 않고 이미 있는 걸 쓰기로 한 부분은,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/기타/메모.md,False,0.2500,0.0000
+α=0.55,돈을 얼마 이상 쓰면 대표가 직접 봐야 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/원가분석.md,False,0.0000,0.0000
+α=0.55,작년보다 얼마나 더 쓰기로 했나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/법무/계약검토메모.md,False,0.0000,0.0000
+α=0.55,다음 분기에는 나아질 거라고 보는 근거는,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/원가분석.md,False,0.3333,1.0000
+α=0.55,외부 대행사가 만든 산출물은 누가 확인하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/감사대응.md,False,0.5000,0.5000
+α=0.55,우리 색이 정해져 있나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/소셜미디어전략.md,False,0.5000,1.0000
+α=0.55,행사는 몇 번 여나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/파트너십제휴.md,False,0.5000,1.0000
+α=0.55,매달 마지막에 하는 일이 있나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/브랜드가이드.md,False,0.0000,0.0000
+α=0.55,이름이 안 적힌 음식은 어떻게 처리되나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/인사/온보딩.md,False,0.5000,1.0000
+α=0.6,헬스장 비용을 회사가 지원해 주나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/투자계획.md,False,0.5000,1.0000
+α=0.6,왜 같은 사람이 계속 맡도록 고정했나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/법무/계약검토메모.md,False,0.0000,0.0000
+α=0.6,지난번에 뭐가 문제였길래 이번엔 다르게 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/법무/계약검토메모.md,False,0.0000,0.0000
+α=0.6,벡터와 그래프를 왜 서로 다른 파일에 두나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/개발/벡터설계.md,False,0.5000,1.0000
+α=0.6,나중에 화면을 붙이려면 무엇을 먼저 정해야 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/인사/온보딩.md,False,0.0000,0.0000
+α=0.6,새 기능을 병합하려면 무엇을 갖춰야 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/캠페인기획.md,False,0.0000,0.0000
+α=0.6,직접 만들지 않고 이미 있는 걸 쓰기로 한 부분은,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/기타/메모.md,False,0.2500,0.0000
+α=0.6,돈을 얼마 이상 쓰면 대표가 직접 봐야 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/원가분석.md,False,0.0000,0.0000
+α=0.6,작년보다 얼마나 더 쓰기로 했나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/법무/계약검토메모.md,False,0.0000,0.0000
+α=0.6,다음 분기에는 나아질 거라고 보는 근거는,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/원가분석.md,False,0.3333,1.0000
+α=0.6,외부 대행사가 만든 산출물은 누가 확인하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/감사대응.md,False,0.5000,0.5000
+α=0.6,우리 색이 정해져 있나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/소셜미디어전략.md,False,0.5000,1.0000
+α=0.6,행사는 몇 번 여나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/파트너십제휴.md,False,0.5000,1.0000
+α=0.6,매달 마지막에 하는 일이 있나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/브랜드가이드.md,False,0.0000,0.0000
+α=0.6,이름이 안 적힌 음식은 어떻게 처리되나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/인사/온보딩.md,False,0.5000,1.0000
+α=0.65,헬스장 비용을 회사가 지원해 주나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/투자계획.md,False,0.5000,1.0000
+α=0.65,왜 같은 사람이 계속 맡도록 고정했나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/법무/계약검토메모.md,False,0.0000,0.0000
+α=0.65,지난번에 뭐가 문제였길래 이번엔 다르게 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/법무/계약검토메모.md,False,0.0000,0.0000
+α=0.65,벡터와 그래프를 왜 서로 다른 파일에 두나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/개발/벡터설계.md,False,0.5000,1.0000
+α=0.65,나중에 화면을 붙이려면 무엇을 먼저 정해야 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/인사/온보딩.md,False,0.0000,0.0000
+α=0.65,새 기능을 병합하려면 무엇을 갖춰야 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/캠페인기획.md,False,0.0000,0.0000
+α=0.65,직접 만들지 않고 이미 있는 걸 쓰기로 한 부분은,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/기타/메모.md,False,0.2500,0.0000
+α=0.65,돈을 얼마 이상 쓰면 대표가 직접 봐야 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/원가분석.md,False,0.0000,0.0000
+α=0.65,작년보다 얼마나 더 쓰기로 했나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/법무/계약검토메모.md,False,0.0000,0.0000
+α=0.65,다음 분기에는 나아질 거라고 보는 근거는,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/원가분석.md,False,0.3333,1.0000
+α=0.65,외부 대행사가 만든 산출물은 누가 확인하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/감사대응.md,False,0.5000,0.5000
+α=0.65,우리 색이 정해져 있나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/소셜미디어전략.md,False,0.5000,1.0000
+α=0.65,행사는 몇 번 여나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/파트너십제휴.md,False,0.5000,1.0000
+α=0.65,매달 마지막에 하는 일이 있나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/브랜드가이드.md,False,0.0000,0.0000
+α=0.65,이름이 안 적힌 음식은 어떻게 처리되나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/인사/온보딩.md,False,0.5000,1.0000
+α=0.7,헬스장 비용을 회사가 지원해 주나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/투자계획.md,False,0.5000,1.0000
+α=0.7,왜 같은 사람이 계속 맡도록 고정했나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/법무/계약검토메모.md,False,0.0000,0.0000
+α=0.7,지난번에 뭐가 문제였길래 이번엔 다르게 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/법무/계약검토메모.md,False,0.0000,0.0000
+α=0.7,벡터와 그래프를 왜 서로 다른 파일에 두나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/개발/벡터설계.md,False,0.5000,0.5000
+α=0.7,나중에 화면을 붙이려면 무엇을 먼저 정해야 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/인사/온보딩.md,False,0.0000,0.0000
+α=0.7,새 기능을 병합하려면 무엇을 갖춰야 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/캠페인기획.md,False,0.0000,0.0000
+α=0.7,직접 만들지 않고 이미 있는 걸 쓰기로 한 부분은,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/기타/메모.md,False,0.2500,0.0000
+α=0.7,돈을 얼마 이상 쓰면 대표가 직접 봐야 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/원가분석.md,False,0.0000,0.0000
+α=0.7,작년보다 얼마나 더 쓰기로 했나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/법무/계약검토메모.md,False,0.0000,0.0000
+α=0.7,다음 분기에는 나아질 거라고 보는 근거는,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/원가분석.md,False,0.3333,1.0000
+α=0.7,외부 대행사가 만든 산출물은 누가 확인하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/감사대응.md,False,0.5000,0.5000
+α=0.7,우리 색이 정해져 있나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/소셜미디어전략.md,False,0.5000,1.0000
+α=0.7,행사는 몇 번 여나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/파트너십제휴.md,False,0.5000,1.0000
+α=0.7,매달 마지막에 하는 일이 있나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/브랜드가이드.md,False,0.0000,0.0000
+α=0.7,이름이 안 적힌 음식은 어떻게 처리되나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/인사/온보딩.md,False,0.5000,1.0000
+α=0.75,헬스장 비용을 회사가 지원해 주나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/투자계획.md,False,0.5000,1.0000
+α=0.75,왜 같은 사람이 계속 맡도록 고정했나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/법무/계약검토메모.md,False,0.0000,0.0000
+α=0.75,지난번에 뭐가 문제였길래 이번엔 다르게 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/법무/계약검토메모.md,False,0.0000,0.0000
+α=0.75,벡터와 그래프를 왜 서로 다른 파일에 두나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/개발/벡터설계.md,False,0.5000,0.5000
+α=0.75,나중에 화면을 붙이려면 무엇을 먼저 정해야 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/인사/온보딩.md,False,0.0000,0.0000
+α=0.75,새 기능을 병합하려면 무엇을 갖춰야 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/캠페인기획.md,False,0.0000,0.0000
+α=0.75,직접 만들지 않고 이미 있는 걸 쓰기로 한 부분은,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/기타/메모.md,False,0.2500,0.0000
+α=0.75,돈을 얼마 이상 쓰면 대표가 직접 봐야 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/원가분석.md,False,0.0000,0.0000
+α=0.75,작년보다 얼마나 더 쓰기로 했나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/법무/계약검토메모.md,False,0.0000,0.0000
+α=0.75,다음 분기에는 나아질 거라고 보는 근거는,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/원가분석.md,False,0.3333,1.0000
+α=0.75,외부 대행사가 만든 산출물은 누가 확인하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/감사대응.md,False,0.5000,0.5000
+α=0.75,우리 색이 정해져 있나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/소셜미디어전략.md,False,0.5000,1.0000
+α=0.75,행사는 몇 번 여나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/파트너십제휴.md,False,0.5000,1.0000
+α=0.75,매달 마지막에 하는 일이 있나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/브랜드가이드.md,False,0.0000,0.0000
+α=0.75,이름이 안 적힌 음식은 어떻게 처리되나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/인사/온보딩.md,False,0.5000,1.0000
+α=0.8,헬스장 비용을 회사가 지원해 주나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/투자계획.md,False,0.5000,1.0000
+α=0.8,왜 같은 사람이 계속 맡도록 고정했나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/법무/계약검토메모.md,False,0.0000,0.0000
+α=0.8,지난번에 뭐가 문제였길래 이번엔 다르게 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/법무/계약검토메모.md,False,0.0000,0.0000
+α=0.8,벡터와 그래프를 왜 서로 다른 파일에 두나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/개발/벡터설계.md,False,0.5000,0.5000
+α=0.8,나중에 화면을 붙이려면 무엇을 먼저 정해야 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/인사/온보딩.md,False,0.0000,0.0000
+α=0.8,새 기능을 병합하려면 무엇을 갖춰야 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/캠페인기획.md,False,0.0000,0.0000
+α=0.8,직접 만들지 않고 이미 있는 걸 쓰기로 한 부분은,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/기타/메모.md,False,0.2500,0.0000
+α=0.8,돈을 얼마 이상 쓰면 대표가 직접 봐야 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/원가분석.md,False,0.0000,0.0000
+α=0.8,작년보다 얼마나 더 쓰기로 했나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/법무/계약검토메모.md,False,0.0000,0.0000
+α=0.8,다음 분기에는 나아질 거라고 보는 근거는,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/원가분석.md,False,0.3333,1.0000
+α=0.8,외부 대행사가 만든 산출물은 누가 확인하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/감사대응.md,False,0.5000,0.5000
+α=0.8,우리 색이 정해져 있나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/소셜미디어전략.md,False,0.5000,1.0000
+α=0.8,행사는 몇 번 여나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/파트너십제휴.md,False,0.5000,1.0000
+α=0.8,매달 마지막에 하는 일이 있나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/브랜드가이드.md,False,0.0000,0.0000
+α=0.8,이름이 안 적힌 음식은 어떻게 처리되나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/인사/온보딩.md,False,0.5000,1.0000
+α=0.85,헬스장 비용을 회사가 지원해 주나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/투자계획.md,False,0.5000,1.0000
+α=0.85,왜 같은 사람이 계속 맡도록 고정했나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/법무/계약검토메모.md,False,0.0000,0.0000
+α=0.85,지난번에 뭐가 문제였길래 이번엔 다르게 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/법무/계약검토메모.md,False,0.0000,0.0000
+α=0.85,벡터와 그래프를 왜 서로 다른 파일에 두나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/개발/벡터설계.md,False,0.5000,0.5000
+α=0.85,나중에 화면을 붙이려면 무엇을 먼저 정해야 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/인사/온보딩.md,False,0.0000,0.0000
+α=0.85,새 기능을 병합하려면 무엇을 갖춰야 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/캠페인기획.md,False,0.0000,0.0000
+α=0.85,직접 만들지 않고 이미 있는 걸 쓰기로 한 부분은,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/기타/메모.md,False,0.2500,0.0000
+α=0.85,돈을 얼마 이상 쓰면 대표가 직접 봐야 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/원가분석.md,False,0.0000,0.0000
+α=0.85,작년보다 얼마나 더 쓰기로 했나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/법무/계약검토메모.md,False,0.0000,0.0000
+α=0.85,다음 분기에는 나아질 거라고 보는 근거는,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/원가분석.md,False,0.3333,1.0000
+α=0.85,외부 대행사가 만든 산출물은 누가 확인하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/감사대응.md,False,0.5000,0.5000
+α=0.85,우리 색이 정해져 있나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/소셜미디어전략.md,False,0.5000,1.0000
+α=0.85,행사는 몇 번 여나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/파트너십제휴.md,False,0.5000,1.0000
+α=0.85,매달 마지막에 하는 일이 있나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/브랜드가이드.md,False,0.0000,0.0000
+α=0.85,이름이 안 적힌 음식은 어떻게 처리되나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/인사/온보딩.md,False,0.5000,1.0000
+α=0.9,헬스장 비용을 회사가 지원해 주나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/투자계획.md,False,0.0000,0.0000
+α=0.9,왜 같은 사람이 계속 맡도록 고정했나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/법무/계약검토메모.md,False,0.2000,0.0000
+α=0.9,지난번에 뭐가 문제였길래 이번엔 다르게 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/법무/계약검토메모.md,False,0.0000,0.0000
+α=0.9,벡터와 그래프를 왜 서로 다른 파일에 두나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/개발/벡터설계.md,False,0.5000,0.5000
+α=0.9,나중에 화면을 붙이려면 무엇을 먼저 정해야 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/인사/온보딩.md,False,0.0000,0.0000
+α=0.9,새 기능을 병합하려면 무엇을 갖춰야 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/캠페인기획.md,False,0.0000,0.0000
+α=0.9,직접 만들지 않고 이미 있는 걸 쓰기로 한 부분은,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/기타/메모.md,False,0.2500,0.0000
+α=0.9,돈을 얼마 이상 쓰면 대표가 직접 봐야 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/원가분석.md,False,0.0000,0.0000
+α=0.9,작년보다 얼마나 더 쓰기로 했나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/법무/계약검토메모.md,False,0.2000,0.0000
+α=0.9,다음 분기에는 나아질 거라고 보는 근거는,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/원가분석.md,False,0.2000,0.0000
+α=0.9,외부 대행사가 만든 산출물은 누가 확인하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/감사대응.md,False,0.5000,0.5000
+α=0.9,우리 색이 정해져 있나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/소셜미디어전략.md,False,0.5000,1.0000
+α=0.9,행사는 몇 번 여나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/파트너십제휴.md,False,0.5000,1.0000
+α=0.9,매달 마지막에 하는 일이 있나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/브랜드가이드.md,False,0.0000,0.0000
+α=0.9,이름이 안 적힌 음식은 어떻게 처리되나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/인사/온보딩.md,False,0.5000,1.0000
+α=0.95,헬스장 비용을 회사가 지원해 주나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/투자계획.md,False,0.0000,0.0000
+α=0.95,왜 같은 사람이 계속 맡도록 고정했나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/법무/계약검토메모.md,False,0.3333,1.0000
+α=0.95,지난번에 뭐가 문제였길래 이번엔 다르게 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/법무/계약검토메모.md,False,0.0000,0.0000
+α=0.95,벡터와 그래프를 왜 서로 다른 파일에 두나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/개발/벡터설계.md,False,0.5000,0.5000
+α=0.95,나중에 화면을 붙이려면 무엇을 먼저 정해야 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/인사/온보딩.md,False,0.0000,0.0000
+α=0.95,새 기능을 병합하려면 무엇을 갖춰야 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/캠페인기획.md,False,0.0000,0.0000
+α=0.95,직접 만들지 않고 이미 있는 걸 쓰기로 한 부분은,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/기타/메모.md,False,0.2500,0.0000
+α=0.95,돈을 얼마 이상 쓰면 대표가 직접 봐야 하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/원가분석.md,False,0.0000,0.0000
+α=0.95,작년보다 얼마나 더 쓰기로 했나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/법무/계약검토메모.md,False,0.2500,0.0000
+α=0.95,다음 분기에는 나아질 거라고 보는 근거는,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/원가분석.md,False,0.2000,0.0000
+α=0.95,외부 대행사가 만든 산출물은 누가 확인하나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/재무/감사대응.md,False,0.0000,0.0000
+α=0.95,우리 색이 정해져 있나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/소셜미디어전략.md,False,0.5000,1.0000
+α=0.95,행사는 몇 번 여나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/파트너십제휴.md,False,0.5000,1.0000
+α=0.95,매달 마지막에 하는 일이 있나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/마케팅/브랜드가이드.md,False,0.0000,0.0000
+α=0.95,이름이 안 적힌 음식은 어떻게 처리되나,/Users/doctorf/orca/CorpBrain-app-01/docs/smoke/corpus/인사/온보딩.md,False,0.5000,1.0000

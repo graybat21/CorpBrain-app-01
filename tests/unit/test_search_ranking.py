@@ -36,7 +36,7 @@ def test_default_expand_edges_are_the_three_non_embedding_signals() -> None:
 
 
 def test_default_graph_decay_lies_in_the_open_interval() -> None:
-    """잠정값이라도 유효 범위 `0 < α < 1` 안이어야 코어 검증을 스스로 통과한다 (§4.1)."""
+    """기본값을 실측으로 갈아끼워도 유효 범위 `0 < α < 1` 안이어야 한다 (§4.1)."""
     assert 0.0 < DEFAULT_GRAPH_DECAY < 1.0
 
 

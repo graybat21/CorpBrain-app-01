@@ -300,8 +300,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=core.DEFAULT_GRAPH_DECAY,
         metavar="FLOAT",
         help=(
-            f"그래프 확산 감쇠 계수 α — 0 과 1 사이 (기본 {core.DEFAULT_GRAPH_DECAY}, "
-            "실측 전 잠정값)."
+            f"그래프 확산 감쇠 계수 α — 0 과 1 사이 (기본 {core.DEFAULT_GRAPH_DECAY}). "
+            "기본값에서는 확산이 순위를 바꾸지 않는다 — docs/USAGE.md §6.3 참고."
         ),
     )
     search.add_argument(
