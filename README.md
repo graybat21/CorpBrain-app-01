@@ -1,6 +1,6 @@
 # CorpBrain
 
-> **100% 로컬 구동형 AI 지식 관리 솔루션** — 로컬 문서 자동 스캔, 요약 및 마크다운 위키 생성 (MVP)
+> **100% 로컬 구동형 AI 지식 관리 솔루션** — 로컬 문서 자동 스캔, 요약, 마크다운 위키·지식그래프 생성과 하이브리드 검색, 그리고 브라우저 GUI
 
 CorpBrain은 흩어져 있는 로컬 문서(`.txt`, `.md`, `.docx`, `.pdf`, `.xlsx`, `.xlsm`, `.pptx`)를 재귀적으로 탐색하고, 로컬 LLM(Ollama)을 활용하여 핵심 요약 및 태그가 포함된 마크다운 위키 페이지로 자동 구조화하는 도구입니다.
 
@@ -15,7 +15,10 @@ CorpBrain은 흩어져 있는 로컬 문서(`.txt`, `.md`, `.docx`, `.pdf`, `.xl
 - **🤖 자동 요약 & 키워드 추출**: 문서별로 한 줄 요약, 핵심 포인트, 상세 요약, 태그/키워드를 일관된 마크다운 템플릿으로 출력.
 - **⚡ 효율적인 증분 재처리 (Incremental Processing)**: 원본 문서의 수정 시간(`mtime`)을 비교하여 변경된 파일만 선택적으로 재생성 (`--force`로 강제 재생성 가능).
 - **🛡️ 안전한 예외 처리**: 빈 문서, 권한 거부, 긴 경로, 미지원 포맷 등 엣지 케이스 시 스킵 및 상세 리포트 제공.
-- **🧩 모듈식 코어 아키텍처**: 비즈니스 로직(Core)과 어댑터(CLI)가 완벽히 분리되어 있어 추후 UI(pywebview/React) 확장 용이.
+- **🕸️ 지식그래프**: 태그·엔티티·명시적 참조·시맨틱 유사도 4종 엣지를 `scan` 중에 함께 만들고, 각 위키의 「관련 문서」 섹션과 `corpbrain graph` 조회로 드러냅니다.
+- **🔎 하이브리드 검색**: 코사인 상위 문서를 시드로 삼아 그래프로 연결된 문서를 후보에 끌어올립니다 (`corpbrain search`).
+- **🖥️ 브라우저 GUI**: `corpbrain gui` 로 로컬 서버가 뜨고 브라우저에서 씁니다. **신규 런타임 의존성 0** — 표준 라이브러리 `http.server` 와 빌드 스텝 없는 바닐라 JS/CSS 로 되어 있으며, 듣는 소켓은 `127.0.0.1` 뿐입니다.
+- **🧩 모듈식 코어 아키텍처**: 비즈니스 로직(Core)과 어댑터(CLI·GUI)가 완벽히 분리되어 있습니다. CLI와 GUI는 같은 코어를 부르는 동급의 얇은 어댑터입니다.
 
 ---
 
@@ -24,7 +27,9 @@ CorpBrain은 흩어져 있는 로컬 문서(`.txt`, `.md`, `.docx`, `.pdf`, `.xl
 - **Python**: `>= 3.12, < 3.13`
 - **Package Manager**: [uv](https://github.com/astral-sh/uv) (권장) 또는 `pip`
 - **Ollama**: 로컬 LLM 구동용 ([Ollama 공식 사이트](https://ollama.com/)에서 설치)
-  - 추천 모델: `qwen2.5:7b-instruct`
+  - 요약 모델: `qwen2.5:7b-instruct`
+  - **임베딩 모델: `qwen3-embedding:4b`** — 벡터 인덱싱에 필요하며, 없으면 `scan`이 exit 1로 차단됩니다.
+- **GPU**(권장): NVIDIA GPU가 감지되지 않으면 `scan`이 자원 게이트에 걸려 exit 3으로 멈춥니다. CPU에서 강행하려면 `--force-gates`를 줍니다.
 
 ---
 
@@ -37,28 +42,65 @@ CorpBrain은 흩어져 있는 로컬 문서(`.txt`, `.md`, `.docx`, `.pdf`, `.xl
 uv sync
 ```
 
-### 2. Ollama 구동 및 모델 준비
+### 2. Ollama 구동 및 모델 준비 (필수 2종)
 
-CorpBrain 실행 전, 로컬 Ollama 서비스가 구동 중이어야 하며 대상 모델이 다운로드되어 있어야 합니다.
+CorpBrain 실행 전, 로컬 Ollama 서비스가 구동 중이어야 하며 **모델 두 개**가 모두 받아져 있어야 합니다.
+요약 모델만 받고 `scan`을 돌리면 임베딩 모델이 없어 exit 1로 막힙니다.
 
 ```bash
-# Ollama 모델 다운로드 및 실행
-ollama run qwen2.5:7b-instruct
+ollama serve                       # 로컬 서버 (기본 127.0.0.1:11434)
+ollama pull qwen2.5:7b-instruct    # 요약 모델
+ollama pull qwen3-embedding:4b     # 임베딩 모델 — 없으면 scan 이 exit 1
 ```
 
-### 3. CorpBrain CLI 실행
+환경이 준비됐는지는 `corpbrain doctor` 한 줄로 확인할 수 있습니다.
+
+### 3. CorpBrain 실행
 
 ```bash
 # 패키지 인스톨 (선택 사항)
 uv pip install -e .
 
-# 스캔 명령어 실행
+# 환경 점검 — Ollama 설치·구동·모델 2종·GPU·게이트 임계값
+uv run corpbrain doctor
+
+# 값싸게 훑어보기 — LLM·네트워크 0
+uv run corpbrain plan ./docs_folder
+
+# 실제 변환 — 위키 생성 + 벡터 인덱싱 + 지식그래프
 uv run corpbrain scan ./docs_folder --out ./corpbrain_wiki
+
+# 브라우저 GUI — 로컬 서버가 뜨고 토큰이 실린 URL 이 stdout 에 나옵니다
+uv run corpbrain gui --out ./corpbrain_wiki
 ```
 
 ---
 
 ## 📖 CLI 명령어 및 옵션 (Usage)
+
+| 명령 | 하는 일 | 네트워크 |
+| :--- | :--- | :--- |
+| `corpbrain scan <FOLDER>` | 스캔 → 요약 → 위키 → 벡터 인덱싱 → 지식그래프 | 로컬 Ollama |
+| `corpbrain plan <FOLDER>` | pre-scan 계량 (중요도·예상 토큰·소요·게이트 판정) | **없음** |
+| `corpbrain doctor` | 환경 준비 점검 (Ollama·모델 2종·GPU·게이트 임계값) | 로컬 Ollama |
+| `corpbrain search <QUERY>` | 코사인 + 그래프 확산 하이브리드 검색 | 로컬 Ollama (쿼리 임베딩 1회) |
+| `corpbrain graph` | 그래프 조회 (`--stats` · `--neighbors` · `--central`) | **없음** |
+| `corpbrain gui` | 브라우저 GUI를 로컬 서버로 띄움 (`127.0.0.1` · 임의 포트) | 로컬 Ollama |
+| `corpbrain consent cloud --grant` | 클라우드 엔진(Anthropic) 사용 **옵트인** | 없음 (기록만) |
+
+자세한 옵션과 화면 설명은 [`docs/USAGE.md`](docs/USAGE.md)에 있습니다.
+
+### 클라우드 옵트인 (선택)
+
+기본은 100% 로컬입니다. `--engine cloud`를 쓰려면 **명시 동의**를 한 번 기록해야 하며, 문서 내용이
+Anthropic으로 전송되고 PII 7종이 자동 마스킹됩니다. API 키는 `ANTHROPIC_API_KEY` 환경변수로만 읽고
+설정 파일에 저장하지 않습니다.
+
+```bash
+uv run corpbrain consent cloud --grant
+export ANTHROPIC_API_KEY=sk-ant-...
+uv run corpbrain scan ./docs_folder --engine cloud
+```
 
 ### `corpbrain scan`
 
@@ -100,6 +142,7 @@ corpbrain scan ~/Documents/Reports --model qwen2.5:7b-instruct --force
 source_path: "/absolute/path/to/report.docx"
 generated_at: "2026-08-12T09:30:00+09:00"
 model: "qwen2.5:7b-instruct"
+engine: "local"
 source_bytes: 15420
 ---
 
@@ -121,7 +164,15 @@ source_bytes: 15420
 
 ## 원문
 [원본 파일 열기](file:///absolute/path/to/report.docx)
+
+<!-- corpbrain:related:start -->
+## 관련 문서
+- [온보딩](../인사/온보딩.md.md) — 유사도 0.81 · 공유 태그 `인사` · 공유 엔티티 `인사팀`
+<!-- corpbrain:related:end -->
 ```
+
+> `engine` 키는 「이 문서가 외부로 나갔는가」를 생성물만 보고 알 수 있게 하는 값입니다(`local` / `cloud`).
+> 「관련 문서」 블록은 **기계가 관리**합니다 — 마커 사이만 교체되므로 그 밖의 본문은 손대지 않습니다.
 
 ---
 
@@ -145,12 +196,20 @@ uv run ruff check .
 CorpBrain-app-01/
 ├── corpbrain/
 │   ├── cli.py             # CLI 어댑터 (얇은 진입점)
+│   ├── gui/               # GUI 어댑터 — 로컬 서버 + 정적 자산 (CLI와 동급)
+│   │   ├── api.py         # 소켓을 모르는 요청 처리 순수 함수 (인증·라우팅·직렬화)
+│   │   ├── httpd.py       # ThreadingHTTPServer 배선 (127.0.0.1 고정)
+│   │   ├── sse.py         # 진행 스트림 프레임·팬아웃
+│   │   └── static/        # 빌드 스텝 없는 바닐라 HTML/CSS/JS
 │   └── core/              # 핵심 비즈니스 로직 (재사용 가능한 코어 라이브러리)
 │       ├── scanner.py     # 파일 탐색 및 스킵 조건 검사
 │       ├── extract.py     # .txt/.md/.docx/.pdf/.xlsx/.xlsm/.pptx 텍스트 추출기
 │       ├── gateway.py     # Ollama 통신 단일 관문 (네트워크 격리)
-│       ├── pipeline.py    # 스캔-추출-요약-렌더링 파이프라인
+│       ├── pipeline.py    # 스캔-추출-요약-렌더링-인덱싱-그래프 파이프라인
 │       ├── render.py      # 위키 마크다운 템플릿 렌더러
+│       ├── graphstore.py  # 지식그래프 저장소 (sqlite)
+│       ├── vectorstore.py # 벡터 인덱스 저장소 (sqlite)
+│       ├── search.py      # 하이브리드 검색 (코사인 + 그래프 확산)
 │       └── report.py      # 스킵 사유 및 실행 요약 보고서
 ├── static/docs/specs/     # 제품 요구사항 및 스펙 문서 정본
 ├── tests/                 # 단위 / 통합 / 네트워크 검증 테스트
