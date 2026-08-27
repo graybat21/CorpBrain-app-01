@@ -23,7 +23,6 @@ const DEFAULT_VIEW = 'dashboard';
 
 /** 아직 구현되지 않은 화면의 빈 상태 (§5 — 탭을 잠그거나 강제 이동시키지 않는다). */
 const PENDING_VIEWS = {
-  scan: '스캔 화면은 다음 슬라이스에서 붙습니다.',
   wiki: '위키 탐색기는 다음 슬라이스에서 붙습니다.',
   graph: '지식그래프 화면은 다음 슬라이스에서 붙습니다.',
   search: '검색 화면은 다음 슬라이스에서 붙습니다.',
@@ -71,6 +70,30 @@ function navigate(view) {
  */
 async function getJson(path) {
   const response = await fetch(path, { credentials: 'same-origin' });
+  if (response.status === 401 || response.status === 403) {
+    return { error: 'Unauthorized', message: '세션이 만료되었습니다. 서버를 다시 띄우고 새 URL로 접속하세요.' };
+  }
+  try {
+    return await response.json();
+  } catch (_err) {
+    return { error: 'InvalidResponse', message: '서버 응답을 해석하지 못했습니다.' };
+  }
+}
+
+/**
+ * 상태를 바꾸는 엔드포인트를 부른다.
+ *
+ * 브라우저가 같은 오리진 POST 에 `Origin` 을 자동으로 붙이므로 여기에 그 코드가 없다 —
+ * 서버는 상태 변경 메서드에서 그 헤더를 **필수**로 요구한다 (§4.2). 409 는 프로토콜 층
+ * 사건이라 본문의 `error` 로 그대로 내려온다 (§4.3.2).
+ */
+async function postJson(path, payload) {
+  const response = await fetch(path, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload || {}),
+  });
   if (response.status === 401 || response.status === 403) {
     return { error: 'Unauthorized', message: '세션이 만료되었습니다. 서버를 다시 띄우고 새 URL로 접속하세요.' };
   }
@@ -339,6 +362,335 @@ function countRow(name, value) {
   return row;
 }
 
+/* --- 플랜 & 스캔 (§4.3.3 · §4.3.4) --------------------------------------------- */
+
+/**
+ * 폼이 다루는 필드 — 앞면 5개 + 「고급」 10개.
+ *
+ * **`ScanConfig` 15필드를 전부 다룰 수 있게 한다** (§4.3.3). `force` 없이는 재요약을 시킬 수
+ * 없고 `max_files` 기본 50을 넘는 폴더는 GUI 에서 아예 스캔이 막히므로, 「CLI 로 돌아가야만
+ * 되는 일」을 남기면 GUI 를 만든 목적이 줄어든다.
+ *
+ * **실측으로 확정된 상수는 앞면에 두지 않는다.** `similarity_threshold`(0.5717…)는 #42 가,
+ * `graph_decay`(0.5)는 v0.7 §0 이 실측으로 세운 값이다. 앞면에 있으면 근거 없이 만져지고,
+ * 만지면 그 성질이 조용히 무너진다. 접기 하나로 「전부 다룰 수 있다」와 「근거 있는 기본값을
+ * 지킨다」를 동시에 만족시킨다.
+ *
+ * 값의 **타당성은 검증하지 않는다** — 그대로 서버로 보내고 코어가 판정한다 (§4.3.3).
+ */
+const SCAN_FIELDS_PRIMARY = [
+  { name: 'folder', label: '입력 폴더', type: 'text', placeholder: '/Users/me/documents' },
+  { name: 'out_dir', label: '출력 폴더', type: 'text', placeholder: '(서버 기본값)' },
+  { name: 'engine', label: '엔진', type: 'select', options: ['local', 'cloud'] },
+  { name: 'max_files', label: '최대 파일 수', type: 'number' },
+  { name: 'force', label: 'mtime 무관 강제 재생성 (force)', type: 'check' },
+];
+
+const SCAN_FIELDS_ADVANCED = [
+  { name: 'model', label: '요약 모델', type: 'text' },
+  { name: 'embed_model', label: '임베딩 모델', type: 'text' },
+  { name: 'cloud_model', label: '클라우드 모델', type: 'text' },
+  { name: 'ollama_url', label: 'Ollama URL', type: 'text' },
+  { name: 'max_chars', label: '문서당 최대 문자수', type: 'number' },
+  { name: 'max_file_size', label: '파일 크기 상한 (바이트)', type: 'number' },
+  { name: 'max_total_tokens', label: '총 토큰 예산', type: 'number' },
+  { name: 'related_top_k', label: '「관련 문서」 개수', type: 'number' },
+  { name: 'similarity_threshold', label: '유사도 임계값 (실측 확정값)', type: 'number', step: 'any' },
+  { name: 'force_gates', label: '게이트 무시하고 강행 (force_gates)', type: 'check' },
+];
+
+/**
+ * 폼 입력값 — 화면을 오갈 때 유지된다.
+ *
+ * 브라우저 `localStorage` 를 쓰지 않는다 (§4.8) — 브라우저를 바꾸거나 시크릿 창에서 열면
+ * 사라지고 CLI 와 값을 공유할 길이 없다. 프로세스를 넘어선 영속화는
+ * `~/.corpbrain/config.json` 의 `gui` 섹션이 맡으며 설정 화면과 함께 붙는다.
+ */
+const scanForm = { engine: 'local' };
+
+function scanPayload() {
+  const payload = {};
+  for (const [name, value] of Object.entries(scanForm)) {
+    if (value === '' || value === undefined || value === null) continue;
+    payload[name] = value;
+  }
+  return payload;
+}
+
+function field(spec) {
+  const wrap = el('div', spec.type === 'check' ? 'field field-check' : 'field');
+  const id = `scan-${spec.name}`;
+  const label = el('label', 'field-label', spec.label);
+  label.htmlFor = id;
+  let input;
+  if (spec.type === 'select') {
+    input = el('select');
+    for (const option of spec.options) {
+      const node = el('option', null, option);
+      node.value = option;
+      input.appendChild(node);
+    }
+    input.value = scanForm[spec.name] || spec.options[0];
+    input.addEventListener('change', () => { scanForm[spec.name] = input.value; });
+  } else if (spec.type === 'check') {
+    input = el('input');
+    input.type = 'checkbox';
+    input.checked = Boolean(scanForm[spec.name]);
+    input.addEventListener('change', () => { scanForm[spec.name] = input.checked; });
+  } else {
+    input = el('input');
+    input.type = spec.type;
+    if (spec.step) input.step = spec.step;
+    if (spec.placeholder) input.placeholder = spec.placeholder;
+    input.value = scanForm[spec.name] === undefined ? '' : scanForm[spec.name];
+    input.addEventListener('input', () => {
+      scanForm[spec.name] =
+        spec.type === 'number' && input.value !== '' ? Number(input.value) : input.value;
+    });
+  }
+  input.id = id;
+  if (spec.type === 'check') {
+    wrap.appendChild(input);
+    wrap.appendChild(label);
+  } else {
+    wrap.appendChild(label);
+    wrap.appendChild(input);
+  }
+  return wrap;
+}
+
+function scanFormCard(onMeasure, running) {
+  const card = el('div', 'card');
+  card.appendChild(el('div', 'card-title', '1. 계량하기'));
+  card.appendChild(
+    el('p', 'metric-caption', '파일 수·예상 토큰·게이트 판정을 먼저 봅니다. 이 단계는 LLM을 부르지 않습니다.')
+  );
+  const grid = el('div', 'form-grid');
+  for (const spec of SCAN_FIELDS_PRIMARY) grid.appendChild(field(spec));
+  card.appendChild(grid);
+
+  const advanced = el('details', 'advanced');
+  advanced.appendChild(el('summary', null, '고급'));
+  advanced.appendChild(
+    el('p', 'advanced-note', '유사도 임계값은 실측으로 확정된 값입니다 — 근거 없이 바꾸면 「관련 문서」와 검색 순위의 성질이 무너집니다.')
+  );
+  const advancedGrid = el('div', 'form-grid');
+  for (const spec of SCAN_FIELDS_ADVANCED) advancedGrid.appendChild(field(spec));
+  advanced.appendChild(advancedGrid);
+  card.appendChild(advanced);
+
+  const actions = el('div', 'actions');
+  const measure = el('button', 'btn btn-primary', '계량하기');
+  measure.type = 'button';
+  measure.disabled = running;
+  measure.addEventListener('click', onMeasure);
+  actions.appendChild(measure);
+  if (running) actions.appendChild(el('span', 'metric-caption', '스캔이 도는 동안에는 계량할 수 없습니다.'));
+  card.appendChild(actions);
+  return card;
+}
+
+function gateBox(gate) {
+  const box = el('div', 'gate-box');
+  box.appendChild(el('strong', null, '자원 게이트에 막혔습니다'));
+  const list = el('ul');
+  if (gate.gpu_enforced && !gate.gpu_ok) {
+    list.appendChild(el('li', null, 'GPU를 감지하지 못했습니다 — CPU로 강행하려면 아래 토글을 켜세요.'));
+  }
+  if (!gate.tokens_ok) {
+    list.appendChild(
+      el('li', null, `예상 토큰이 예산(${gate.max_total_tokens})을 넘습니다 — 예산을 올리거나 폴더를 좁히세요.`)
+    );
+  }
+  box.appendChild(list);
+  // 게이트를 둔 이유가 「비용이 큰 작업을 무심코 시작하지 않게」이므로, 이유와 강행 토글을
+  // 같은 자리에서 보여 준다 — CLI 가 exit 3 으로 막는 자리와 같다 (§4.3.4).
+  box.appendChild(field({ name: 'force_gates', label: '이해했고 강행합니다 (force_gates)', type: 'check' }));
+  return box;
+}
+
+function planCard(measurement, onRun, running) {
+  const card = el('div', 'card');
+  const plan = measurement.plan;
+  const findings = measurement.findings;
+  card.appendChild(el('div', 'card-title', '2. 확인하고 실행'));
+  card.appendChild(el('div', 'metric-number', `${plan.file_count}개 문서`));
+  card.appendChild(
+    el('p', 'metric-caption', `예상 토큰 ${plan.total_est_tokens} · 예상 ${plan.est_seconds}초 · ${plan.hardware.label}`)
+  );
+  if (findings.limit_exceeded) {
+    card.appendChild(
+      el('p', 'metric-caption', `상한 초과 — ${findings.discovered_count}건 발견. 「최대 파일 수」를 올리세요.`)
+    );
+  }
+  if (findings.skipped.length) {
+    card.appendChild(countRow('스캔 단계 스킵', findings.skipped.length));
+  }
+
+  const scroll = el('div', 'table-scroll');
+  const table = el('table', 'plan-table');
+  const head = el('tr');
+  for (const name of ['경로', '확장자', '크기', '예상 토큰', '중요도']) {
+    head.appendChild(el('th', null, name));
+  }
+  table.appendChild(head);
+  for (const entry of plan.entries) {
+    const row = el('tr');
+    row.appendChild(el('td', 'path', entry.path));
+    row.appendChild(el('td', null, entry.ext));
+    row.appendChild(el('td', 'num', entry.size_bytes));
+    row.appendChild(el('td', 'num', entry.est_tokens));
+    row.appendChild(el('td', 'num', entry.importance));
+    table.appendChild(row);
+  }
+  scroll.appendChild(table);
+  card.appendChild(scroll);
+
+  if (plan.gate && plan.gate.blocked) card.appendChild(gateBox(plan.gate));
+
+  const actions = el('div', 'actions');
+  const run = el('button', 'btn btn-primary', '스캔 시작');
+  run.type = 'button';
+  run.disabled = running;
+  run.addEventListener('click', onRun);
+  actions.appendChild(run);
+  if (running) actions.appendChild(el('span', 'metric-caption', '이미 스캔이 진행 중입니다.'));
+  card.appendChild(actions);
+  return card;
+}
+
+function progressCard(onCancel, cancelRequested) {
+  const card = el('div', 'card');
+  renderProgressCard(card, null, onCancel, cancelRequested);
+  return card;
+}
+
+function renderProgressCard(card, payload, onCancel, cancelRequested) {
+  if (payload !== null) {
+    if (payload.kind === 'snapshot') {
+      lastSnapshot = payload.snapshot;
+      lastRunning = payload.running;
+    } else {
+      lastSnapshot = foldEvent(lastSnapshot, payload);
+      lastRunning = payload.kind !== 'run_finished';
+    }
+  }
+  clear(card);
+  card.appendChild(el('div', 'card-title', '진행'));
+  if (lastSnapshot === null) {
+    card.appendChild(el('div', 'metric-number', '대기 중'));
+    card.appendChild(el('p', 'metric-caption', '진행 중인 스캔이 없습니다.'));
+    return;
+  }
+  const total = lastSnapshot.total || 0;
+  const done = (lastSnapshot.generated || 0) + (lastSnapshot.skipped || 0);
+  card.appendChild(el('div', 'metric-number', `${done} / ${total}`));
+  const track = el('div', 'progress-track');
+  const fill = el('div', 'progress-fill');
+  fill.style.width = total ? `${Math.min(100, Math.round((done / total) * 100))}%` : '0%';
+  track.appendChild(fill);
+  card.appendChild(track);
+  card.appendChild(countRow('생성', lastSnapshot.generated || 0));
+  card.appendChild(countRow('스킵', lastSnapshot.skipped || 0));
+  if (lastSnapshot.graph_stage) {
+    // 그래프 단계는 파일 루프와 **별도 축**이다 — 진행률은 쪼갤 수 있는 패스3 에만 실린다.
+    const total3 = lastSnapshot.graph_total || 0;
+    card.appendChild(
+      countRow(
+        '그래프 단계',
+        total3 ? `${lastSnapshot.graph_stage} ${lastSnapshot.graph_index || 0}/${total3}` : lastSnapshot.graph_stage
+      )
+    );
+  }
+  if (lastSnapshot.current_file) card.appendChild(el('p', 'metric-caption', lastSnapshot.current_file));
+  if (lastRunning) {
+    const actions = el('div', 'actions');
+    const cancel = el('button', 'btn', cancelRequested ? '멈추는 중…' : '취소');
+    cancel.type = 'button';
+    cancel.disabled = Boolean(cancelRequested);
+    cancel.addEventListener('click', onCancel);
+    actions.appendChild(cancel);
+    // 진행 중인 HTTP 호출은 끊지 않는다 — 요약 1건의 소켓 타임아웃만큼 기다릴 수 있다 (§4.7).
+    actions.appendChild(el('span', 'metric-caption', '진행 중인 문서를 마친 뒤 멈춥니다.'));
+    card.appendChild(actions);
+  }
+}
+
+function resultCard(result) {
+  const card = el('div', 'card');
+  card.appendChild(el('div', 'card-title', result.cancelled ? '중단된 스캔' : '지난 스캔 결과'));
+  card.appendChild(el('div', 'metric-number', `${result.generated_count} / ${result.generated_count + result.skipped_count}`));
+  card.appendChild(el('p', 'metric-caption', '생성 / 처리'));
+  // 종료 요약 줄은 `report.py` 의 빌더가 만든 것을 **그대로** 싣는다 — 갈라지면 안 되는 것은
+  // 「어휘」이고, 스킵 사유 라벨·「그래프 미반영」 같은 문구를 프론트가 다시 구현하면 CLI 와
+  // GUI 가 같은 결과를 다른 말로 설명한다 (§4.6.1).
+  card.appendChild(el('pre', 'summary-lines', (result.summary_lines || []).join('\n')));
+  return card;
+}
+
+async function renderScan(content, generation) {
+  content.appendChild(el('p', 'metric-caption', '불러오는 중…'));
+  const state = await getJson('/api/scan');
+  if (generation !== renderGeneration) return;
+  clear(content);
+  if (isError(state)) {
+    content.appendChild(emptyState({ title: '스캔 상태를 불러오지 못했습니다', body: state.message }));
+    return;
+  }
+
+  const notice = el('div');
+  content.appendChild(notice);
+
+  const showNotice = (message, kind) => {
+    clear(notice);
+    if (!message) return;
+    const box = el('div', 'gate-box');
+    if (kind) box.appendChild(badge(kind, kind === 'fail' ? '오류' : '안내'));
+    box.appendChild(el('span', null, ` ${message}`));
+    notice.appendChild(box);
+  };
+
+  if (state.failure) showNotice(state.failure.message, 'fail');
+
+  const onMeasure = async () => {
+    showNotice('계량 중…');
+    const body = await postJson('/api/scan/plan', scanPayload());
+    if (isError(body)) {
+      showNotice(body.message, 'fail');
+      return;
+    }
+    render();
+  };
+
+  const onRun = async () => {
+    const body = await postJson('/api/scan', scanPayload());
+    if (isError(body)) {
+      // 409(이미 진행 중)도 여기로 온다 — 화면은 이유를 그대로 보여 주고 상태를 다시 읽는다.
+      showNotice(body.message, 'fail');
+    }
+    render();
+  };
+
+  const onCancel = async () => {
+    await postJson('/api/scan/cancel', {});
+    render();
+  };
+
+  const grid = el('div', 'bento');
+  grid.appendChild(scanFormCard(onMeasure, state.running));
+  if (state.plan) grid.appendChild(planCard(state.plan, onRun, state.running));
+  const progress = progressCard(onCancel, state.cancel_requested);
+  grid.appendChild(progress);
+  if (state.result) grid.appendChild(resultCard(state.result));
+  content.appendChild(grid);
+
+  openStream((payload) => {
+    renderProgressCard(progress, payload, onCancel, state.cancel_requested);
+    // 스캔이 끝나면 결과 카드와 버튼 상태를 서버 값으로 다시 맞춘다.
+    if (payload.kind === 'run_finished') render();
+  });
+}
+
 function renderPending(content, view) {
   content.appendChild(
     emptyState({
@@ -372,6 +724,8 @@ async function render() {
   closeStream();
   if (view === 'dashboard') {
     await renderDashboard(content, generation);
+  } else if (view === 'scan') {
+    await renderScan(content, generation);
   } else {
     renderPending(content, view);
   }
