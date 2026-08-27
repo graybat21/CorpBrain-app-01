@@ -20,22 +20,30 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl
 
-from corpbrain.core.config import DEFAULT_EMBED_MODEL, DEFAULT_MODEL, DEFAULT_OLLAMA_URL
+from corpbrain.core.config import (
+    DEFAULT_EMBED_MODEL,
+    DEFAULT_GRAPH_DECAY,
+    DEFAULT_MODEL,
+    DEFAULT_OLLAMA_URL,
+)
 from corpbrain.core.embedding_text import parse_wiki_document
 from corpbrain.core.environment import DoctorReport, diagnose
 from corpbrain.core.errors import CorpBrainError, PreconditionError
+from corpbrain.core.graph import parse_expand_edges
 from corpbrain.core.graphstore import SqliteGraphStore, graph_path_for
 from corpbrain.core.models import (
     GraphStats,
     NodeType,
     ScanPlan,
     ScanResult,
+    SearchResult,
     WikiDocument,
 )
 from corpbrain.core.pipeline import collect_wiki_documents
-from corpbrain.core.report import build_summary_lines
+from corpbrain.core.report import build_expansion_evidence, build_summary_lines
 from corpbrain.core.rerun import read_source_path
 from corpbrain.core.scanner import ScanFindings
+from corpbrain.core.search import search_index
 from corpbrain.gui.assets import AssetNotFound, content_type_for, read_asset
 from corpbrain.gui.errors import BadRequest
 from corpbrain.gui.scan import (
@@ -280,6 +288,7 @@ class GuiApp:
             "/api/wiki": {"GET": self._wiki_tree},
             "/api/wiki/document": {"GET": self._wiki_document},
             "/api/graph": {"GET": self._graph},
+            "/api/search": {"GET": self._search},
         }
 
     def handle(
@@ -436,6 +445,36 @@ class GuiApp:
             # 안내 문장이 되고, 버그면 여기서 다시 올라가 500이 된다.
             "failure": _section(_reraise(failure)) if failure is not None else None,
         }
+
+    # --- 지식 검색 (§4.6.1) ----------------------------------------------------------
+
+    def _search(self, request: Request) -> Response:
+        """코사인 + 그래프 확산 검색 (§4.6.1).
+
+        **검증을 자체적으로 두지 않는다** (§4.3.3). `graph_decay`의 범위와 `expand_edges`의
+        문법은 코어가 판정하고, 그 실패는 `PreconditionError`라 도메인(200 + 안내 문장)으로
+        나간다 — v0.7 §4.4가 「규칙이 한 곳에만 있어야 코어를 직접 부르는 후속 어댑터도 같은
+        보호를 받는다」고 정한 그 후속 어댑터가 이 GUI다.
+        """
+        query = request.query.get("q", "").strip()
+        if not query:
+            raise BadRequest("검색어를 입력하세요 (`q`).")
+        expand_raw = request.query.get("expand_edges", "")
+        results = search_index(
+            self.out_dir,
+            query,
+            top_k=_as_int(request.query.get("top_k"), default=5),
+            ollama_url=request.query.get("ollama_url") or DEFAULT_OLLAMA_URL,
+            # 문자열 `"false"`가 참이 되는 실수를 막는다 — 프론트는 `graph=false`를 보낸다.
+            graph=request.query.get("graph", "true").lower() != "false",
+            graph_decay=_as_float(
+                request.query.get("graph_decay"), default=DEFAULT_GRAPH_DECAY
+            ),
+            **(
+                {"expand_edges": parse_expand_edges(expand_raw)} if expand_raw else {}
+            ),
+        )
+        return json_response({"query": query, "results": [_result_row(r) for r in results]})
 
     # --- 지식그래프 (§4.3.1) ---------------------------------------------------------
 
@@ -905,3 +944,55 @@ def _related_dicts(
             }
         )
     return entries
+
+
+def _as_int(raw: str | None, *, default: int) -> int:
+    """쿼리 파라미터를 정수로 옮긴다 — **값의 타당성은 코어가 판정한다** (§4.3.3)."""
+    if raw is None or raw == "":
+        return default
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise BadRequest(f"정수가 아닙니다: {raw}") from exc
+
+
+def _as_float(raw: str | None, *, default: float) -> float:
+    if raw is None or raw == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError as exc:
+        raise BadRequest(f"숫자가 아닙니다: {raw}") from exc
+
+
+def _result_row(result: SearchResult) -> dict[str, Any]:
+    """검색 결과 1건 — 필드로 내리되 **근거 줄만** 기존 빌더의 문자열을 그대로 싣는다.
+
+    §4.6.1의 원칙: **갈라지면 안 되는 것은 「어휘」이지 「줄 조립」이 아니다.** 카드는 점수
+    배지·제목·경로를 각각 그려야 하므로 `build_search_lines()` 전체를 내리면 프론트가 정규식
+    으로 다시 갈라야 하고, 출력 문구를 다듬는 순간 조용히 깨진다. 반대로 근거를 전부 구조화
+    하면 참조 방향 3종 문구(「시드를 참조함」·「시드가 참조함」·「서로 참조함」)를 프론트가 다시
+    구현하게 되어 v0.7이 정확 문자열까지 못박은 어휘가 둘로 갈린다.
+    """
+    metadata = result.metadata or {}
+    expansion = result.expansion
+    return {
+        "doc_id": result.doc_id,
+        "score": result.score,
+        # 제목·경로의 출처는 시드와 확산에서 하나로 유지된다 (v0.7 §4.7).
+        "title": metadata.get("title") or Path(result.doc_id).name,
+        # v0.4 그대로 원문 절대경로를 적는다. `metadata`가 없는 확산 문서는 `doc_id`가 곧
+        # 같은 값이다 (v0.7 §4.6).
+        "source_path": metadata.get("source_path") or result.doc_id,
+        "tags": list(metadata.get("tags") or []),
+        "expansion": (
+            None
+            if expansion is None
+            else {
+                "seed_doc_id": expansion.seed_doc_id,
+                "seed_title": expansion.seed_title,
+                # v0.7 §4.6이 정확 문자열까지 못박은 계약 — 한 글자도 갈리지 않는다.
+                "evidence": build_expansion_evidence(expansion, result.score),
+            }
+        ),
+    }

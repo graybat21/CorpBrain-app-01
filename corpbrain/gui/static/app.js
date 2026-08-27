@@ -23,7 +23,6 @@ const DEFAULT_VIEW = 'dashboard';
 
 /** 아직 구현되지 않은 화면의 빈 상태 (§5 — 탭을 잠그거나 강제 이동시키지 않는다). */
 const PENDING_VIEWS = {
-  search: '검색 화면은 다음 슬라이스에서 붙습니다.',
   settings: '설정 화면은 다음 슬라이스에서 붙습니다.',
 };
 
@@ -415,9 +414,14 @@ function scanPayload() {
   return payload;
 }
 
-function field(spec) {
+/**
+ * 입력 하나를 그린다. `state` 는 값을 읽고 쓸 폼 객체다 — 스캔 폼과 검색 폼이 같은
+ * 함수를 공유하므로 입력 모양이 화면마다 갈리지 않는다.
+ */
+function field(spec, state = scanForm) {
   const wrap = el('div', spec.type === 'check' ? 'field field-check' : 'field');
-  const id = `scan-${spec.name}`;
+  // 한 화면에 폼이 하나뿐이므로 이름만으로 유일하다.
+  const id = `field-${spec.name}`;
   const label = el('label', 'field-label', spec.label);
   label.htmlFor = id;
   let input;
@@ -428,21 +432,21 @@ function field(spec) {
       node.value = option;
       input.appendChild(node);
     }
-    input.value = scanForm[spec.name] || spec.options[0];
-    input.addEventListener('change', () => { scanForm[spec.name] = input.value; });
+    input.value = state[spec.name] || spec.options[0];
+    input.addEventListener('change', () => { state[spec.name] = input.value; });
   } else if (spec.type === 'check') {
     input = el('input');
     input.type = 'checkbox';
-    input.checked = Boolean(scanForm[spec.name]);
-    input.addEventListener('change', () => { scanForm[spec.name] = input.checked; });
+    input.checked = Boolean(state[spec.name]);
+    input.addEventListener('change', () => { state[spec.name] = input.checked; });
   } else {
     input = el('input');
     input.type = spec.type;
     if (spec.step) input.step = spec.step;
     if (spec.placeholder) input.placeholder = spec.placeholder;
-    input.value = scanForm[spec.name] === undefined ? '' : scanForm[spec.name];
+    input.value = state[spec.name] === undefined ? '' : state[spec.name];
     input.addEventListener('input', () => {
-      scanForm[spec.name] =
+      state[spec.name] =
         spec.type === 'number' && input.value !== '' ? Number(input.value) : input.value;
     });
   }
@@ -1032,6 +1036,133 @@ async function renderGraph(content, generation, params) {
   }
 }
 
+/* --- 지식 검색 (§4.3.3 · §4.6.1) ------------------------------------------------ */
+
+/** 검색 폼 상태 — 앞면 2개 + 「고급」 4개 (§4.3.3). */
+const searchForm = { q: '', top_k: 5, graph: true };
+
+const SEARCH_FIELDS_ADVANCED = [
+  { name: 'graph_decay', label: '확산 감쇠 α (실측 확정값)', type: 'number', step: 'any' },
+  { name: 'expand_edges', label: '확산 엣지 (쉼표 구분)', type: 'text', placeholder: 'TAGGED_WITH,CONTAINS_ENTITY,REFERENCES' },
+  { name: 'ollama_url', label: 'Ollama URL', type: 'text' },
+];
+
+function searchQueryString() {
+  const params = new URLSearchParams();
+  params.set('q', searchForm.q);
+  if (searchForm.top_k) params.set('top_k', String(searchForm.top_k));
+  if (searchForm.graph === false) params.set('graph', 'false');
+  for (const spec of SEARCH_FIELDS_ADVANCED) {
+    const value = searchForm[spec.name];
+    if (value !== undefined && value !== null && value !== '') params.set(spec.name, String(value));
+  }
+  return params.toString();
+}
+
+function resultCardFor(result) {
+  const card = el('div', 'result-card');
+  const head = el('div', 'result-head');
+  head.appendChild(el('span', 'score-badge', result.score.toFixed(3)));
+  head.appendChild(el('span', 'result-title', result.title));
+  card.appendChild(head);
+  card.appendChild(el('div', 'result-path', result.source_path));
+  if (result.tags.length) {
+    const tags = el('div');
+    for (const tag of result.tags) tags.appendChild(el('span', 'tag-chip', tag));
+    card.appendChild(tags);
+  }
+  if (result.expansion) {
+    // 근거 줄은 `build_expansion_evidence()` 가 만든 문자열을 **그대로** 그린다 —
+    // v0.7 §4.6 이 정확 문자열까지 못박은 계약이라 프론트가 다시 조립하지 않는다 (§4.6.1).
+    card.appendChild(el('div', 'result-evidence', `└ ${result.expansion.evidence}`));
+  }
+  const actions = el('div', 'result-actions');
+  const toWiki = el('button', 'btn', '위키에서 보기');
+  toWiki.type = 'button';
+  toWiki.addEventListener('click', () => navigateTo('wiki', { doc: result.doc_id }));
+  actions.appendChild(toWiki);
+  const toGraph = el('button', 'btn', '지식그래프에서 보기');
+  toGraph.type = 'button';
+  toGraph.addEventListener('click', () => navigateTo('graph', { node: result.doc_id }));
+  actions.appendChild(toGraph);
+  card.appendChild(actions);
+  return card;
+}
+
+async function renderSearch(content, generation, params) {
+  const initial = params.get('q');
+  if (initial !== null) searchForm.q = initial;
+
+  const formCard = el('div', 'card');
+  formCard.appendChild(el('div', 'card-title', '지식 검색'));
+  const row = el('div', 'search-row');
+  const input = el('input');
+  input.type = 'search';
+  input.value = searchForm.q;
+  input.placeholder = '무엇을 찾으시나요';
+  input.setAttribute('aria-label', '검색어');
+  input.addEventListener('input', () => { searchForm.q = input.value; });
+  const submit = el('button', 'btn btn-primary', '검색');
+  submit.type = 'button';
+  const run = () => {
+    if (!searchForm.q.trim()) return;
+    navigateTo('search', { q: searchForm.q });
+  };
+  submit.addEventListener('click', run);
+  input.addEventListener('keydown', (event) => { if (event.key === 'Enter') run(); });
+  row.appendChild(input);
+  row.appendChild(submit);
+  formCard.appendChild(row);
+
+  const options = el('div', 'form-grid');
+  options.appendChild(field({ name: 'top_k', label: '결과 개수', type: 'number' }, searchForm));
+  options.appendChild(field({ name: 'graph', label: '그래프 확산 사용', type: 'check' }, searchForm));
+  formCard.appendChild(options);
+
+  const advanced = el('details', 'advanced');
+  advanced.appendChild(el('summary', null, '고급'));
+  advanced.appendChild(
+    el('p', 'advanced-note', '확산 감쇠 α는 실측으로 확정된 값입니다 — 근거 없이 바꾸면 순위의 성질이 무너집니다.')
+  );
+  const advancedGrid = el('div', 'form-grid');
+  for (const spec of SEARCH_FIELDS_ADVANCED) advancedGrid.appendChild(field(spec, searchForm));
+  advanced.appendChild(advancedGrid);
+  formCard.appendChild(advanced);
+  content.appendChild(formCard);
+
+  const results = el('div');
+  content.appendChild(results);
+  if (!searchForm.q.trim()) {
+    results.appendChild(
+      emptyState({ title: '검색어를 입력하세요', body: '코사인 상위 문서를 시드로 삼아 그래프로 이어진 문서까지 함께 찾습니다.' })
+    );
+    return;
+  }
+
+  results.appendChild(el('p', 'metric-caption', '검색 중…'));
+  const body = await getJson(`/api/search?${searchQueryString()}`);
+  if (generation !== renderGeneration) return;
+  clear(results);
+  if (isError(body)) {
+    results.appendChild(
+      emptyState({
+        title: '검색하지 못했습니다',
+        body: body.message,
+        actionLabel: '플랜 & 스캔으로',
+        actionView: 'scan',
+      })
+    );
+    return;
+  }
+  if (!body.results.length) {
+    // 결과 0건은 예외가 아니라 정상 응답이다 (v0.7 §5).
+    results.appendChild(emptyState({ title: '결과 0건', body: '다른 표현으로 다시 찾아보세요.' }));
+    return;
+  }
+  results.appendChild(el('p', 'metric-caption', `검색 결과 ${body.results.length}건`));
+  for (const result of body.results) results.appendChild(resultCardFor(result));
+}
+
 function renderPending(content, view) {
   content.appendChild(
     emptyState({
@@ -1071,6 +1202,8 @@ async function render() {
     await renderWiki(content, generation, params);
   } else if (view === 'graph') {
     await renderGraph(content, generation, params);
+  } else if (view === 'search') {
+    await renderSearch(content, generation, params);
   } else {
     renderPending(content, view);
   }

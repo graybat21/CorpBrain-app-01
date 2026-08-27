@@ -7,7 +7,7 @@
 것이므로 **MINOR** 로 센다 (PR ① 과 같은 잣대).
 
 CORE: 1
-MINOR: 6
+MINOR: 7
 
 ## 기록
 
@@ -139,3 +139,20 @@ front-matter 5키 + 7섹션에 `wiki_path`·`wiki_relative`를 더한다.
 배치되면 「이 문서가 어디 있었더라」가 성립하지 않고, 규모가 커질수록 프레임 예산이 먼저
 무너져 §5가 수용한 알려진 한계를 더 나쁘게 만든다. 각도는 노드 id 순서로 결정되므로 두 번
 열어도 같은 그림이다. 상한·필터·차수 추림은 두지 않는다 (§5 · issue #58).
+
+
+### M7 — 검색 엔드포인트와 파라미터 옮기기 (MINOR · V4)
+
+`GET /api/search?q=…&top_k=…&graph=…&graph_decay=…&expand_edges=…&ollama_url=…`. 결과 1건은
+`{doc_id, score, title, source_path, tags, expansion}`이며 `expansion`은 확산 문서에만 값이
+있고 그 안의 `evidence`는 `build_expansion_evidence()`의 반환 **문자열 그대로**다.
+
+- **검증을 두지 않는다** (§4.3.3). 어댑터가 하는 일은 문자열 → 숫자·불리언 옮기기와
+  `parse_expand_edges()` 호출뿐이고, 범위·문법 판정은 전부 코어가 한다. 범위 밖 α는 그대로
+  넘어가 `PreconditionError`(도메인 200)로 돌아온다.
+- `graph=false`를 **문자열 비교로 가른다** — JSON 이 아니라 쿼리 문자열이라 `"false"`가 그냥
+  참이 되는 실수가 여기서만 가능하다.
+- `expand_edges`는 **주어졌을 때만** 코어에 넘긴다. 빈 문자열을 `parse_expand_edges()`에 주면
+  `PreconditionError`인데(v0.7 §4.4가 「빈 목록을 «확산 안 함»으로 받아 주지 않는다」로 정했다),
+  사용자가 고급을 펼치지도 않은 요청이 그 오류를 받아서는 안 된다. 확산을 끄는 길은
+  `graph=false` 하나로 유지된다.
