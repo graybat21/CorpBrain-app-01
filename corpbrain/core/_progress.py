@@ -12,7 +12,10 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, replace
 from enum import StrEnum
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from corpbrain.core.models import GraphStats
 
 
 class EventKind(StrEnum):
@@ -25,6 +28,9 @@ class EventKind(StrEnum):
     FILE_STAGE = "file_stage"
     FILE_GENERATED = "file_generated"
     FILE_SKIPPED = "file_skipped"
+    GRAPH_STARTED = "graph_started"
+    RELATED_INJECTED = "related_injected"
+    GRAPH_FINISHED = "graph_finished"
     RUN_FINISHED = "run_finished"
 
 
@@ -135,6 +141,54 @@ class FileSkipped(ProgressEvent):
 
 
 @dataclass(frozen=True)
+class GraphStarted(ProgressEvent):
+    """패스2(그래프 재빌드) 진입 (v0.9 §4.7).
+
+    진행률을 싣지 않는다 — 패스2는 쪼갤 수 없는 단일 작업이고, 없는 진행률을 지어내지
+    않는다. 「쪼갤 수 있는 것만 쪼갠다」가 타입에 드러나 있다.
+    """
+
+    @property
+    def kind(self) -> str:
+        return EventKind.GRAPH_STARTED
+
+
+@dataclass(frozen=True)
+class RelatedInjected(ProgressEvent):
+    """패스3에서 위키 1개의 「관련 문서」를 처리했다 (v0.9 §4.7).
+
+    `index`·`total`·`path`는 `FileStarted`·`FileStage`·`FileGenerated`와 **같은 이름·같은
+    의미**를 쓴다 — 진행 이벤트의 어휘가 갈리지 않게 한다. 기존 `FileStage`의 `Stage` enum에
+    값을 더해 재사용하지 않는 이유는 그 타입이 「문서 1개를 처리하는 중」을 뜻하기 때문이다.
+    의미가 달라지고 `reduce()`의 `generated` 카운트와 rate·ETA 계산이 오염된다.
+    """
+
+    index: int
+    total: int
+    path: str
+
+    @property
+    def kind(self) -> str:
+        return EventKind.RELATED_INJECTED
+
+
+@dataclass(frozen=True)
+class GraphFinished(ProgressEvent):
+    """패스3 종료 (v0.9 §4.7).
+
+    `stats`는 빌드가 실패해 그래프가 이전 상태로 남은 경우 `None`이다(v0.6 §5). 그때도
+    이벤트를 내 `GraphStarted`가 열어 둔 구간을 닫는다 — 열린 채 끝나면 화면이 「그래프
+    빌드 중」에 멈춘 것처럼 보인다.
+    """
+
+    stats: GraphStats | None = None
+
+    @property
+    def kind(self) -> str:
+        return EventKind.GRAPH_FINISHED
+
+
+@dataclass(frozen=True)
 class RunFinished(ProgressEvent):
     @property
     def kind(self) -> str:
@@ -161,6 +215,13 @@ class StatusSnapshot:
     last_error: str | None = None
     last_net_latency: float | None = None
     started_at: float | None = None
+    #: 그래프 단계의 세부 진행 — `None`(아직 진입 전) · `building`(패스2) · `injecting`(패스3)
+    #: · `done`(패스3 종료). 파일 루프의 `stage`와 **별도 축**이다: 같은 필드에 담으면
+    #: `generated` 카운트와 rate·ETA 계산이 오염된다 (v0.9 §4.7).
+    graph_stage: str | None = None
+    #: 패스3의 진행률. 패스2는 쪼갤 수 없어 진행률이 없으므로 `building` 동안 0으로 남는다.
+    graph_index: int = 0
+    graph_total: int = 0
 
 
 def _with_timing(snapshot: StatusSnapshot, at: float) -> StatusSnapshot:
@@ -209,6 +270,20 @@ def reduce(snapshot: StatusSnapshot | None, event: ProgressEvent) -> StatusSnaps
         snap = replace(snap, skipped=snap.skipped + 1, skipped_by_reason=by_reason,
                        current_file=event.path, stage=None,
                        last_error=event.detail or snap.last_error)
+    elif kind == EventKind.GRAPH_STARTED:
+        # 파일 루프의 잔상(마지막 파일 이름·단계)을 지운다 — 그래프 단계는 문서 1개를
+        # 처리하는 중이 아니다. `index`·`total`·`generated`는 건드리지 않는다.
+        snap = replace(snap, state="graph", graph_stage="building",
+                       current_file=None, stage=None)
+    elif kind == EventKind.RELATED_INJECTED:
+        assert isinstance(event, RelatedInjected)
+        # `current_file`에 위키 경로를 실어 CLI 라이브 라인이 그대로 살아 움직인다 —
+        # v0.9 §2가 「공짜 이득으로 받되 목표로 삼지 않는다」고 한 그 이득이다.
+        snap = replace(snap, state="graph", graph_stage="injecting",
+                       graph_index=event.index, graph_total=event.total,
+                       current_file=event.path, stage=None)
+    elif kind == EventKind.GRAPH_FINISHED:
+        snap = replace(snap, graph_stage="done", current_file=None, stage=None)
     elif kind == EventKind.RUN_FINISHED:
         snap = replace(snap, state="done")
 

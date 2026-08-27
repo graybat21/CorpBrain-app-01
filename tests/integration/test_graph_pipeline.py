@@ -677,3 +677,71 @@ def test_cli_central_matches_the_graph_after_a_real_scan(
         assert line.split()[0] == str(degree)
     # 고립 문서는 차수가 가장 낮아 맨 끝이다.
     assert "메모.txt" in out[-1]
+
+
+# --- v0.9 U2: 그래프 단계 진행 이벤트 (v0.9 §4.7 · DoD 4①) --------------------------
+
+
+def test_graph_events_appear_between_last_file_and_run_finished(
+    corpus: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """이벤트 순서가 `RunStarted → … → 그래프 3종 → RunFinished`다 (DoD 4①).
+
+    v0.9 §3 항목4가 겨냥하는 성질은 **이 시퀀스**이며 소켓·스레드·타이밍이 개입하지 않는다.
+    SSE 프레임 문법은 `format_sse()` 단위테스트가 따로 본다 — 두 축을 나눠 각각 순수하게
+    검증한다(§3 항목4 검증 방식).
+    """
+    monkeypatch.setattr(gateway_module, "request_json", _stub())
+    events: list[Any] = []
+
+    run_scan(_config(corpus, tmp_path / "wiki"), on_event=events.append)
+
+    kinds = [str(event.kind) for event in events]
+    assert kinds[0] == "run_started"
+    assert kinds[-1] == "run_finished"
+
+    # 그래프 구간은 마지막 파일 이벤트 뒤, `RunFinished` 앞에 통째로 놓인다.
+    last_file = max(index for index, kind in enumerate(kinds) if kind.startswith("file_"))
+    graph_span = [
+        index for index, kind in enumerate(kinds)
+        if kind in {"graph_started", "related_injected", "graph_finished"}
+    ]
+    assert graph_span, "그래프 단계가 이벤트를 하나도 내지 않았다"
+    assert min(graph_span) > last_file
+    assert max(graph_span) < len(kinds) - 1
+
+    # 구간 안의 순서: 시작 → 주입 N건 → 종료.
+    span_kinds = kinds[min(graph_span) : max(graph_span) + 1]
+    assert span_kinds[0] == "graph_started"
+    assert span_kinds[-1] == "graph_finished"
+    assert set(span_kinds[1:-1]) == {"related_injected"}
+
+    # 진행률은 쪼갤 수 있는 패스3에만 실린다 — 위키 6개를 1..6으로 센다.
+    injected = [event for event in events if str(event.kind) == "related_injected"]
+    assert [event.index for event in injected] == [1, 2, 3, 4, 5, 6]
+    assert {event.total for event in injected} == {6}
+
+    finished = events[max(graph_span)]
+    assert finished.stats is not None
+    assert finished.stats.documents == 6
+
+
+def test_graph_events_are_emitted_even_when_no_wiki_is_rewritten(
+    corpus: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """재실행(전 문서 `up_to_date`)에서도 패스3 진행률이 6/6까지 올라간다.
+
+    진행 표시의 단위는 「처리한 위키」이지 「고쳐 쓴 위키」가 아니다 — 후자만 세면 아무것도
+    바뀌지 않은 재실행에서 진행바가 0에 멈춘 것처럼 보인다.
+    """
+    monkeypatch.setattr(gateway_module, "request_json", _stub())
+    out_dir = tmp_path / "wiki"
+    run_scan(_config(corpus, out_dir))
+
+    events: list[Any] = []
+    result = run_scan(_config(corpus, out_dir), on_event=events.append)
+
+    assert result.graph is not None
+    assert result.graph.related_updated_count == 0  # 내용이 같아 다시 쓰지 않았다
+    injected = [event for event in events if str(event.kind) == "related_injected"]
+    assert [event.index for event in injected] == [1, 2, 3, 4, 5, 6]

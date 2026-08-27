@@ -26,9 +26,12 @@ from corpbrain.core._progress import (
     FileSkipped,
     FileStage,
     FileStarted,
+    GraphFinished,
+    GraphStarted,
     ModelLoading,
     ModelReady,
     ProgressEvent,
+    RelatedInjected,
     RunFinished,
     RunStarted,
     Stage,
@@ -257,7 +260,9 @@ def run_scan(
 
         # 패스2·패스3 — 저장소가 열려 있는 이 블록 안에서 돈다 (v0.6 §4.8). `iter_vectors()`가
         # 유사도 계산에 필요하므로 `finally: store.close()`의 범위를 실행 끝까지 늘린다.
-        result.graph = _run_graph_stage(config, store=store, graph=graph, indexing=indexing)
+        result.graph = _run_graph_stage(
+            config, store=store, graph=graph, indexing=indexing, on_event=on_event
+        )
     finally:
         store.close()
         graph.close()
@@ -548,13 +553,23 @@ def _record_facts(
 
 
 def _run_graph_stage(
-    config: ScanConfig, *, store: VectorStore, graph: GraphStore, indexing: bool
+    config: ScanConfig,
+    *,
+    store: VectorStore,
+    graph: GraphStore,
+    indexing: bool,
+    on_event: EventSink | None = None,
 ) -> GraphOutcome:
     """패스2(그래프 빌드)와 패스3(「관련 문서」 주입) (v0.6 §4.8).
 
     대상은 이번 실행에서 처리한 문서가 아니라 **`--out`에 존재하는 위키 전체**다 (§4.1) —
     재실행에서 대부분의 문서가 `up_to_date`로 스킵돼도 그래프가 쪼그라들지 않는다.
+
+    v0.9부터 이 구간이 진행 이벤트 3종을 낸다 (§4.7). 그 전에는 마지막 파일 이후
+    `RunFinished`까지 아무 이벤트도 나지 않아, 대형 `--out`에서 진행 표시가 멈춘 것처럼
+    보였다.
     """
+    _emit(on_event, GraphStarted(at=time.monotonic()))
     inventory = _collect_wiki_documents(config.out_dir)
     wikis = inventory.documents
     facts, missing = _materialize_facts(wikis, config=config, graph=graph)
@@ -570,6 +585,7 @@ def _run_graph_stage(
     except sqlite3.Error as exc:
         # 단일 트랜잭션이라 이전 그래프가 그대로 남는다. 위키는 이미 생성돼 있고 LLM 비용도
         # 지불된 상태이므로 스캔 전체를 무효화하지 않는다 (§5).
+        _emit(on_event, GraphFinished(at=time.monotonic(), stats=None))
         return GraphOutcome(
             similarity_skipped=GraphSkipReason.BUILD_FAILED,
             build_failure=str(exc),
@@ -581,10 +597,13 @@ def _run_graph_stage(
         doc_id: path.relative_to(config.out_dir).as_posix() for doc_id, path in wikis.items()
     }
     updated, failures = _inject_related(
-        wikis, nodes=nodes, edges=edges, relative=relative, top_k=config.related_top_k
+        wikis, nodes=nodes, edges=edges, relative=relative, top_k=config.related_top_k,
+        on_event=on_event,
     )
+    stats = graph.stats()
+    _emit(on_event, GraphFinished(at=time.monotonic(), stats=stats))
     return GraphOutcome(
-        stats=graph.stats(),
+        stats=stats,
         similarity_skipped=skipped,
         facts_missing_count=missing,
         related_updated_count=updated,
@@ -701,11 +720,19 @@ def _inject_related(
     edges: list[GraphEdge],
     relative: dict[str, str],
     top_k: int,
+    on_event: EventSink | None = None,
 ) -> tuple[int, list[InjectionFailure]]:
-    """패스3 — 파일별 베스트 에포트로 「관련 문서」를 반영한다 (§5)."""
+    """패스3 — 파일별 베스트 에포트로 「관련 문서」를 반영한다 (§5).
+
+    진행률은 이 패스에만 실린다 — `--out` 아래 위키 수를 알아 쪼갤 수 있기 때문이다
+    (v0.9 §4.7). 이벤트는 **내용이 바뀌지 않아 파일을 다시 쓰지 않은 위키에도** 낸다:
+    진행 표시의 단위는 「처리한 위키」이지 「고쳐 쓴 위키」가 아니며, 후자만 세면 재실행에서
+    대부분의 위키가 그대로일 때 진행바가 멈춘 것처럼 보인다.
+    """
     updated = 0
     failures: list[InjectionFailure] = []
-    for doc_id, wiki_path in wikis.items():
+    total = len(wikis)
+    for index, (doc_id, wiki_path) in enumerate(wikis.items(), start=1):
         block = render_related_block(
             rank_related(doc_id, nodes, edges, relative_paths=relative, top_k=top_k),
             relative_to=relative[doc_id],
@@ -716,6 +743,8 @@ def _inject_related(
                 updated += 1
         except (OSError, UnicodeDecodeError) as exc:
             failures.append(InjectionFailure(path=wiki_path, detail=str(exc)))
+        _emit(on_event, RelatedInjected(at=time.monotonic(), index=index, total=total,
+                                        path=str(wiki_path)))
     return updated, failures
 
 
