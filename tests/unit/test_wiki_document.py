@@ -127,6 +127,37 @@ class TestParseWikiMarkdownStaysAThreeTuple:
         assert title == "채용 계획"
         assert tags == ["인사", "채용"]
 
+    def test_multi_line_key_points_survive(self) -> None:
+        """여러 줄로 이어진 핵심 포인트의 둘째 줄이 임베딩 텍스트에서 빠지지 않는다.
+
+        `WikiDocument.key_points`는 화면에 보여 줄 불릿만 담으므로(`- `로 시작하는 줄) 그
+        값으로 임베딩 텍스트를 만들면 continuation 줄이 사라진다. 그러면 갓 생성된 문서와
+        백필된 문서의 임베딩이 어긋나 이 모듈 독스트링이 경계한 랭킹 불안정이 생긴다.
+        """
+        wiki = "# T\n\n## 핵심 포인트\n- 첫째\n  둘째 줄\n- 셋째\n"
+
+        _title, text, _tags = parse_wiki_markdown(wiki)
+
+        assert "둘째 줄" in text
+
+    def test_bulleted_tags_lose_their_marker(self) -> None:
+        """손으로 고친 위키의 불릿 태그가 `- 인사`라는 이름의 그래프 노드가 되지 않는다."""
+        wiki = "# T\n\n## 태그·키워드\n- 인사\n- 채용\n"
+
+        _title, _text, tags = parse_wiki_markdown(wiki)
+
+        assert tags == ["인사", "채용"]
+
+    def test_duplicated_related_block_keeps_only_the_last(self) -> None:
+        """v0.6 §4.5 — 사용자가 마커를 지우면 블록이 하나 더 추가된다.
+
+        그때 두 블록을 이어 붙이면 상세 화면의 「관련 문서」가 전부 두 번 나온다.
+        """
+        block = "<!-- corpbrain:related:start -->\n## 관련 문서\n- [A](a.md.md)\n<!-- corpbrain:related:end -->"
+        document = parse_wiki_document(f"# T\n\n{block}\n{block}\n")
+
+        assert len(document.related) == 1
+
     def test_embedding_text_excludes_front_matter_and_generated_sections(self) -> None:
         _title, text, _tags = parse_wiki_markdown(_rendered())
 

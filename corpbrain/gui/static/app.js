@@ -235,6 +235,22 @@ function openStream(onFrame) {
   activeStream = connectEvents(onFrame);
 }
 
+/** 그래프 화면이 쥐고 있는 `resize` 리스너. 화면을 떠날 때 반드시 푼다. */
+let graphResizeHandler = null;
+
+function setGraphResizeHandler(handler) {
+  clearGraphResizeHandler();
+  graphResizeHandler = handler;
+  window.addEventListener('resize', handler);
+}
+
+function clearGraphResizeHandler() {
+  if (graphResizeHandler !== null) {
+    window.removeEventListener('resize', graphResizeHandler);
+    graphResizeHandler = null;
+  }
+}
+
 function stopTicker() {
   if (ticker !== null) {
     window.clearInterval(ticker);
@@ -344,7 +360,14 @@ function foldEvent(snapshot, payload) {
     next.graph_stage = 'building';
     next.current_file = null;
   }
-  if (payload.kind === 'related_injected') next.graph_stage = 'injecting';
+  if (payload.kind === 'related_injected') {
+    next.graph_stage = 'injecting';
+    // 진행률까지 접는다. 서버 `reduce()` 는 이 값을 채우지만 스냅샷은 접속 때 한 번만 오므로,
+    // 접지 않으면 패스3 내내 `graph_total` 이 0(스냅샷 시점 값)에 머물러 카운터가 사라진다 —
+    // 파일 루프에서 고친 것과 같은 종류의 「멈춘 카운터」다.
+    next.graph_index = payload.index;
+    next.graph_total = payload.total;
+  }
   if (payload.kind === 'graph_finished') {
     next.graph_stage = 'done';
     next.current_file = null;
@@ -489,11 +512,14 @@ function scanPayload() {
 /**
  * 입력 하나를 그린다. `state` 는 값을 읽고 쓸 폼 객체다 — 스캔 폼과 검색 폼이 같은
  * 함수를 공유하므로 입력 모양이 화면마다 갈리지 않는다.
+ *
+ * `spec.idPrefix` 는 **같은 필드를 한 화면에 두 번 그릴 때** 준다 — `force_gates` 가 「고급」과
+ * 게이트 박스 양쪽에 나오므로, id 가 같으면 두 `<label for=…>` 이 첫 번째 체크박스만 가리켜
+ * 「고급」의 라벨을 눌렀는데 게이트 박스의 값이 바뀐다.
  */
 function field(spec, state = scanForm) {
   const wrap = el('div', spec.type === 'check' ? 'field field-check' : 'field');
-  // 한 화면에 폼이 하나뿐이므로 이름만으로 유일하다.
-  const id = `field-${spec.name}`;
+  const id = `${spec.idPrefix || 'field'}-${spec.name}`;
   const label = el('label', 'field-label', spec.label);
   label.htmlFor = id;
   let input;
@@ -584,7 +610,12 @@ function gateBox(gate) {
   box.appendChild(list);
   // 게이트를 둔 이유가 「비용이 큰 작업을 무심코 시작하지 않게」이므로, 이유와 강행 토글을
   // 같은 자리에서 보여 준다 — CLI 가 exit 3 으로 막는 자리와 같다 (§4.3.4).
-  const toggle = field({ name: 'force_gates', label: '이해했고 강행합니다 (force_gates)', type: 'check' });
+  const toggle = field({
+    name: 'force_gates',
+    label: '이해했고 강행합니다 (force_gates)',
+    type: 'check',
+    idPrefix: 'gate',
+  });
   // 토글을 켜면 위 문구가 곧바로 따라가야 한다 — 다시 계량할 때까지 「막혔습니다」가 남아
   // 있으면 사용자가 자기 조작이 먹혔는지 알 수 없다.
   toggle.querySelector('input').addEventListener('change', () => render());
@@ -1103,8 +1134,10 @@ async function renderGraph(content, generation, params) {
   content.appendChild(split);
 
   let placed = drawGraph(canvas, data, selected);
-  const redraw = () => { placed = drawGraph(canvas, data, selected); };
-  window.addEventListener('resize', redraw);
+  // 리스너를 **한 개만** 유지한다. 매 렌더마다 새로 등록하면 그래프 화면에 N 번 들어갔을 때
+  // 창 크기를 한 번 바꾸는 것이 N 번의 `drawGraph` 를 돌리고(그중 N-1 번은 이미 사라진
+  // 캔버스), 그 클로저가 노드·엣지 전체를 붙잡아 메모리도 놓이지 않는다.
+  setGraphResizeHandler(() => { placed = drawGraph(canvas, data, selected); });
   canvas.addEventListener('click', (event) => {
     const box = canvas.getBoundingClientRect();
     const x = event.clientX - box.left;
@@ -1354,6 +1387,7 @@ async function render() {
   const content = document.getElementById('content');
   clear(content);
   closeStream();
+  clearGraphResizeHandler();
   if (view === 'dashboard') {
     await renderDashboard(content, generation);
   } else if (view === 'scan') {

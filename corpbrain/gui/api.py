@@ -462,9 +462,14 @@ class GuiApp:
             "result": (
                 _result_dict(self.scan.result) if self.scan.result is not None else None
             ),
-            # 워커 스레드에서 죽은 예외도 같은 매핑 규칙(§4.3.2)으로 가른다. 도메인이면
-            # 안내 문장이 되고, 버그면 여기서 다시 올라가 500이 된다.
-            "failure": _section(_reraise(failure)) if failure is not None else None,
+            # 워커 스레드에서 죽은 예외는 **이 요청의 오류가 아니라 상태**다. 그래서 절 안에
+            # 담고 응답은 200으로 둔다 — 되올려 500을 내면 이 엔드포인트가 영구히 500이 되고,
+            # 화면이 스캔 폼을 그리지 못해 **새 스캔을 시작할 길이 사라진다**(`_failure`는
+            # `start()`만 지운다). 서버를 다시 띄우는 것 말고는 빠져나올 수 없는 상태였다.
+            #
+            # 「로그의 500 = 버그 신호」는 여전히 성립한다 — 워커가 트레이스백을 stderr에
+            # 남기고(`scan.py`), 그 예외가 도메인인지 버그인지는 아래 `bug` 플래그가 가른다.
+            "failure": _failure_dict(failure) if failure is not None else None,
         }
 
     # --- 설정 (§4.8 · §4.9 · §4.11) --------------------------------------------------
@@ -849,13 +854,16 @@ def _parse_query(raw: str) -> dict[str, str]:
     return parsed
 
 
-def _reraise(exc: BaseException) -> Callable[[], dict[str, Any]]:
-    """`_section`이 판정할 수 있도록 보관된 예외를 다시 올리는 얇은 호출자."""
+def _failure_dict(exc: BaseException) -> dict[str, Any]:
+    """워커가 남긴 예외를 상태 절로 편다.
 
-    def raise_it() -> dict[str, Any]:
-        raise exc
-
-    return raise_it
+    도메인/버그 판정은 `response_for_exception`의 규칙을 그대로 쓴다 — 규칙이 코드에 한 번만
+    적힌다(§4.3.2). 다만 여기서는 그 판정을 **상태코드가 아니라 `bug` 플래그**로 옮긴다:
+    실패는 이 요청의 오류가 아니라 지난 실행의 상태이므로, 응답 자체는 정상이다.
+    """
+    response = response_for_exception(exc)
+    body = response.json()
+    return {**body, "bug": response.status != 200}
 
 
 def _json_body(request: Request) -> dict[str, Any]:
@@ -875,7 +883,9 @@ def _measurement_dict(measurement: Measurement) -> dict[str, Any]:
     """계량 결과 — 파일별 테이블과 게이트 판정 (§4.3.4 1단계)."""
     return {
         "plan": _plan_dict(measurement.plan),
-        "findings": _findings_dict(measurement.findings),
+        "findings": _findings_dict(
+            measurement.findings, max_files=measurement.config.max_files
+        ),
     }
 
 
@@ -914,11 +924,22 @@ def _plan_dict(plan: ScanPlan) -> dict[str, Any]:
     }
 
 
-def _findings_dict(findings: ScanFindings) -> dict[str, Any]:
+def _findings_dict(findings: ScanFindings, *, max_files: int) -> dict[str, Any]:
+    """계량 결과의 파일 집계 — **상한 판정을 여기서 적용해 보여 준다.**
+
+    `measure()`가 훑는 findings는 `max_files=None`으로 얻은 **절단 이전** 집합이다(`run_scan`이
+    게이트를 그 위에서 계산해야 하므로 그래야 한다). 그 값을 그대로 내면 화면이
+    `limit_exceeded: false`와 「4개 문서」를 보여 주는데, 정작 「스캔 시작」을 누르면 `run_scan`이
+    `enforce_limit()`으로 즉시 중단해 **0건**이 나온다 — 확인 화면이 거짓말을 하는 셈이다.
+
+    판정 규칙은 코어 `enforce_limit()`과 같은 한 줄(`discovered_count > max_files`)이며, 여기서
+    무엇을 자를지 정하지 않는다 — 자르는 것은 여전히 `run_scan`의 몫이다.
+    """
+    limit_exceeded = findings.limit_exceeded or findings.discovered_count > max_files
     return {
         "discovered_count": findings.discovered_count,
-        "limit_exceeded": findings.limit_exceeded,
-        "target_count": len(findings.targets),
+        "limit_exceeded": limit_exceeded,
+        "target_count": 0 if limit_exceeded else len(findings.targets),
         "skipped": [
             {"path": str(item.path), "reason": str(item.reason), "detail": item.detail}
             for item in findings.skipped

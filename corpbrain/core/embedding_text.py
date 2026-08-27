@@ -65,13 +65,19 @@ def parse_wiki_markdown(markdown: str) -> tuple[str, str, list[str]]:
     복원·단위테스트)을 한 줄도 건드리지 않는 이유다.
     """
     document = parse_wiki_document(markdown)
-    parts = [
-        document.title,
-        *(_debullet(line) for line in document.one_line_summary.splitlines()),
-        *document.key_points,
-        *(_debullet(line) for line in document.summary.splitlines()),
-        *document.tags,
-    ]
+    # **구조화된 값이 아니라 섹션 원문 줄에서 만든다.** `WikiDocument.key_points`는 화면에
+    # 보여 줄 불릿만 담으므로(`- `로 시작하는 줄), 여러 줄로 이어진 핵심 포인트의 둘째 줄이
+    # 빠진다. 그러면 갓 생성된 문서(`summary_embedding_text()`)와 백필된 문서의 임베딩
+    # 텍스트가 어긋나 이 모듈 독스트링이 경계한 랭킹 불안정이 생긴다.
+    _front, body = _split_front_matter(markdown)
+    sections = _raw_sections(body)
+    parts = [document.title]
+    for header in _EMBEDDABLE_SECTIONS:
+        parts.extend(
+            _debullet(part)
+            for line in sections.get(header, [])
+            for part in (line.split(", ") if header == _TAGS_SECTION else [line])
+        )
     text = "\n".join(part for part in parts if part)
     return document.title, text, list(document.tags)
 
@@ -112,10 +118,13 @@ def parse_wiki_document(markdown: str) -> WikiDocument:
         if line.startswith("- ")
     ]
     tags = [
-        tag.strip()
+        # 불릿 기호를 뗀다. 렌더러는 태그를 `, `로 이어 한 줄로 쓰지만, 손으로 고친 위키나
+        # 다른 도구가 만든 산출물은 불릿으로 적혀 있을 수 있다 — 그대로 두면 그래프의 태그
+        # 노드 라벨이 `- 인사`가 되고 화면의 태그 칩에도 그 기호가 남는다.
+        stripped
         for line in sections.get(_TAGS_SECTION, [])
-        for tag in line.split(",")
-        if tag.strip()
+        for tag in _debullet(line).split(",")
+        if (stripped := tag.strip())
     ]
     return WikiDocument(
         source_path=front.get("source_path", ""),
@@ -161,7 +170,11 @@ def _raw_sections(body: str) -> dict[str, list[str]]:
         stripped = line.strip()
         if stripped in _ALL_SECTIONS:
             current = stripped
-            sections.setdefault(current, [])
+            # **덮어쓴다.** `setdefault`로 이어 붙이면 같은 헤더가 두 번 나오는 위키에서 두
+            # 블록이 합쳐진다 — v0.6 §4.5가 「사용자가 마커를 지우면 다음 실행에 블록이 하나
+            # 더 추가된다」로 실제로 일어난다고 적어 둔 상황이며, 그때 상세 화면의 「관련
+            # 문서」가 전부 두 번 나온다. 옛 파서도 덮어썼다.
+            sections[current] = []
             continue
         if stripped.startswith("<!-- corpbrain:"):
             continue  # 기계 관리 마커는 화면에 보일 것이 아니다 (v0.6 §4.5)

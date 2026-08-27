@@ -13,8 +13,10 @@ from __future__ import annotations
 import sys
 import threading
 import traceback
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Any
 
 from corpbrain.core.config import ScanConfig
 from corpbrain.core.models import ScanPlan, ScanResult
@@ -223,10 +225,23 @@ def config_from_payload(payload: dict[str, object], *, default_out: Path) -> Sca
         "max_files", "max_chars", "max_file_size", "max_total_tokens", "related_top_k",
     ):
         if (value := payload.get(name)) is not None:
-            fields[name] = int(value)  # type: ignore[arg-type]
+            fields[name] = _as_number(name, value, int)
     for name in ("force", "force_gates"):
         if (value := payload.get(name)) is not None:
             fields[name] = bool(value)
     if (value := payload.get("similarity_threshold")) is not None:
-        fields["similarity_threshold"] = float(value)  # type: ignore[arg-type]
+        fields["similarity_threshold"] = _as_number("similarity_threshold", value, float)
     return replace(base, **fields)  # type: ignore[arg-type]
+
+
+def _as_number(name: str, value: object, cast: Callable[[Any], Any]) -> Any:
+    """숫자로 옮긴다. **못 옮기면 400이지 500이 아니다.**
+
+    값의 **타당성**(음수·범위)은 여전히 코어가 판정한다(§4.3.3). 여기서 거르는 것은 그 앞
+    단계 — `"abc"`처럼 애초에 숫자가 아닌 값이며, `ValueError`를 그대로 새어 나가게 두면
+    사용자의 오타가 500이 되어 「로그의 500 = 버그 신호」가 오염된다.
+    """
+    try:
+        return cast(value)
+    except (TypeError, ValueError) as exc:
+        raise BadRequest(f"`{name}`이 숫자가 아닙니다: {value!r}") from exc

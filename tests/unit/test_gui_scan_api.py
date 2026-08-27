@@ -148,6 +148,82 @@ def test_worker_failure_is_reported_as_domain_state(tmp_path: Path) -> None:
 
     assert body["failure"]["error"] == "PreconditionError"
     assert "Ollama" in body["failure"]["message"]
+    assert body["failure"]["bug"] is False
+
+
+def test_a_worker_bug_does_not_wedge_the_status_endpoint(tmp_path: Path) -> None:
+    """버그로 죽은 워커가 화면을 **영구히** 막지 않는다.
+
+    실패를 되올려 500을 내면 이 엔드포인트가 계속 500이고, 화면은 스캔 폼을 그리지 못해
+    새 스캔을 시작할 길이 사라진다 — `_failure`를 지우는 것은 `start()`뿐인데 그것을 부를
+    수가 없다. 서버를 다시 띄우는 것 말고는 빠져나올 수 없는 상태가 된다.
+
+    실패는 **이 요청의 오류가 아니라 지난 실행의 상태**이므로 절 안에 담고 200으로 낸다.
+    도메인/버그 판정은 사라지지 않고 `bug` 플래그로 옮겨 간다.
+    """
+    controller = _StubController(running=False)
+    controller._failure = RuntimeError("코어 버그")
+    app = _app(tmp_path, controller)
+
+    response = app.handle("GET", "/api/scan", AUTH)
+    body = response.json()
+
+    assert response.status == 200
+    assert body["failure"]["bug"] is True
+    # 화면이 다시 그려질 수 있다 — 응답 자체는 오류가 아니다.
+    assert "error" not in body
+
+
+class TestPlanShowsTheFileCap:
+    """§4.3.4 — 확인 화면이 「스캔 시작」의 결과와 어긋나면 안 된다."""
+
+    @staticmethod
+    def _corpus(tmp_path: Path, count: int) -> Path:
+        root = tmp_path / "corpus"
+        root.mkdir()
+        for index in range(count):
+            (root / f"{index}.md").write_text("본문", encoding="utf-8")
+        return root
+
+    def _plan(self, tmp_path: Path, payload: dict[str, object]) -> dict[str, object]:
+        controller = ScanController(events=_Events(False))  # type: ignore[arg-type]
+        app = _app(tmp_path, controller)
+        return _post(app, "/api/scan/plan", payload).json()["findings"]
+
+    def test_cap_is_reflected_in_the_confirm_screen(self, tmp_path: Path) -> None:
+        """계량은 절단 이전 집합을 훑지만, **보여 줄 때는** 상한을 적용한다.
+
+        그러지 않으면 화면이 「4개 문서」와 `limit_exceeded: false`를 보여 주는데 「스캔 시작」을
+        누르면 `run_scan`이 `enforce_limit()`으로 즉시 중단해 **0건**이 나온다.
+        """
+        corpus = self._corpus(tmp_path, 4)
+
+        findings = self._plan(
+            tmp_path, {"folder": str(corpus), "force_gates": True, "max_files": 2}
+        )
+
+        assert findings["limit_exceeded"] is True
+        assert findings["discovered_count"] == 4
+        assert findings["target_count"] == 0
+
+    def test_within_the_cap_nothing_changes(self, tmp_path: Path) -> None:
+        corpus = self._corpus(tmp_path, 4)
+
+        findings = self._plan(tmp_path, {"folder": str(corpus), "force_gates": True})
+
+        assert findings["limit_exceeded"] is False
+        assert findings["target_count"] == 4
+
+
+def test_non_numeric_field_is_400_not_500(tmp_path: Path) -> None:
+    """사용자의 오타가 「로그의 500 = 버그 신호」를 오염시키지 않는다."""
+    controller = _StubController(running=False)
+    app = _app(tmp_path, controller)
+
+    response = _post(app, "/api/scan", {"folder": str(tmp_path), "max_files": "abc"})
+
+    assert response.status == 400
+    assert response.json()["error"] == "BadRequest"
 
 
 def test_malformed_body_is_400_not_500(tmp_path: Path) -> None:
