@@ -25,8 +25,10 @@ from corpbrain.core.environment import DoctorReport, diagnose
 from corpbrain.core.errors import CorpBrainError
 from corpbrain.core.graphstore import SqliteGraphStore, graph_path_for
 from corpbrain.core.models import GraphStats
+from corpbrain.gui.sse import EventStream
 
 __all__ = [
+    "EVENTS_PATH",
     "HOST",
     "JSON_CONTENT_TYPE",
     "SESSION_COOKIE",
@@ -46,6 +48,10 @@ HOST = "127.0.0.1"
 TOKEN_QUERY_PARAM = "token"
 #: 세션 쿠키 이름.
 SESSION_COOKIE = "corpbrain_session"
+#: 진행 스트림(SSE) 경로. **`handle()`의 라우트 표에 없다** — 스트리밍은 소켓 계층이
+#: 가로채 처리한다(§3 항목4: `Response.body`를 이터레이터까지 받도록 넓히지 않는다).
+#: 인증은 그 계층도 `GuiApp.authorize()`를 부르므로 경로가 갈리지 않는다 (§4.2).
+EVENTS_PATH = "/api/events"
 
 #: 상태를 바꾸는 메서드 — `Origin` 헤더를 **필수**로 요구하는 쪽 (§4.2).
 UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
@@ -159,8 +165,12 @@ class GuiApp:
         token: str,
         port: int,
         session_token: str | None = None,
+        events: EventStream | None = None,
     ) -> None:
         self.out_dir = out_dir
+        #: 진행 상태의 단일 출처. 스캔 상태는 서버가 소유하고 브라우저 세션이 소유하지
+        #: 않으므로(§4.4) 이 객체가 앱 수명과 같이 간다.
+        self.events = events or EventStream()
         #: URL 쿼리에 실려 브라우저에 전달되는 **부트스트랩** 토큰 (§4.2).
         self.token = token
         #: 부트스트랩과 **교환**되는 세션 쿠키 값. 별도 비밀을 쓰므로, 프론트엔드가
