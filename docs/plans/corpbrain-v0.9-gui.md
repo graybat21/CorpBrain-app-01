@@ -314,6 +314,9 @@ U1~U6은 **소켓을 하나도 열지 않는다.** 서버 로직이 순수 함�
 
 - `corpbrain gui` — 신규 런타임 의존성 0으로 도는 로컬 서버와 화면 6개.
 - 코어에 가산된 것 4종(`should_cancel` · `ScanResult.cancelled` · 그래프 이벤트 3종 ·
-  `iter_edges()`)과 공개 승격 2종(`build_expansion_evidence()` · `parse_wiki_document()`).
+  `iter_edges()`)과 공개 승격 **3종**(`build_expansion_evidence()` · `parse_wiki_document()` ·
+  `collect_wiki_documents()`/`WikiInventory`). 마지막 하나는 착수 시점에 세지 못했고 V2 에서
+  드러났다 — 위키 상세가 `doc_id` 로 위키 파일을 찾아야 하는데 트리는 라벨만 주기 때문이다
+  [2026-08-27 정정 · issue #62 · D-7].
 - **CI가 처음으로 wheel을 빌드하고 그것으로 기동을 확인한다** — 이후 슬라이스가 그대로 물려받는다.
 - `bind`까지 보는 네트워크 감시장치 — 「듣는 소켓」이라는 축이 이번에 처음 생긴다.
