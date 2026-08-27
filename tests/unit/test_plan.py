@@ -37,6 +37,18 @@ def test_importance_combines_ext_depth_and_signal() -> None:
     assert plan_mod._importance(Path("report.pdf"), ".pdf") == 63
 
 
+def test_office_extensions_are_registered_not_fallback() -> None:
+    """신규 오피스 확장자가 기본점수 40과 전용 `CHARS_PER_BYTE`를 받는다 (스펙 §3 항목8).
+
+    두 dict에 등록하지 않으면 fallback(0점 · 0.5)이 **조용히** 적용된다 — zip 압축 포맷의
+    토큰량을 10배 가까이 과대추정해 `plan`의 소요시간 추정이 틀어지고, v0.3의 총 토큰 예산
+    게이트(기본 200,000)가 엉뚱하게 발동할 수 있다.
+    """
+    for ext in (".xlsx", ".xlsm"):
+        assert plan_mod.BASE_EXT_SCORE[ext] == 40
+        assert plan_mod.CHARS_PER_BYTE[ext] == 0.06
+
+
 def test_importance_base_scores_differ_by_extension() -> None:
     # 같은 이름·깊이에서 확장자 기본 점수 차이만 반영 (pdf/docx 40 > md 30 > txt 25)
     assert plan_mod._importance(Path("a.pdf"), ".pdf") == 55  # 40+15
@@ -81,6 +93,8 @@ def test_importance_uses_folder_names_in_path() -> None:
         (1000, ".md", 200),
         (1000, ".docx", 24),  # chars=60, tokens=24
         (1000, ".pdf", 48),  # chars=120, tokens=48
+        (1000, ".xlsx", 24),  # chars=60, tokens=24 — zip 압축 포맷이라 `.docx`와 같은 0.06
+        (1000, ".xlsm", 24),
     ],
 )
 def test_estimate_tokens_per_extension(size: int, ext: str, expected: int) -> None:

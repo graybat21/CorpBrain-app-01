@@ -14,12 +14,16 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from datetime import date, datetime
 from pathlib import Path
+from zipfile import BadZipFile
 
 from docx import Document
 from docx.opc.exceptions import PackageNotFoundError
+from openpyxl import load_workbook
+from openpyxl.utils.exceptions import InvalidFileException
 from pypdf import PdfReader
 from pypdf.errors import PyPdfError
 
@@ -184,6 +188,103 @@ def _extract_pdf(path: Path, max_chars: int) -> str:
     return "\n".join(parts)[:max_chars]
 
 
+#: 엑셀·PPTX 개봉이 실패할 때 라이브러리가 올리는 예외들 (스펙 §4.3.1).
+#: `PermissionError`는 `OSError`의 하위 타입이라 여기에 포함되며, `from exc`로 원인을 보존해
+#: 호출자가 `permission_denied`와 `extraction_failed`를 계속 가를 수 있다.
+_OFFICE_OPEN_ERRORS = (InvalidFileException, BadZipFile, OSError, ValueError, KeyError)
+
+
+def _cell_text(value: object) -> str:
+    """엑셀 셀 값 하나를 표기 문자열로 바꾼다 (스펙 §4.2 T2 표).
+
+    `openpyxl`이 돌려주는 것은 문자열이 아니라 파이썬 객체다. `str()`에 그대로 맡기면
+    `120000.0`·`2026-03-31 00:00:00` 같은 표기가 나오고, LLM이 요약문에 그대로 옮겨 적는다.
+
+    엑셀 표시 형식(`number_format`)은 해석하지 않는다 — `read_only` 모드에서 제한적이고,
+    통화·백분율까지 다루면 이번 슬라이스의 「텍스트 레이어만」 원칙을 넘어선다.
+    """
+    if value is None:
+        # 빈 셀. 이 값이 「내용 없음」 판정의 기준이다 (§4.2 T1).
+        return ""
+    if isinstance(value, bool):
+        # `bool`은 `int`의 하위 타입이므로 숫자 규칙보다 먼저 가른다.
+        return str(value)
+    if isinstance(value, datetime):
+        if (value.hour, value.minute, value.second, value.microsecond) == (0, 0, 0, 0):
+            return value.strftime("%Y-%m-%d")
+        return value.strftime("%Y-%m-%d %H:%M")
+    if isinstance(value, date):
+        return value.strftime("%Y-%m-%d")
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
+
+
+def _excel_row_line(row: Iterable[object]) -> str:
+    """행 하나를 탭으로 이은 한 줄로 만든다. 전 셀이 비면 빈 문자열을 돌려준다 (§4.2 T2).
+
+    행 **끝**의 빈 셀은 탭을 남기지 않는다(오른쪽 여백 탭 제거). 앞·중간의 빈 셀은 열 위치
+    정보이므로 탭으로 남긴다.
+    """
+    cells = [_cell_text(value) for value in row]
+    while cells and not cells[-1]:
+        cells.pop()
+    return "\t".join(cells)
+
+
+def _extract_xlsx(path: Path, max_chars: int) -> str:
+    """`.xlsx`/`.xlsm`의 셀 값을 시트 순서로 잇되 `max_chars`에 도달하면 멈춘다 (스펙 §4.2).
+
+    `read_only=True`로 열어 통합문서를 통째로 메모리에 올리지 않는다. `data_only=True`는
+    수식 대신 **캐시된 계산값**을 읽는다 — 요약에 쓸모 있는 것은 `=SUM(B2:B10)`이 아니라 그
+    결과값이다. Excel이 저장하지 않은 파일에는 그 캐시가 없어 수식 셀이 비어 읽히며, 시트가
+    수식뿐이면 추출 결과가 빈 문자열이 되어 호출자가 `empty_document`로 스킵한다 (§5).
+
+    **경계 줄은 내용이 있는 시트에만 낸다** (§4.2 T1). 경계 줄은 「뒤에 내용이 온다」는
+    신호이므로 뒤가 비면 낼 것이 없다. 항상 내면 값이 전부 비는 파일의 추출 결과가 경계
+    줄만 남아 호출자의 `text.strip()` 검사를 통과해 버려, `empty_document`로 걸러져야 할
+    문서가 시트 이름만 든 입력으로 LLM까지 간다. 빈 판정 책임은 호출자 한 곳에 그대로 둔다.
+
+    **숨긴 시트는 제외하고 숨긴 행은 제외하지 않는다.** `sheet_state`는 읽기 전용 개봉에서도
+    판정되지만, `ReadOnlyWorksheet`에는 `row_dimensions` 속성이 아예 없어 「이 행이 숨겨졌는가」를
+    알 길이 없다 (2026-08-27 · `openpyxl` 3.1.5 실측 · 스펙 §4.2 T3). `read_only=False`로
+    바꾸는 선택지는 위의 「통째로 메모리에 올리지 않는다」와 정면으로 부딪쳐 택하지 않는다.
+    """
+    try:
+        workbook = load_workbook(str(path), read_only=True, data_only=True)
+    except _OFFICE_OPEN_ERRORS as exc:
+        raise ExtractionError(_open_failure_detail(path)) from exc
+
+    parts: list[str] = []
+    accumulated = 0
+    try:
+        for worksheet in workbook.worksheets:
+            if worksheet.sheet_state != "visible":
+                continue
+            # 첫 내용 줄을 만나기 전까지는 경계 줄을 내지 않고 들고만 있는다.
+            pending_boundary: str | None = f"[시트: {worksheet.title}]"
+            for row in worksheet.iter_rows(values_only=True):
+                line = _excel_row_line(row)
+                if not line:
+                    continue
+                if pending_boundary is not None:
+                    parts.append(pending_boundary)
+                    accumulated += len(pending_boundary) + 1
+                    pending_boundary = None
+                parts.append(line)
+                accumulated += len(line) + 1
+                if accumulated >= max_chars:
+                    break
+            if accumulated >= max_chars:
+                break
+    except (BadZipFile, OSError, ValueError, KeyError) as exc:
+        raise ExtractionError(f"{path.suffix.lstrip('.')} 시트를 읽지 못했습니다: {path}") from exc
+    finally:
+        workbook.close()
+
+    return "\n".join(parts)[:max_chars]
+
+
 #: 확장자 → 추출기 디스패치 (스펙 §4.2). **`extract.py`의 지원 포맷 목록은 이 매핑 하나뿐이다** —
 #: 확장자 상수를 따로 두지 않는다.
 #:
@@ -200,4 +301,6 @@ EXTRACTORS: dict[str, Callable[[Path, int], str]] = {
     ".md": _extract_plaintext,
     ".docx": _extract_docx,
     ".pdf": _extract_pdf,
+    ".xlsx": _extract_xlsx,
+    ".xlsm": _extract_xlsx,
 }

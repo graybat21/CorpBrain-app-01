@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import os
+from datetime import date, datetime
 from pathlib import Path
 
 import pytest
 from docx import Document
+from openpyxl import Workbook
 from pypdf import PdfReader, PdfWriter
 
 from corpbrain.core.config import SUPPORTED_EXTENSIONS
@@ -156,6 +158,25 @@ def test_dispatch_table_maps_every_extension_to_a_callable() -> None:
     assert all(callable(extractor) for extractor in EXTRACTORS.values())
 
 
+def _write_xlsx(path: Path, sheets: dict[str, list[list[object]]], *, hidden: tuple[str, ...] = ()) -> None:
+    """시트 이름 → 행 목록으로 `.xlsx`/`.xlsm`을 인라인 생성한다 (스펙 §3 픽스처 구성).
+
+    픽스처 생성 헬퍼는 `tests/conftest.py`나 공유 모듈로 빼지 않고 단위·통합 테스트 파일에
+    각각 둔다 — `.pdf`가 이미 같은 선택을 했고(위 `_write_text_pdf` 참조), 공유 인프라를 새로
+    들이면 `.pdf`는 복제, 오피스는 공유가 되어 관용구가 둘로 갈린다 (스펙 §3 「헬퍼 배치」).
+    """
+    workbook = Workbook()
+    workbook.remove(workbook.active)
+    for title, rows in sheets.items():
+        worksheet = workbook.create_sheet(title)
+        for row in rows:
+            worksheet.append(row)
+        if title in hidden:
+            worksheet.sheet_state = "hidden"
+    workbook.save(str(path))
+
+
+
 def test_txt_extraction_returns_plain_text(tmp_path: Path) -> None:
     source = tmp_path / "note.txt"
     source.write_text("첫 줄\n둘째 줄\n", encoding="utf-8")
@@ -197,7 +218,8 @@ def test_broken_encoding_does_not_crash(tmp_path: Path) -> None:
 
 
 def test_unsupported_extension_raises_extraction_error(tmp_path: Path) -> None:
-    source = tmp_path / "sheet.xlsx"  # xls는 v0.2 비목표 — 여전히 미지원
+    # `.xlsx`는 v0.8에서 지원 포맷이 되었다. 구형 `.xls`(BIFF)는 여전히 비목표다 (v0.8 §2).
+    source = tmp_path / "sheet.xls"
     source.write_bytes(b"PK\x03\x04")
 
     with pytest.raises(ExtractionError):
@@ -426,3 +448,203 @@ def test_fixture_empty_document_is_skipped() -> None:
 def test_fixture_unsupported_extension_is_rejected() -> None:
     with pytest.raises(ExtractionError):
         extract_text(FIXTURE_CORPUS / "photo.jpg", MAX_CHARS)
+
+
+# --- 엑셀 `.xlsx`/`.xlsm` (v0.8 §4.2) --------------------------------------------
+
+
+def test_xlsx_sheets_are_bounded_and_rows_are_tab_separated(tmp_path: Path) -> None:
+    """내용이 있는 시트마다 경계 줄이 정확히 1회 나오고, 셀은 탭으로 구분된다 (§3 항목2).
+
+    경계가 없으면 서로 다른 표의 행이 이어 붙어 한 표로 읽힌다. 시트명 자체도 요약에 쓸모
+    있는 신호다.
+    """
+    source = tmp_path / "book.xlsx"
+    _write_xlsx(
+        source,
+        {
+            "인사": [["이름", "부서"], ["김철수", "인사팀"]],
+            "예산": [["항목", "금액"]],
+        },
+    )
+
+    extracted = extract_text(source, MAX_CHARS)
+
+    assert extracted == "[시트: 인사]\n이름\t부서\n김철수\t인사팀\n[시트: 예산]\n항목\t금액"
+    assert extracted.count("[시트: 인사]") == 1
+
+
+def test_xlsx_sheet_without_content_gets_no_boundary_line(tmp_path: Path) -> None:
+    """값이 없는 시트에는 경계 줄도 내지 않는다 (스펙 §4.2 T1).
+
+    경계 줄은 「뒤에 내용이 온다」는 신호이므로 뒤가 비면 낼 것이 없다. 항상 내면 값이 전부
+    비는 파일의 추출 결과가 경계 줄만 남아 호출자의 `text.strip()` 검사를 통과해 버린다.
+    """
+    source = tmp_path / "book.xlsx"
+    _write_xlsx(source, {"빈시트": [[None, None]], "내용": [["값"]]})
+
+    extracted = extract_text(source, MAX_CHARS)
+
+    assert extracted == "[시트: 내용]\n값"
+    assert "빈시트" not in extracted
+
+
+def test_xlsx_hidden_sheet_content_is_excluded(tmp_path: Path) -> None:
+    """숨긴 시트는 내용도 경계 줄도 나오지 않는다 — `sheet_state`는 읽기 전용 개봉에서도 판정된다."""
+    source = tmp_path / "book.xlsx"
+    _write_xlsx(source, {"보이는": [["공개"]], "숨긴": [["기밀"]]}, hidden=("숨긴",))
+
+    extracted = extract_text(source, MAX_CHARS)
+
+    assert extracted == "[시트: 보이는]\n공개"
+    assert "기밀" not in extracted
+
+
+def test_xlsx_hidden_row_content_is_included(tmp_path: Path) -> None:
+    """숨긴 **행**은 제외되지 않는다 — `read_only` 개봉에서 판별할 수 없기 때문이다.
+
+    `openpyxl` 3.1.5가 돌려주는 `ReadOnlyWorksheet`에는 `row_dimensions` 속성이 아예 없다
+    (2026-08-27 U1 확인). 스펙 §4.2 T3의 조건부 표가 「얻을 수 없다」 행으로 확정된 결과이며,
+    `read_only=False`로 바꾸는 선택지는 「파일을 통째로 메모리에 올리지 않는다」와 정면으로
+    부딪쳐 택하지 않는다. 알려진 한계를 테스트로 고정해 둔다.
+    """
+    source = tmp_path / "book.xlsx"
+    _write_xlsx(source, {"시트": [["보임1"], ["숨김"], ["보임2"]]})
+
+    workbook = Workbook()  # 위에서 만든 파일에 행 숨김만 덧입힌다
+    del workbook
+    from openpyxl import load_workbook
+
+    editable = load_workbook(str(source))
+    editable["시트"].row_dimensions[2].hidden = True
+    editable.save(str(source))
+
+    extracted = extract_text(source, MAX_CHARS)
+
+    assert "숨김" in extracted
+
+
+def test_xlsx_cell_values_are_normalised(tmp_path: Path) -> None:
+    """셀 값의 문자열화 4규칙 (스펙 §4.2 T2 표).
+
+    `openpyxl`이 돌려주는 것은 문자열이 아니라 파이썬 객체다. `120000.0`·
+    `2026-03-31 00:00:00` 같은 표기는 LLM이 요약문에 그대로 옮겨 적는 종류의 잡음이다.
+    """
+    source = tmp_path / "book.xlsx"
+    _write_xlsx(
+        source,
+        {
+            # 엑셀 셀의 날짜는 tz 정보가 없다 — `openpyxl`은 tz-aware `datetime` 저장을 거부하므로
+            # 여기서 naive 를 쓰는 것이 실제 셀 값의 모습이다 (DTZ001 을 그래서 끈다).
+            "값": [
+                [date(2026, 3, 31), datetime(2026, 3, 31, 14, 30)],  # noqa: DTZ001
+                [datetime(2026, 3, 31, 0, 0), 120000.0],  # noqa: DTZ001
+                [1.5, True],
+            ]
+        },
+    )
+
+    extracted = extract_text(source, MAX_CHARS)
+
+    assert extracted == (
+        "[시트: 값]\n"
+        "2026-03-31\t2026-03-31 14:30\n"
+        "2026-03-31\t120000\n"
+        "1.5\tTrue"
+    )
+
+
+def test_xlsx_blank_rows_are_skipped_and_trailing_empty_cells_leave_no_tab(
+    tmp_path: Path,
+) -> None:
+    """전 셀이 빈 행은 건너뛰고, 행 끝의 빈 셀은 탭을 남기지 않는다 (스펙 §4.2 T2).
+
+    앞쪽·중간의 빈 셀은 열 위치 정보이므로 탭으로 남긴다.
+    """
+    source = tmp_path / "book.xlsx"
+    _write_xlsx(
+        source,
+        {"시트": [["a", "b", None], [None, None, None], [None, "c", None], ["d"]]},
+    )
+
+    extracted = extract_text(source, MAX_CHARS)
+
+    assert extracted == "[시트: 시트]\na\tb\n\tc\nd"
+
+
+def test_xlsx_formula_without_cached_value_yields_empty_string(tmp_path: Path) -> None:
+    """수식만 있고 계산값 캐시가 없는 통합문서는 빈 문자열이 된다 (스펙 §3 항목3·§5).
+
+    Excel이 저장하지 않은 `.xlsx`(스크립트·LibreOffice 생성)에는 `data_only=True`가 읽을
+    캐시가 없다. 값을 수식 문자열로 대체하려고 파일을 두 번 열지 않는다.
+    """
+    source = tmp_path / "formula.xlsx"
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "계산"
+    worksheet["A1"] = "=SUM(B1:B9)"
+    worksheet["A2"] = "=A1*2"
+    workbook.save(str(source))
+
+    assert extract_text(source, MAX_CHARS) == ""
+
+
+def test_xlsx_formula_only_workbook_is_skipped_as_empty(tmp_path: Path) -> None:
+    """그 빈 문자열이 호출자에게서 `empty_document`가 된다 — 빈 판정 책임은 호출자에 남는다."""
+    source = tmp_path / "formula.xlsx"
+    workbook = Workbook()
+    workbook.active["A1"] = "=SUM(B1:B9)"
+    workbook.save(str(source))
+
+    prepared = prepare_summary_input(source, MAX_CHARS)
+
+    assert prepared.text is None
+    assert prepared.skipped is not None
+    assert prepared.skipped.reason is SkipReason.EMPTY_DOCUMENT
+
+
+def test_xlsx_extraction_stops_at_max_chars(tmp_path: Path) -> None:
+    """상한에 닿으면 즉시 멈춘다 — 통합문서를 끝까지 훑지 않는다 (§3 항목9)."""
+    source = tmp_path / "big.xlsx"
+    _write_xlsx(source, {"시트": [["가" * 200] for _ in range(50)]})
+
+    extracted = extract_text(source, 500)
+
+    assert len(extracted) <= 500
+
+
+def test_xlsm_is_extracted_by_the_same_extractor(tmp_path: Path) -> None:
+    """`.xlsm`은 `openpyxl`이 공식 지원하므로 확장자 한 줄 추가로 끝난다 (스펙 §4.1)."""
+    source = tmp_path / "macro.xlsm"
+    _write_xlsx(source, {"시트": [["매크로 통합문서"]]})
+
+    assert extract_text(source, MAX_CHARS) == "[시트: 시트]\n매크로 통합문서"
+
+
+def test_ole_xlsx_and_corrupted_xlsx_get_different_details(tmp_path: Path) -> None:
+    """암호화(OLE)와 손상이 **서로 다른 detail**을 받는다 (스펙 §3 항목5·§4.3.1)."""
+    encrypted = tmp_path / "locked.xlsx"
+    encrypted.write_bytes(OLE_SIGNATURE_BYTES + b"\x00" * 64)
+    corrupted = tmp_path / "broken.xlsx"
+    corrupted.write_bytes(b"PK\x03\x04 not really a zip")
+
+    with pytest.raises(ExtractionError) as encrypted_error:
+        extract_text(encrypted, MAX_CHARS)
+    with pytest.raises(ExtractionError) as corrupted_error:
+        extract_text(corrupted, MAX_CHARS)
+
+    assert "암호화되었거나 구형 이진 포맷" in str(encrypted_error.value)
+    assert "암호화되었거나 구형 이진 포맷" not in str(corrupted_error.value)
+    assert str(encrypted_error.value) != str(corrupted_error.value)
+
+
+def test_broken_xlsx_is_skipped_as_extraction_failed(tmp_path: Path) -> None:
+    """손상된 통합문서는 새 스킵 사유가 아니라 기존 `extraction_failed`로 흡수된다 (스펙 §4.3)."""
+    source = tmp_path / "broken.xlsx"
+    source.write_bytes(b"PK\x03\x04 not really a zip")
+
+    prepared = prepare_summary_input(source, MAX_CHARS)
+
+    assert prepared.skipped is not None
+    assert prepared.skipped.reason is SkipReason.EXTRACTION_FAILED
+    assert prepared.skipped.detail

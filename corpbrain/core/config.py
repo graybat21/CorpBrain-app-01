@@ -41,8 +41,14 @@ DEFAULT_CLOUD_MODEL = "claude-haiku-4-5-20251001"
 #: 값 자체는 어디에도 저장하지 않는다 — 읽기는 `anthropic_client.resolve_api_key()`뿐이다.
 API_KEY_ENV_VAR = "ANTHROPIC_API_KEY"
 
-#: 지원 포맷 4종 (스펙 §4.2 + v0.2 §4.1 `.pdf`). 그 외 확장자는 스킵한다.
-SUPPORTED_EXTENSIONS: frozenset[str] = frozenset({".docx", ".txt", ".md", ".pdf"})
+#: 지원 포맷 (스펙 §4.2 + v0.2 §4.1 `.pdf` + v0.8 §4.1 오피스). 그 외 확장자는 스킵한다.
+#:
+#: **이 상수가 지원 포맷 목록의 정본이며 다른 모든 목록은 파생이다** (v0.8 §4.1).
+#: `extract.EXTRACTORS`의 키 집합이 이 값과 정확히 같아야 하고, 그 정합성은
+#: `tests/unit/test_extract.py`가 단언한다.
+SUPPORTED_EXTENSIONS: frozenset[str] = frozenset(
+    {".docx", ".txt", ".md", ".pdf", ".xlsx", ".xlsm"}
+)
 
 #: 경로 길이 상한 (스펙 §5) — 초과 시 스킵한다.
 MAX_PATH_LENGTH = 260
