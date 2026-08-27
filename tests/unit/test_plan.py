@@ -44,9 +44,11 @@ def test_office_extensions_are_registered_not_fallback() -> None:
     토큰량을 10배 가까이 과대추정해 `plan`의 소요시간 추정이 틀어지고, v0.3의 총 토큰 예산
     게이트(기본 200,000)가 엉뚱하게 발동할 수 있다.
     """
-    for ext in (".xlsx", ".xlsm"):
+    for ext in (".xlsx", ".xlsm", ".pptx"):
         assert plan_mod.BASE_EXT_SCORE[ext] == 40
-        assert plan_mod.CHARS_PER_BYTE[ext] == 0.06
+    assert plan_mod.CHARS_PER_BYTE[".xlsx"] == 0.06
+    assert plan_mod.CHARS_PER_BYTE[".xlsm"] == 0.06
+    assert plan_mod.CHARS_PER_BYTE[".pptx"] == 0.03
 
 
 def test_importance_base_scores_differ_by_extension() -> None:
@@ -95,6 +97,7 @@ def test_importance_uses_folder_names_in_path() -> None:
         (1000, ".pdf", 48),  # chars=120, tokens=48
         (1000, ".xlsx", 24),  # chars=60, tokens=24 — zip 압축 포맷이라 `.docx`와 같은 0.06
         (1000, ".xlsm", 24),
+        (1000, ".pptx", 12),  # chars=30, tokens=12 — 이미지·레이아웃 XML 비중이 커 절반인 0.03
     ],
 )
 def test_estimate_tokens_per_extension(size: int, ext: str, expected: int) -> None:

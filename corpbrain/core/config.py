@@ -47,7 +47,7 @@ API_KEY_ENV_VAR = "ANTHROPIC_API_KEY"
 #: `extract.EXTRACTORS`의 키 집합이 이 값과 정확히 같아야 하고, 그 정합성은
 #: `tests/unit/test_extract.py`가 단언한다.
 SUPPORTED_EXTENSIONS: frozenset[str] = frozenset(
-    {".docx", ".txt", ".md", ".pdf", ".xlsx", ".xlsm"}
+    {".docx", ".txt", ".md", ".pdf", ".xlsx", ".xlsm", ".pptx"}
 )
 
 #: 경로 길이 상한 (스펙 §5) — 초과 시 스킵한다.

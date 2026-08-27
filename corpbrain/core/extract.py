@@ -14,7 +14,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
@@ -24,6 +24,9 @@ from docx import Document
 from docx.opc.exceptions import PackageNotFoundError
 from openpyxl import load_workbook
 from openpyxl.utils.exceptions import InvalidFileException
+from pptx import Presentation
+from pptx.exc import PackageNotFoundError as PptxPackageNotFoundError
+from pptx.shapes.group import GroupShape
 from pypdf import PdfReader
 from pypdf.errors import PyPdfError
 
@@ -220,11 +223,14 @@ def _cell_text(value: object) -> str:
     return str(value)
 
 
-def _excel_row_line(row: Iterable[object]) -> str:
-    """행 하나를 탭으로 이은 한 줄로 만든다. 전 셀이 비면 빈 문자열을 돌려준다 (§4.2 T2).
+def _tab_joined_row(row: Iterable[object]) -> str:
+    """표의 행 하나를 탭으로 이은 한 줄로 만든다. 전 셀이 비면 빈 문자열이다 (§4.2 T2).
 
     행 **끝**의 빈 셀은 탭을 남기지 않는다(오른쪽 여백 탭 제거). 앞·중간의 빈 셀은 열 위치
     정보이므로 탭으로 남긴다.
+
+    엑셀 시트와 PPTX 슬라이드 안의 표가 같은 함수를 쓴다 — 둘 다 「행 × 셀」 구조이고,
+    표기가 갈리면 같은 표를 담은 `.xlsx`와 `.pptx`가 서로 다른 요약 입력을 만든다.
     """
     cells = [_cell_text(value) for value in row]
     while cells and not cells[-1]:
@@ -264,7 +270,7 @@ def _extract_xlsx(path: Path, max_chars: int) -> str:
             # 첫 내용 줄을 만나기 전까지는 경계 줄을 내지 않고 들고만 있는다.
             pending_boundary: str | None = f"[시트: {worksheet.title}]"
             for row in worksheet.iter_rows(values_only=True):
-                line = _excel_row_line(row)
+                line = _tab_joined_row(row)
                 if not line:
                     continue
                 if pending_boundary is not None:
@@ -281,6 +287,93 @@ def _extract_xlsx(path: Path, max_chars: int) -> str:
         raise ExtractionError(f"{path.suffix.lstrip('.')} 시트를 읽지 못했습니다: {path}") from exc
     finally:
         workbook.close()
+
+    return "\n".join(parts)[:max_chars]
+
+
+def _pptx_shape_lines(shapes: Iterable[object]) -> Iterator[str]:
+    """도형 트리를 **파일에 적힌 순서 그대로** 훑어 내용 줄을 낸다 (스펙 §4.2).
+
+    좌표 기반 시각 순서 재정렬을 하지 않는다 — 같은 높이의 도형에서 순서가 흔들려 tie-break를
+    또 정해야 하고, 결정성이 약해진다.
+
+    표(`GraphicFrame`)는 `text_frame`이 없어 따로 훑지 않으면 통째로 누락되고, 그룹 도형은
+    자식이 한 겹 아래에 있어 재귀하지 않으면 그룹째 누락된다.
+    """
+    for shape in shapes:
+        if isinstance(shape, GroupShape):
+            yield from _pptx_shape_lines(shape.shapes)
+            continue
+        if shape.has_table:
+            for row in shape.table.rows:
+                line = _tab_joined_row(cell.text for cell in row.cells)
+                if line.strip():
+                    yield line
+            continue
+        if shape.has_text_frame:
+            text = shape.text_frame.text
+            if text.strip():
+                yield text
+
+
+def _pptx_notes_lines(slide: object) -> Iterator[str]:
+    """발표자 노트를 `[노트]` 줄 뒤에 낸다 (스펙 §4.2).
+
+    슬라이드 본문이 키워드 나열뿐이고 실제 내용이 노트에 있는 경우가 흔하다.
+
+    **접근을 `has_notes_slide`로 가드한다** (T7). `slide.notes_slide`에 바로 접근하면 노트
+    슬라이드가 없는 슬라이드에 객체가 새로 만들어진다 — 파일에 쓰이지는 않으나 읽기 연산이
+    객체를 만드는 모양새다. 추출기는 전부 읽기 전용이며 그 성질이 코드에서 보이게 둔다.
+
+    노트가 있으나 공백뿐이면 `[노트]` 줄도 내지 않는다 — 경계 줄과 같은 규칙이다.
+    """
+    if not slide.has_notes_slide:
+        return
+    frame = slide.notes_slide.notes_text_frame
+    if frame is None:
+        return
+    text = frame.text
+    if not text.strip():
+        return
+    yield "[노트]"
+    yield text
+
+
+def _extract_pptx(path: Path, max_chars: int) -> str:
+    """`.pptx`의 슬라이드 텍스트를 순서대로 잇되 `max_chars`에 도달하면 멈춘다 (스펙 §4.2).
+
+    **경계 줄 `[슬라이드 N]`은 내용이 있는 슬라이드에만 낸다** (§4.2 T1 — 엑셀과 같은 규칙).
+    이미지만 있는 슬라이드는 경계 줄도 내지 않으며, 전 슬라이드가 그러면 추출 결과가 빈
+    문자열이 되어 호출자가 `empty_document`로 처리한다.
+
+    `N`은 **원본 슬라이드 번호**(1부터)이며 건너뛴 슬라이드가 있어도 다시 매기지 않는다 —
+    사용자가 파워포인트에서 보는 번호와 어긋나면 「몇 번째 슬라이드의 내용인가」를 짚을 수 없다.
+    """
+    try:
+        presentation = Presentation(str(path))
+    except (PptxPackageNotFoundError, *_OFFICE_OPEN_ERRORS) as exc:
+        raise ExtractionError(_open_failure_detail(path)) from exc
+
+    parts: list[str] = []
+    accumulated = 0
+    try:
+        for number, slide in enumerate(presentation.slides, start=1):
+            # 첫 내용 줄을 만나기 전까지는 경계 줄을 내지 않고 들고만 있는다. 노트만 있는
+            # 슬라이드에서도 노트가 내용이므로 경계 줄이 그 앞에 붙는다.
+            pending_boundary: str | None = f"[슬라이드 {number}]"
+            for line in (*_pptx_shape_lines(slide.shapes), *_pptx_notes_lines(slide)):
+                if pending_boundary is not None:
+                    parts.append(pending_boundary)
+                    accumulated += len(pending_boundary) + 1
+                    pending_boundary = None
+                parts.append(line)
+                accumulated += len(line) + 1
+                if accumulated >= max_chars:
+                    break
+            if accumulated >= max_chars:
+                break
+    except (PptxPackageNotFoundError, BadZipFile, OSError, ValueError, KeyError) as exc:
+        raise ExtractionError(f"pptx 슬라이드를 읽지 못했습니다: {path}") from exc
 
     return "\n".join(parts)[:max_chars]
 
@@ -303,4 +396,5 @@ EXTRACTORS: dict[str, Callable[[Path, int], str]] = {
     ".pdf": _extract_pdf,
     ".xlsx": _extract_xlsx,
     ".xlsm": _extract_xlsx,
+    ".pptx": _extract_pptx,
 }

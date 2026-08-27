@@ -9,6 +9,8 @@ from pathlib import Path
 import pytest
 from docx import Document
 from openpyxl import Workbook
+from pptx import Presentation
+from pptx.util import Emu
 from pypdf import PdfReader, PdfWriter
 
 from corpbrain.core.config import SUPPORTED_EXTENSIONS
@@ -174,6 +176,18 @@ def _write_xlsx(path: Path, sheets: dict[str, list[list[object]]], *, hidden: tu
         if title in hidden:
             worksheet.sheet_state = "hidden"
     workbook.save(str(path))
+
+
+
+def _blank_slide(presentation: Presentation) -> object:
+    """도형이 하나도 없는 빈 레이아웃 슬라이드를 더한다 (레이아웃 6 = Blank)."""
+    return presentation.slides.add_slide(presentation.slide_layouts[6])
+
+
+def _add_textbox(slide: object, text: str, *, top: int = 0) -> object:
+    box = slide.shapes.add_textbox(Emu(0), Emu(top), Emu(1_000_000), Emu(500_000))
+    box.text_frame.text = text
+    return box
 
 
 
@@ -648,3 +662,183 @@ def test_broken_xlsx_is_skipped_as_extraction_failed(tmp_path: Path) -> None:
     assert prepared.skipped is not None
     assert prepared.skipped.reason is SkipReason.EXTRACTION_FAILED
     assert prepared.skipped.detail
+
+
+# --- PPTX (v0.8 §4.2) -------------------------------------------------------------
+
+
+def test_pptx_slides_are_bounded_and_shapes_keep_file_order(tmp_path: Path) -> None:
+    """내용이 있는 슬라이드마다 `[슬라이드 N]` 경계 줄이 나오고, 도형은 파일 순서 그대로다.
+
+    좌표 기반 시각 순서 재정렬을 하지 않는다 — 같은 높이의 도형에서 순서가 흔들려 tie-break를
+    또 정해야 하고 결정성이 약해진다. 아래 픽스처는 **나중에 추가한 도형을 위쪽에 두어** 좌표
+    순서와 파일 순서가 어긋나게 만든다.
+    """
+    source = tmp_path / "deck.pptx"
+    presentation = Presentation()
+    slide = _blank_slide(presentation)
+    _add_textbox(slide, "먼저 추가한 아래쪽 도형", top=5_000_000)
+    _add_textbox(slide, "나중에 추가한 위쪽 도형", top=0)
+    second = _blank_slide(presentation)
+    _add_textbox(second, "둘째 슬라이드")
+    presentation.save(str(source))
+
+    extracted = extract_text(source, MAX_CHARS)
+
+    assert extracted == (
+        "[슬라이드 1]\n먼저 추가한 아래쪽 도형\n나중에 추가한 위쪽 도형\n"
+        "[슬라이드 2]\n둘째 슬라이드"
+    )
+
+
+def test_pptx_empty_slide_gets_no_boundary_and_numbering_is_not_reset(
+    tmp_path: Path,
+) -> None:
+    """이미지만 있는 슬라이드는 경계 줄도 내지 않고, 남은 슬라이드는 원본 번호를 유지한다.
+
+    건너뛴 슬라이드가 있어도 번호를 다시 매기지 않는다 — 사용자가 파워포인트에서 보는 번호와
+    어긋나면 「몇 번째 슬라이드에 있던 내용인가」를 짚을 수 없다.
+    """
+    source = tmp_path / "deck.pptx"
+    presentation = Presentation()
+    _blank_slide(presentation)  # 1번: 도형 없음
+    third_carrier = _blank_slide(presentation)  # 2번: 도형 없음
+    del third_carrier
+    slide = _blank_slide(presentation)  # 3번: 내용 있음
+    _add_textbox(slide, "세 번째 슬라이드의 내용")
+    presentation.save(str(source))
+
+    extracted = extract_text(source, MAX_CHARS)
+
+    assert extracted == "[슬라이드 3]\n세 번째 슬라이드의 내용"
+
+
+def test_pptx_empty_deck_is_skipped_as_empty(tmp_path: Path) -> None:
+    """전 슬라이드가 비면 추출 결과가 빈 문자열이 되어 호출자가 `empty_document`로 스킵한다."""
+    source = tmp_path / "images_only.pptx"
+    presentation = Presentation()
+    _blank_slide(presentation)
+    _blank_slide(presentation)
+    presentation.save(str(source))
+
+    prepared = prepare_summary_input(source, MAX_CHARS)
+
+    assert prepared.skipped is not None
+    assert prepared.skipped.reason is SkipReason.EMPTY_DOCUMENT
+
+
+def test_pptx_table_cells_are_extracted(tmp_path: Path) -> None:
+    """표는 `text_frame`이 없어 따로 훑지 않으면 통째로 누락된다 — 행은 탭으로 잇는다."""
+    source = tmp_path / "deck.pptx"
+    presentation = Presentation()
+    slide = _blank_slide(presentation)
+    frame = slide.shapes.add_table(2, 2, Emu(0), Emu(0), Emu(2_000_000), Emu(1_000_000))
+    table = frame.table
+    table.cell(0, 0).text = "항목"
+    table.cell(0, 1).text = "금액"
+    table.cell(1, 0).text = "인건비"
+    table.cell(1, 1).text = "1200"
+    presentation.save(str(source))
+
+    extracted = extract_text(source, MAX_CHARS)
+
+    assert extracted == "[슬라이드 1]\n항목\t금액\n인건비\t1200"
+
+
+def test_pptx_group_shape_text_is_extracted_recursively(tmp_path: Path) -> None:
+    """그룹 도형 내부 텍스트도 재귀로 훑는다 — 그러지 않으면 그룹째 누락된다."""
+    source = tmp_path / "deck.pptx"
+    presentation = Presentation()
+    slide = _blank_slide(presentation)
+    first = _add_textbox(slide, "그룹 안 첫째")
+    second = _add_textbox(slide, "그룹 안 둘째", top=1_000_000)
+    slide.shapes.add_group_shape([first, second])
+    presentation.save(str(source))
+
+    extracted = extract_text(source, MAX_CHARS)
+
+    assert "그룹 안 첫째" in extracted
+    assert "그룹 안 둘째" in extracted
+
+
+def test_pptx_speaker_notes_follow_a_notes_marker(tmp_path: Path) -> None:
+    """발표자 노트를 `[노트]` 줄 뒤에 덧붙인다 — 본문이 키워드뿐이고 내용이 노트에 있는 경우가 흔하다."""
+    source = tmp_path / "deck.pptx"
+    presentation = Presentation()
+    slide = _blank_slide(presentation)
+    _add_textbox(slide, "키워드")
+    slide.notes_slide.notes_text_frame.text = "실제 설명은 여기 있다"
+    presentation.save(str(source))
+
+    extracted = extract_text(source, MAX_CHARS)
+
+    assert extracted == "[슬라이드 1]\n키워드\n[노트]\n실제 설명은 여기 있다"
+
+
+def test_pptx_blank_notes_produce_no_notes_marker(tmp_path: Path) -> None:
+    """노트가 있으나 공백뿐이면 `[노트]` 줄도 내지 않는다 — 경계 줄 규칙과 같다."""
+    source = tmp_path / "deck.pptx"
+    presentation = Presentation()
+    slide = _blank_slide(presentation)
+    _add_textbox(slide, "본문")
+    slide.notes_slide.notes_text_frame.text = "   \n  "
+    presentation.save(str(source))
+
+    assert extract_text(source, MAX_CHARS) == "[슬라이드 1]\n본문"
+
+
+def test_pptx_extraction_does_not_create_notes_slides(tmp_path: Path) -> None:
+    """노트 접근을 `has_notes_slide`로 가드한다 (스펙 §4.2 T7).
+
+    `slide.notes_slide`에 바로 접근하면 노트 슬라이드가 없는 슬라이드에 객체가 **새로
+    만들어진다**. 추출기는 전부 읽기 전용이며 그 성질이 코드에서 보여야 한다. 추출 뒤에
+    다시 열어 노트 슬라이드가 생기지 않았음을 확인한다.
+    """
+    source = tmp_path / "deck.pptx"
+    presentation = Presentation()
+    slide = _blank_slide(presentation)
+    _add_textbox(slide, "노트 없는 슬라이드")
+    presentation.save(str(source))
+
+    extract_text(source, MAX_CHARS)
+
+    assert Presentation(str(source)).slides[0].has_notes_slide is False
+
+
+def test_pptx_extraction_stops_at_max_chars(tmp_path: Path) -> None:
+    """상한에 닿으면 즉시 멈춘다 — 프레젠테이션을 끝까지 훑지 않는다 (§3 항목9)."""
+    source = tmp_path / "big.pptx"
+    presentation = Presentation()
+    for _ in range(20):
+        slide = _blank_slide(presentation)
+        _add_textbox(slide, "가" * 200)
+    presentation.save(str(source))
+
+    assert len(extract_text(source, 500)) <= 500
+
+
+def test_ole_pptx_and_corrupted_pptx_get_different_details(tmp_path: Path) -> None:
+    """암호화(OLE)와 손상이 서로 다른 detail을 받는다 — 엑셀과 같은 판정을 공유한다 (§4.3.1)."""
+    encrypted = tmp_path / "locked.pptx"
+    encrypted.write_bytes(OLE_SIGNATURE_BYTES + b"\x00" * 64)
+    corrupted = tmp_path / "broken.pptx"
+    corrupted.write_bytes(b"PK\x03\x04 not really a zip")
+
+    with pytest.raises(ExtractionError) as encrypted_error:
+        extract_text(encrypted, MAX_CHARS)
+    with pytest.raises(ExtractionError) as corrupted_error:
+        extract_text(corrupted, MAX_CHARS)
+
+    assert "암호화되었거나 구형 이진 포맷" in str(encrypted_error.value)
+    assert "암호화되었거나 구형 이진 포맷" not in str(corrupted_error.value)
+
+
+def test_broken_pptx_is_skipped_as_extraction_failed(tmp_path: Path) -> None:
+    """손상된 프레젠테이션도 기존 `extraction_failed`로 흡수된다 — 새 스킵 사유를 만들지 않는다."""
+    source = tmp_path / "broken.pptx"
+    source.write_bytes(b"PK\x03\x04 not really a zip")
+
+    prepared = prepare_summary_input(source, MAX_CHARS)
+
+    assert prepared.skipped is not None
+    assert prepared.skipped.reason is SkipReason.EXTRACTION_FAILED

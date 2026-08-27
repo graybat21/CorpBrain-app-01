@@ -272,7 +272,15 @@ def test_is_supported_rejects_unsupported_extensions(name: str) -> None:
 def test_supported_extensions_is_the_shared_core_constant() -> None:
     """확장자 집합을 새로 만들지 않고 코어 설정(스펙 §4.2·§4.1)을 re-export 한다."""
     assert SUPPORTED_EXTENSIONS is config.SUPPORTED_EXTENSIONS
-    assert SUPPORTED_EXTENSIONS == {".docx", ".txt", ".md", ".pdf", ".xlsx", ".xlsm"}
+    assert SUPPORTED_EXTENSIONS == {
+        ".docx",
+        ".txt",
+        ".md",
+        ".pdf",
+        ".xlsx",
+        ".xlsm",
+        ".pptx",
+    }
 
 
 # --- 경로만 다룬다 --------------------------------------------------------------

@@ -26,7 +26,8 @@ __all__ = ["detect_hardware", "plan_scan"]
 #: fallback 0점을 받으므로, 지원 포맷을 늘릴 때 이 dict를 함께 늘린다 (v0.8 §4.4).
 #: 오피스 3종의 40은 `.docx`/`.pdf`와 같은 「정식 산출물」 취급이다 — 근거 없이 차등을 두지 않는다.
 BASE_EXT_SCORE: dict[str, int] = {
-    ".pdf": 40, ".docx": 40, ".xlsx": 40, ".xlsm": 40, ".md": 30, ".txt": 25,
+    ".pdf": 40, ".docx": 40, ".xlsx": 40, ".xlsm": 40, ".pptx": 40,
+    ".md": 30, ".txt": 25,
 }
 #: 신호 키워드 (부분일치·소문자). 매칭된 서로 다른 개수 × 8, 최대 30 가산.
 SIGNAL_KEYWORDS: tuple[str, ...] = (
@@ -50,7 +51,8 @@ BONUS_CAP = 30
 #: 등록을 빠뜨려 fallback 0.5가 적용되면 zip 압축 포맷의 토큰량을 10배 가까이 과대추정해
 #: `plan`의 소요시간 추정이 틀어지고 총 토큰 예산 게이트가 엉뚱하게 발동한다.
 CHARS_PER_BYTE: dict[str, float] = {
-    ".txt": 0.5, ".md": 0.5, ".docx": 0.06, ".pdf": 0.12, ".xlsx": 0.06, ".xlsm": 0.06,
+    ".txt": 0.5, ".md": 0.5, ".docx": 0.06, ".pdf": 0.12,
+    ".xlsx": 0.06, ".xlsm": 0.06, ".pptx": 0.03,
 }
 #: chars→tokens 근사 비율 (한/영 혼합).
 CHARS_PER_TOKEN = 2.5
