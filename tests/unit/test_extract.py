@@ -143,6 +143,28 @@ def test_ole_probe_survives_an_unreadable_file(tmp_path: Path) -> None:
     assert "암호화되었거나 구형 이진 포맷" not in detail
 
 
+def test_office_formats_add_no_new_skip_reasons() -> None:
+    """`SkipReason`의 원소 집합이 v0.7과 동일하다 — 증설이 없다 (스펙 §3 항목6 · §4.3).
+
+    오피스 포맷의 실패는 전부 기존 두 값에 매핑된다 — 손상·암호화는 `extraction_failed`,
+    빈 통합문서·이미지만 있는 프레젠테이션은 `empty_document`. 세부는 `detail` 문자열이
+    가른다. 사유를 늘리면 리포트·CLI·문서의 라벨 표가 함께 늘어나고, 「암호화」처럼 근거가
+    불확실한 판정이 사유 이름으로 굳어 사용자에게 단정으로 읽힌다.
+    """
+    assert {reason.value for reason in SkipReason} == {
+        "unsupported_extension",
+        "empty_document",
+        "extraction_failed",
+        "permission_denied",
+        "path_too_long",
+        "up_to_date",
+        "file_too_large",
+        "summary_failed",
+        "cloud_api_error",
+        "cloud_rate_limited",
+    }
+
+
 def test_dispatch_table_keys_match_supported_extensions() -> None:
     """확장자 디스패치 매핑의 키 집합이 `SUPPORTED_EXTENSIONS`와 정확히 같다 (스펙 §3 항목7).
 
