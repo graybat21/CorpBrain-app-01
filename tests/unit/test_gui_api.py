@@ -17,22 +17,34 @@ from corpbrain.core.errors import (
     PreconditionError,
     TokenBudgetExceededError,
 )
-from corpbrain.gui.api import GuiApp, Response, response_for_exception
+from corpbrain.gui.api import SESSION_COOKIE, GuiApp, Response, response_for_exception
+
+PORT = 8765
+
+#: 인증을 통과하는 최소 헤더. 인증 자체는 `test_gui_auth.py`가 단언한다 — 이 파일은
+#: 라우팅·상태코드·예외 매핑만 본다.
+AUTH = {
+    "Host": f"127.0.0.1:{PORT}",
+    "Cookie": f"{SESSION_COOKIE}=sess",
+    "Origin": f"http://127.0.0.1:{PORT}",
+}
 
 
 @pytest.fixture
 def app(tmp_path: Path) -> GuiApp:
-    return GuiApp(out_dir=tmp_path / "wiki", token="tok", port=8765)
+    return GuiApp(
+        out_dir=tmp_path / "wiki", token="tok", port=PORT, session_token="sess"
+    )
 
 
 def test_unknown_path_is_404(app: GuiApp) -> None:
-    response = app.handle("GET", "/api/nope")
+    response = app.handle("GET", "/api/nope", AUTH)
     assert response.status == 404
     assert response.json()["error"] == "NotFound"
 
 
 def test_unknown_method_on_known_path_is_405_with_allow(app: GuiApp) -> None:
-    response = app.handle("POST", "/api/dashboard")
+    response = app.handle("POST", "/api/dashboard", AUTH)
     assert response.status == 405
     assert response.json()["error"] == "MethodNotAllowed"
     assert dict(response.headers)["Allow"] == "GET"
@@ -40,11 +52,11 @@ def test_unknown_method_on_known_path_is_405_with_allow(app: GuiApp) -> None:
 
 def test_query_string_is_split_off_before_routing(app: GuiApp) -> None:
     """`?token=…`이 붙어도 같은 라우트로 간다 — 부트스트랩 URL이 그 모양이다."""
-    assert app.handle("GET", "/api/dashboard?token=tok&x=1").status == 200
+    assert app.handle("GET", "/api/dashboard?token=tok&x=1", AUTH).status == 200
 
 
 def test_method_is_case_insensitive(app: GuiApp) -> None:
-    assert app.handle("get", "/api/dashboard").status == 200
+    assert app.handle("get", "/api/dashboard", AUTH).status == 200
 
 
 # --- 예외 매핑 (§4.3.2) ----------------------------------------------------------
@@ -95,6 +107,6 @@ def test_handler_exceptions_are_mapped_not_leaked(app: GuiApp, monkeypatch) -> N
         raise PreconditionError("Ollama가 응답하지 않습니다")
 
     monkeypatch.setattr(app, "_routes", lambda: {"/api/dashboard": {"GET": _boom}})
-    response = app.handle("GET", "/api/dashboard")
+    response = app.handle("GET", "/api/dashboard", AUTH)
     assert response.status == 200
     assert response.json()["error"] == "PreconditionError"

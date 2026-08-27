@@ -413,6 +413,22 @@ def _imported_module_names(tree: ast.Module) -> set[str]:
     return names
 
 
+#: **인바운드 허용 목록** — 파일 단위로, 이름 단위로 좁게 연다 (v0.9).
+#:
+#: 이 불변식이 지키는 것은 「나가는 연결은 전부 관문을 통과한다」이다. v0.9 GUI 서버는
+#: 반대 방향이다 — **듣는 소켓**을 열고 HTTP 문법을 해석하며, 어떤 원격지에도 연결하지
+#: 않는다. 그래서 이름을 열되 **모듈 전체를 면제하지 않는다**: `urllib.request`·`requests`·
+#: `httpx`·`aiohttp`·`urllib3`·`ssl` 같은 **나가는** 라이브러리는 `corpbrain/gui/` 안에서도
+#: 그대로 막힌다. GUI 어댑터가 관문을 우회해 외부를 호출하면 여기서 잡힌다.
+#:
+#: 「듣는 소켓의 바인드 주소가 127.0.0.1뿐인가」는 이 정적 검사가 아니라
+#: `tests/security/test_network_invariant.py`의 `bind` 감시가 본다 (v0.9 §3 항목3) —
+#: 축이 다르므로 장치도 다르다.
+_INBOUND_ALLOWANCES: dict[str, frozenset[str]] = {
+    "gui/api.py": frozenset({"http.cookies", "http.cookies.SimpleCookie"}),
+}
+
+
 def _is_network_module(name: str) -> bool:
     return any(
         name == blocked or name.startswith(f"{blocked}.") for blocked in _NETWORK_MODULES
@@ -429,10 +445,29 @@ def test_gateway_is_the_only_module_touching_the_network() -> None:
         if source_path.resolve() == gateway_path:
             continue
         tree = ast.parse(source_path.read_text(encoding="utf-8"))
+        relative = source_path.relative_to(package_root).as_posix()
+        allowed = _INBOUND_ALLOWANCES.get(relative, frozenset())
         blocked = {
-            name for name in _imported_module_names(tree) if _is_network_module(name)
+            name
+            for name in _imported_module_names(tree)
+            if _is_network_module(name) and name not in allowed
         }
         if blocked:
-            offenders[str(source_path.relative_to(package_root))] = blocked
+            offenders[relative] = blocked
 
     assert offenders == {}, f"관문을 우회하는 네트워크 import: {offenders}"
+
+
+def test_inbound_allowance_does_not_open_outbound_libraries() -> None:
+    """허용 목록이 「나가는」 라이브러리를 열어 주지 않는다 — 감시장치가 공허해지지 않는다.
+
+    `test_watcher_flags_a_gateway_bypass`가 소켓 감시에 대해 하는 일과 같다: 예외를 둔
+    바로 그 파일에서 관문 우회를 시도하면 여전히 잡히는지 확인한다.
+    """
+    outbound = {"urllib.request", "requests", "httpx", "aiohttp", "urllib3", "socket"}
+    for path, allowed in _INBOUND_ALLOWANCES.items():
+        leaked = {name for name in allowed if name in outbound}
+        assert leaked == set(), f"{path}의 허용 목록이 나가는 라이브러리를 열었다: {leaked}"
+        assert all(_is_network_module(name) for name in allowed), (
+            f"{path}의 허용 목록에 막히지도 않는 이름이 있다 — 목록이 낡았다"
+        )
