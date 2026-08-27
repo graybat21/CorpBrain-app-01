@@ -13,6 +13,7 @@ from corpbrain.core.config import SUPPORTED_EXTENSIONS
 from corpbrain.core.extract import (
     EXTRACTORS,
     ExtractionError,
+    _open_failure_detail,
     extract_text,
     prepare_summary_input,
 )
@@ -84,6 +85,58 @@ def _write_blank_pdf(path: Path) -> None:
     writer.add_blank_page(width=200, height=200)
     with path.open("wb") as stream:
         writer.write(stream)
+
+
+#: OLE 복합문서(CFBF) 매직 넘버 — 암호화된 OOXML 파일과 구형 `.xls`/`.ppt`가 공유한다.
+OLE_SIGNATURE_BYTES = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+
+
+def test_ole_signature_yields_encrypted_or_legacy_detail(tmp_path: Path) -> None:
+    """OLE 시그니처로 시작하는 파일은 「암호화되었거나 구형 이진 포맷」 detail을 받는다 (스펙 §4.3.1).
+
+    암호화된 `.xlsx`/`.pptx`는 zip이 아니라 OLE 복합문서로 감싸져 라이브러리가 「zip을 열지
+    못했다」는 예외만 던진다 — 손상된 파일과 예외 종류가 같아 구분되지 않는다. 판정은 예외
+    메시지 문자열이 아니라 파일 시그니처로 한다.
+    """
+    source = tmp_path / "locked.xlsx"
+    source.write_bytes(OLE_SIGNATURE_BYTES + b"\x00" * 32)
+
+    detail = _open_failure_detail(source)
+
+    assert "암호화되었거나 구형 이진 포맷" in detail
+    assert str(source) in detail
+
+
+def test_non_ole_file_yields_plain_open_failure_detail(tmp_path: Path) -> None:
+    """OLE 시그니처가 아니면 손상·파싱 실패 문구를 그대로 쓴다 — 두 원인이 다른 detail을 받는다."""
+    source = tmp_path / "broken.xlsx"
+    source.write_bytes(b"PK\x03\x04not-a-real-zip")
+
+    detail = _open_failure_detail(source)
+
+    assert "암호화되었거나 구형 이진 포맷" not in detail
+    assert str(source) in detail
+
+
+def test_ole_detail_names_the_actual_extension(tmp_path: Path) -> None:
+    """문구의 포맷 이름은 실제 확장자에서 온다 — `.xlsm`이 「xlsx」로 보고되지 않는다."""
+    source = tmp_path / "macro.xlsm"
+    source.write_bytes(OLE_SIGNATURE_BYTES)
+
+    assert "xlsm" in _open_failure_detail(source)
+
+
+def test_ole_probe_survives_an_unreadable_file(tmp_path: Path) -> None:
+    """시그니처를 읽지 못해도(파일 소실·권한) 예외 없이 기본 문구로 떨어진다.
+
+    이 헬퍼는 **이미 실패한 경로**에서만 불린다. 여기서 새 예외를 올리면 원래의 추출 실패가
+    다른 예외로 뒤덮여 스킵 사유가 바뀐다.
+    """
+    missing = tmp_path / "gone.xlsx"
+
+    detail = _open_failure_detail(missing)
+
+    assert "암호화되었거나 구형 이진 포맷" not in detail
 
 
 def test_dispatch_table_keys_match_supported_extensions() -> None:

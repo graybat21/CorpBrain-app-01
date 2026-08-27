@@ -26,6 +26,13 @@ from pypdf.errors import PyPdfError
 from corpbrain.core.errors import CorpBrainError
 from corpbrain.core.models import SkippedFile, SkipReason
 
+#: OLE 복합문서(CFBF)의 매직 넘버 8바이트 (스펙 §4.3.1).
+#:
+#: 암호로 보호된 `.xlsx`/`.pptx`는 OOXML zip이 **아니라** 이 컨테이너로 감싸져 저장되므로,
+#: `openpyxl`·`python-pptx`는 「zip을 열지 못했다」는 예외만 던진다 — 손상된 파일과 예외 종류가
+#: 같아 그것만으로는 원인을 가를 수 없다. 구형 `.xls`/`.ppt`(BIFF·OLE)도 같은 시그니처를 갖는다.
+OLE_SIGNATURE: bytes = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+
 
 class ExtractionError(CorpBrainError):
     """텍스트 추출 실패 — 해당 파일만 스킵되고 나머지 처리는 계속된다."""
@@ -81,6 +88,32 @@ def extract_text(path: Path, max_chars: int) -> str:
         # 스캐너를 우회한 직접 호출용 방어선이다 (스펙 §4.2).
         raise ExtractionError(f"지원하지 않는 확장자입니다: {path.suffix}")
     return extractor(path, max_chars)
+
+
+def _open_failure_detail(path: Path) -> str:
+    """열기에 실패한 오피스 파일의 스킵 detail 문구를 만든다 (스펙 §4.3.1).
+
+    **원인 판정을 예외 메시지 문자열 매칭으로 하지 않는다** — 라이브러리 버전이 올라가면
+    조용히 깨진다. 대신 파일 앞 8바이트라는 안정된 근거를 쓴다. 이 함수는 이미 열기에
+    실패한 경로에서만 불리므로 정상 경로에는 비용이 없다.
+
+    OLE 시그니처는 **암호화된 OOXML과 구형 이진 포맷(`.xls`/`.ppt`)을 구분하지 못한다.**
+    근거가 두 원인을 가르지 못하므로 detail에 둘을 함께 적어 정직하게 둔다 — 어느 쪽이든
+    사용자가 할 일은 같다(암호를 풀거나 최신 포맷으로 다시 저장).
+
+    시그니처를 읽지 못하면(파일 소실·권한 거부) 기본 문구로 떨어진다. 여기서 새 예외를
+    올리면 원래의 추출 실패가 다른 예외로 뒤덮여 스킵 사유 자체가 바뀐다.
+    """
+    label = path.suffix.lower().lstrip(".") or "파일"
+    base = f"{label}를 열지 못했습니다: {path}"
+    try:
+        with path.open("rb") as stream:
+            head = stream.read(len(OLE_SIGNATURE))
+    except OSError:
+        return base
+    if head == OLE_SIGNATURE:
+        return f"{base} — 암호화되었거나 구형 이진 포맷입니다"
+    return base
 
 
 def _extract_plaintext(path: Path, max_chars: int) -> str:
