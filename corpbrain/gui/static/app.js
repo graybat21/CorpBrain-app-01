@@ -101,6 +101,21 @@ function isError(section) {
 }
 
 /**
+ * 이벤트 사이를 메우는 초 단위 시계.
+ *
+ * **실측이 요구한 것이다** — 문서 1건의 요약이 도는 동안 이벤트가 하나도 오지 않아 화면이
+ * 최대 47초 멈춘 것처럼 보였다(`docs/SMOKE.md` 실행 K). 코어에 토큰 단위 이벤트를 더하는 것은
+ * §4.7이 이벤트 11종으로 못박은 범위 밖이므로, **이미 받은 값에서 시간만 흘려** 화면이
+ * 살아 있음을 보인다.
+ *
+ * 서버 값을 다시 계산하는 것이 아니다 — `elapsed`·`eta`는 그대로 서버 스냅샷이 소유하고,
+ * 여기서는 마지막 프레임 이후 흐른 시간을 더해 **표시**할 뿐이며 다음 프레임이 오면 그
+ * 값으로 덮인다.
+ */
+let ticker = null;
+let lastFrameAt = null;
+
+/**
  * 진행 스트림에 붙는다 (§4.3).
  *
  * `EventSource`는 커스텀 헤더를 붙일 수 없다 — 인증이 세션 쿠키인 이유이며, 쿠키는
@@ -118,6 +133,9 @@ function connectEvents(onFrame) {
     } catch (_err) {
       return; // keepalive 주석은 여기까지 오지 않지만, 깨진 프레임에 화면이 죽지 않게 둔다
     }
+    // 프레임 시각은 **수신 지점 한 곳**에서 찍는다. 카드마다 찍으면 그 카드를 그리지 않는
+    // 화면에 머무는 동안 값이 낡고, 돌아왔을 때 시계가 엉뚱한 값에서 시작한다.
+    lastFrameAt = Date.now();
     onFrame(payload);
   });
   return source;
@@ -208,11 +226,31 @@ function closeStream() {
     activeStream.close();
     activeStream = null;
   }
+  // 시계는 스트림과 수명을 같이 한다 — 화면을 떠난 뒤에도 돌면 사라진 DOM 을 계속 만진다.
+  stopTicker();
 }
 
 function openStream(onFrame) {
   closeStream();
   activeStream = connectEvents(onFrame);
+}
+
+function stopTicker() {
+  if (ticker !== null) {
+    window.clearInterval(ticker);
+    ticker = null;
+  }
+}
+
+function startTicker(onTick) {
+  stopTicker();
+  ticker = window.setInterval(onTick, 1000);
+}
+
+/** 초를 `mm:ss` 로 — CLI `render_status_line()` 과 같은 표기다. */
+function mmss(seconds) {
+  const total = Math.max(0, Math.round(seconds));
+  return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
 }
 
 /** 마지막으로 받은 스냅샷 — 이벤트 프레임은 스냅샷을 통째로 주지 않으므로 함께 들고 있는다. */
@@ -618,6 +656,23 @@ function renderProgressCard(card, payload, onCancel, cancelRequested) {
     );
   }
   if (lastSnapshot.current_file) card.appendChild(el('p', 'metric-caption', lastSnapshot.current_file));
+  if (lastRunning) {
+    // 이벤트가 오지 않는 동안에도 이 줄은 움직인다 — 어휘(`경과`·`ETA`·단계 이름)는 CLI
+    // `render_status_line()` 이 쓰는 것을 그대로 쓴다.
+    const clock = el('p', 'metric-caption');
+    card.appendChild(clock);
+    const paint = () => {
+      const drift = lastFrameAt === null ? 0 : (Date.now() - lastFrameAt) / 1000;
+      const parts = [`경과 ${mmss((lastSnapshot.elapsed || 0) + drift)}`];
+      if (typeof lastSnapshot.eta === 'number') parts.push(`ETA ${mmss(lastSnapshot.eta)}`);
+      if (lastSnapshot.stage) parts.push(lastSnapshot.stage);
+      clock.textContent = parts.join(' · ');
+    };
+    paint();
+    startTicker(paint);
+  } else {
+    stopTicker();
+  }
   if (lastRunning) {
     const actions = el('div', 'actions');
     const cancel = el('button', 'btn', cancelRequested ? '멈추는 중…' : '취소');
