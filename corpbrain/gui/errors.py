@@ -12,7 +12,13 @@ from __future__ import annotations
 
 from corpbrain.core.errors import PreconditionError
 
-__all__ = ["BadRequest", "GraphNotBuilt", "NothingScanned", "WikiNotFound"]
+__all__ = [
+    "BadRequest",
+    "DirectoryUnreadable",
+    "GraphNotBuilt",
+    "NothingScanned",
+    "WikiNotFound",
+]
 
 
 class BadRequest(Exception):
@@ -51,4 +57,14 @@ class WikiNotFound(PreconditionError):
 
     위 둘과 달리 **지목이 잘못됐거나 산출물이 사라진** 경우다. v0.6이 `graph --neighbors`에서
     「존재를 전제한 식별자 지목의 실패는 빈 결과가 아니라 잘못된 지목」이라고 가른 것과 같다.
+    """
+
+
+class DirectoryUnreadable(PreconditionError):
+    """열람하려는 디렉터리를 읽을 수 없다 — 없거나, 디렉터리가 아니거나, 권한이 없다.
+
+    §5는 「열람 API가 접근할 수 없는 디렉터리: 권한 거부를 **그대로 보고하고 서버를 죽이지
+    않는다**」로 정했다. `PermissionError`·`FileNotFoundError`는 `CorpBrainError`가 아니므로
+    §4.3.2의 규칙대로면 **500**(버그)이 되는데, 사용자가 남의 폴더를 눌러 본 것은 버그가 아니다.
+    도메인 상태로 옮겨 화면이 「읽을 수 없습니다」를 그리고 탐색을 계속하게 한다.
     """

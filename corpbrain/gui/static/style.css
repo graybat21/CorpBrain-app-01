@@ -494,3 +494,38 @@ body {
   border-left: 2px solid var(--border-strong);
 }
 .result-actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+
+/* --- 폴더 선택 (§4.5) ----------------------------------------------------------- */
+
+.browser {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  padding: 10px 12px;
+  margin-top: 10px;
+}
+.browser-path {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-soft);
+  word-break: break-all;
+  margin-bottom: 8px;
+}
+.browser-list { max-height: 220px; overflow-y: auto; }
+.browser-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  font-size: 12px;
+  color: var(--ink-soft);
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 5px 8px;
+  cursor: pointer;
+}
+.browser-item:hover { background: var(--surface); }
+.browser-item.hidden-entry { color: var(--text-muted); }
+.browser-actions { display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+.browser-count { font-size: 11px; color: var(--text-muted); }

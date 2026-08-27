@@ -445,6 +445,96 @@ function countRow(name, value) {
   return row;
 }
 
+/* --- 폴더 선택 (§4.5) ----------------------------------------------------------- */
+
+/**
+ * 어느 입력을 위해 탐색기가 열려 있는가 (`folder` · `out_dir`), 그리고 지금 보고 있는 경로.
+ *
+ * **폴더를 고르는 즉시 자동 계량하지 않는다** (§4.3.4) — `plan_scan()`은 `nvidia-smi`
+ * subprocess와 전체 stat 패스를 돌리므로, 폴더를 둘러보는 동안 그것이 반복되면 탐색이
+ * 느려진다. 여기서 고르는 것은 입력값뿐이고 계량은 여전히 버튼이 시작한다.
+ */
+let browser = null;
+
+function openBrowser(fieldName, startPath) {
+  browser = { field: fieldName, path: startPath || null, showHidden: false };
+  render();
+}
+
+function closeBrowser() {
+  browser = null;
+  render();
+}
+
+function browserCard() {
+  const card = el('div', 'browser');
+  const pathLine = el('div', 'browser-path', '불러오는 중…');
+  card.appendChild(pathLine);
+  const list = el('div', 'browser-list');
+  card.appendChild(list);
+  const actions = el('div', 'browser-actions');
+  card.appendChild(actions);
+
+  const load = async (path) => {
+    const body = await getJson(
+      path === null ? '/api/browse' : `/api/browse?path=${encodeURIComponent(path)}`
+    );
+    clear(list);
+    clear(actions);
+    if (isError(body)) {
+      pathLine.textContent = body.message;
+      const back = el('button', 'btn', '홈으로');
+      back.type = 'button';
+      back.addEventListener('click', () => load(null));
+      actions.appendChild(back);
+      return;
+    }
+    browser.path = body.path;
+    pathLine.textContent = body.path;
+
+    if (body.parent) {
+      const up = el('button', 'browser-item', '⤴  상위 폴더');
+      up.type = 'button';
+      up.addEventListener('click', () => load(body.parent));
+      list.appendChild(up);
+    }
+    const shown = body.directories.filter((entry) => browser.showHidden || !entry.hidden);
+    for (const entry of shown) {
+      const item = el('button', `browser-item${entry.hidden ? ' hidden-entry' : ''}`, `📁  ${entry.name}`);
+      item.type = 'button';
+      item.addEventListener('click', () => load(entry.path));
+      list.appendChild(item);
+    }
+    if (!shown.length) list.appendChild(el('p', 'browser-count', '하위 폴더가 없습니다.'));
+
+    const choose = el('button', 'btn btn-primary', '이 폴더 선택');
+    choose.type = 'button';
+    choose.addEventListener('click', () => {
+      scanForm[browser.field] = body.path;
+      closeBrowser();
+    });
+    actions.appendChild(choose);
+    const cancel = el('button', 'btn', '닫기');
+    cancel.type = 'button';
+    cancel.addEventListener('click', closeBrowser);
+    actions.appendChild(cancel);
+    // 스캔 대상이 될 폴더이므로 「여기 스캔할 것이 있는가」를 함께 보인다.
+    actions.appendChild(
+      el('span', 'browser-count', `지원 포맷 ${body.supported_file_count}개`)
+    );
+    const hidden = el('button', 'btn', browser.showHidden ? '숨김 폴더 감추기' : '숨김 폴더 보기');
+    hidden.type = 'button';
+    hidden.addEventListener('click', () => {
+      browser.showHidden = !browser.showHidden;
+      load(browser.path);
+    });
+    actions.appendChild(hidden);
+  };
+
+  load(browser.path);
+  return card;
+}
+
 /* --- 플랜 & 스캔 (§4.3.3 · §4.3.4) --------------------------------------------- */
 
 /**
@@ -566,8 +656,19 @@ function scanFormCard(onMeasure, running) {
     el('p', 'metric-caption', '파일 수·예상 토큰·게이트 판정을 먼저 봅니다. 이 단계는 LLM을 부르지 않습니다.')
   );
   const grid = el('div', 'form-grid');
-  for (const spec of SCAN_FIELDS_PRIMARY) grid.appendChild(field(spec));
+  for (const spec of SCAN_FIELDS_PRIMARY) {
+    const wrap = field(spec);
+    if (spec.name === 'folder' || spec.name === 'out_dir') {
+      // 경로를 외워 적게 하지 않는다 (§4.5). 텍스트 입력은 그대로 두어 붙여넣기도 되게 한다.
+      const pick = el('button', 'btn', '찾아보기');
+      pick.type = 'button';
+      pick.addEventListener('click', () => openBrowser(spec.name, scanForm[spec.name] || null));
+      wrap.appendChild(pick);
+    }
+    grid.appendChild(wrap);
+  }
   card.appendChild(grid);
+  if (browser !== null) card.appendChild(browserCard());
 
   const advanced = el('details', 'advanced');
   advanced.appendChild(el('summary', null, '고급'));
@@ -1171,6 +1272,9 @@ async function renderGraph(content, generation, params) {
 const searchForm = { q: '', top_k: 5, graph: true };
 
 const SEARCH_FIELDS_ADVANCED = [
+  // 확산을 끄는 것은 v0.4 동작으로 되돌리는 일이라 자주 만질 값이 아니다 — §4.3.3 표가
+  // 앞면에 쿼리·`top_k` 둘만 두고 나머지를 접어 둔 그대로 따른다.
+  { name: 'graph', label: '그래프 확산 사용', type: 'check' },
   { name: 'graph_decay', label: '확산 감쇠 α (실측 확정값)', type: 'number', step: 'any' },
   { name: 'expand_edges', label: '확산 엣지 (쉼표 구분)', type: 'text', placeholder: 'TAGGED_WITH,CONTAINS_ENTITY,REFERENCES' },
   { name: 'ollama_url', label: 'Ollama URL', type: 'text' },
@@ -1182,6 +1286,7 @@ function searchQueryString() {
   if (searchForm.top_k) params.set('top_k', String(searchForm.top_k));
   if (searchForm.graph === false) params.set('graph', 'false');
   for (const spec of SEARCH_FIELDS_ADVANCED) {
+    if (spec.name === 'graph') continue;  // 위에서 `graph=false` 로만 실어 보낸다
     const value = searchForm[spec.name];
     if (value !== undefined && value !== null && value !== '') params.set(spec.name, String(value));
   }
@@ -1245,7 +1350,6 @@ async function renderSearch(content, generation, params) {
 
   const options = el('div', 'form-grid');
   options.appendChild(field({ name: 'top_k', label: '결과 개수', type: 'number' }, searchForm));
-  options.appendChild(field({ name: 'graph', label: '그래프 확산 사용', type: 'check' }, searchForm));
   formCard.appendChild(options);
 
   const advanced = el('details', 'advanced');
@@ -1388,6 +1492,9 @@ async function render() {
   clear(content);
   closeStream();
   clearGraphResizeHandler();
+  // 폴더 탐색기는 스캔 화면의 것이다 — 다른 화면으로 갔다가 돌아왔을 때 열린 채로
+  // 남아 있으면 사용자가 열지 않은 패널을 보게 된다.
+  if (view !== 'scan') browser = null;
   if (view === 'dashboard') {
     await renderDashboard(content, generation);
   } else if (view === 'scan') {

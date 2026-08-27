@@ -49,11 +49,12 @@ from corpbrain.core.pii import PiiType
 from corpbrain.core.pipeline import collect_wiki_documents
 from corpbrain.core.report import build_expansion_evidence, build_summary_lines
 from corpbrain.core.rerun import read_source_path
-from corpbrain.core.scanner import ScanFindings
+from corpbrain.core.scanner import ScanFindings, is_supported
 from corpbrain.core.search import search_index
 from corpbrain.gui.assets import AssetNotFound, content_type_for, read_asset
 from corpbrain.gui.errors import (
     BadRequest,
+    DirectoryUnreadable,
     GraphNotBuilt,
     NothingScanned,
     WikiNotFound,
@@ -310,6 +311,7 @@ class GuiApp:
             "/api/graph": {"GET": self._graph},
             "/api/search": {"GET": self._search},
             "/api/settings": {"GET": self._settings, "POST": self._settings_update},
+            "/api/browse": {"GET": self._browse},
         }
 
     def handle(
@@ -471,6 +473,70 @@ class GuiApp:
             # 남기고(`scan.py`), 그 예외가 도메인인지 버그인지는 아래 `bug` 플래그가 가른다.
             "failure": _failure_dict(failure) if failure is not None else None,
         }
+
+    # --- 폴더 선택 (§4.5) -------------------------------------------------------------
+
+    def _browse(self, request: Request) -> Response:
+        """디렉터리 하나를 나열한다 — **범위에 제한을 두지 않는다** (§4.5).
+
+        임의 절대경로를 열람할 수 있다. CLI가 이미 `corpbrain scan /any/path`를 제한 없이
+        수행하므로, GUI만 좁히면 같은 코어의 두 어댑터가 다른 권한을 갖게 된다. 인가되지 않은
+        호출은 §4.2가 이미 거절하고, 서버는 사용자 자신의 파일 권한으로 돌아간다.
+
+        **숨김 항목을 서버가 거르지 않는다.** 「제한을 두지 않는다」는 결정이 거르는 쪽으로
+        새지 않도록, `hidden` 플래그만 실어 보내고 접을지는 화면이 정한다.
+
+        스캔 대상이 될 폴더를 고르는 화면이므로 **이 폴더에 지원 포맷 파일이 몇 개인지**를 함께
+        낸다. 판정은 코어 `is_supported()`를 그대로 쓴다 — 확장자 목록을 어댑터가 다시 적으면
+        `SUPPORTED_EXTENSIONS`와 갈린다.
+        """
+        raw = request.query.get("path", "")
+        # 기본값은 홈이다. 서버의 현재 작업 디렉터리를 쓰면 어디서 띄웠느냐에 따라 첫 화면이
+        # 달라져, 같은 조작이 사람마다 다른 곳을 보여 준다.
+        target = Path(raw).expanduser() if raw else Path.home()
+        try:
+            resolved = target.resolve()
+            if not resolved.is_dir():
+                raise DirectoryUnreadable(f"디렉터리가 아닙니다: {resolved}")
+            entries = sorted(resolved.iterdir(), key=lambda item: item.name.lower())
+        except DirectoryUnreadable:
+            raise
+        except OSError as exc:
+            # 권한 거부·깨진 심볼릭 링크·사라진 경로 — 전부 사용자가 만난 «환경의 상태»이지
+            # 서버의 버그가 아니다 (§5).
+            raise DirectoryUnreadable(f"읽을 수 없습니다: {target} — {exc.strerror or exc}") from exc
+
+        directories: list[dict[str, Any]] = []
+        supported = 0
+        for entry in entries:
+            try:
+                is_dir = entry.is_dir()
+            except OSError:
+                # 한 항목을 판정하지 못했다고 나열 전체를 실패시키지 않는다 — v0.1 §5의
+                # 「개별 파일 실패는 전체 실패로 위장하지 않는다」와 같은 결이다.
+                continue
+            if is_dir:
+                directories.append(
+                    {
+                        "name": entry.name,
+                        "path": str(entry),
+                        "hidden": entry.name.startswith("."),
+                    }
+                )
+            elif is_supported(entry):
+                supported += 1
+
+        parent = resolved.parent
+        return json_response(
+            {
+                "path": str(resolved),
+                # 루트에서는 `parent`가 자기 자신이다 — 화면이 「위로」를 감출 근거로 쓴다.
+                "parent": None if parent == resolved else str(parent),
+                "home": str(Path.home()),
+                "directories": directories,
+                "supported_file_count": supported,
+            }
+        )
 
     # --- 설정 (§4.8 · §4.9 · §4.11) --------------------------------------------------
 
