@@ -20,7 +20,11 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl
 
+from corpbrain.core.config import DEFAULT_EMBED_MODEL, DEFAULT_MODEL, DEFAULT_OLLAMA_URL
+from corpbrain.core.environment import DoctorReport, diagnose
 from corpbrain.core.errors import CorpBrainError
+from corpbrain.core.graphstore import SqliteGraphStore, graph_path_for
+from corpbrain.core.models import GraphStats
 
 __all__ = [
     "HOST",
@@ -281,8 +285,100 @@ class GuiApp:
     # --- 엔드포인트 --------------------------------------------------------------
 
     def _dashboard(self, request: Request) -> Response:
-        """대시보드 — 이 단위에서는 워크스페이스 경로만 낸다 (U5가 채운다)."""
-        return json_response({"out_dir": str(self.out_dir)})
+        """대시보드 — Doctor 카드와 그래프 지표 (§4.3).
+
+        두 절(`doctor`·`graph`)은 **각각 독립적으로** 도메인 상태를 담을 수 있다. 한쪽이
+        선행 조건 실패여도 다른 쪽 카드는 실제 값으로 그려져야 하기 때문이다 — 첫 실행에서
+        그래프 DB가 없는 것은 정상이고(§5), 그때 Doctor 카드까지 사라지면 사용자는 「무엇을
+        먼저 해야 하는가」를 볼 곳이 없다.
+
+        절의 모양은 **성공 payload 또는 `{error, message}`** 둘 중 하나로 통일한다 —
+        프론트는 `"error" in section` 하나로 가른다.
+        """
+        return json_response(
+            {
+                "out_dir": str(self.out_dir),
+                "doctor": _section(self._doctor_payload),
+                "graph": _section(self._graph_payload),
+            }
+        )
+
+    def _doctor_payload(self) -> dict[str, Any]:
+        return _doctor_dict(
+            diagnose(
+                model=DEFAULT_MODEL,
+                embed_model=DEFAULT_EMBED_MODEL,
+                ollama_url=DEFAULT_OLLAMA_URL,
+            )
+        )
+
+    def _graph_payload(self) -> dict[str, Any]:
+        """**요청마다 저장소를 열고 `finally`에서 닫는다** (§4.4).
+
+        커넥션을 요청 사이에 캐시하지 않는다 — 코어의 sqlite 커넥션은 `check_same_thread`
+        기본값으로 열리고 `ThreadingHTTPServer`는 요청마다 스레드가 다르므로, 캐시하면
+        두 번째 요청부터 `sqlite3.ProgrammingError`(=버그, 500)가 난다.
+
+        조회이므로 `read_only=True`로 연다 — 파일에 쓰지 않고, 스키마가 소실된 DB를
+        되만들지 않는다 (v0.6.1 결정 계승).
+        """
+        store = SqliteGraphStore(graph_path_for(self.out_dir), read_only=True)
+        try:
+            return _stats_dict(store.stats())
+        finally:
+            store.close()
+
+
+def _section(build: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+    """한 절을 만들되, **도메인 상태는 그 절 안에 담고** 버그는 그대로 올린다.
+
+    매핑 규칙을 여기서 다시 쓰지 않고 `response_for_exception`의 판정을 그대로 쓴다 —
+    「`CorpBrainError`면 도메인, 아니면 버그」가 코드에 한 번만 적힌다 (§4.3.2).
+    """
+    try:
+        return build()
+    except Exception as exc:  # 아래에서 도메인/버그를 갈라 되올린다
+        response = response_for_exception(exc)
+        if response.status != 200:
+            raise
+        return response.json()
+
+
+def _doctor_dict(report: DoctorReport) -> dict[str, Any]:
+    """`DoctorReport`를 화면이 쓰는 필드로 편다.
+
+    프론트는 이 불리언들로 배지를 그린다. `report.py`의 줄 빌더를 그대로 싣지 않는 이유는
+    §4.6.1의 원칙 그대로다 — 갈라지면 안 되는 것은 「어휘」이지 「줄 조립」이 아니고, 여기서
+    지킬 특수 어휘(v0.7이 정확 문자열로 못박은 근거 줄 같은 것)가 없다.
+    """
+    return {
+        "installed": report.installed,
+        "running": report.running,
+        "model": report.model,
+        "model_present": report.model_present,
+        "embed_model": report.embed_model,
+        "embed_model_present": report.embed_model_present,
+        "available_models": list(report.available_models),
+        "hardware": {"gpu": report.hardware.gpu, "label": report.hardware.label},
+        "max_file_size": report.max_file_size,
+        "max_total_tokens": report.max_total_tokens,
+        "cloud_consent": report.cloud_consent,
+        "cloud_api_key": report.cloud_api_key,
+        "cloud_ready": report.cloud_ready,
+        "ready": report.ready,
+    }
+
+
+def _stats_dict(stats: GraphStats) -> dict[str, Any]:
+    """`GraphStats`를 화면이 쓰는 필드로 편다 — 합계는 코어의 property를 그대로 쓴다."""
+    return {
+        "documents": stats.documents,
+        "entities": stats.entities,
+        "tags": stats.tags,
+        "nodes": stats.nodes,
+        "edges": stats.edges,
+        "edges_by_type": {str(key): value for key, value in stats.edges_by_type.items()},
+    }
 
 
 def _refused(status: int) -> Response:
