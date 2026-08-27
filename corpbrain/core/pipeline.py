@@ -605,7 +605,7 @@ def _run_graph_stage(
     보였다.
     """
     _emit(on_event, GraphStarted(at=time.monotonic()))
-    inventory = _collect_wiki_documents(config.out_dir)
+    inventory = collect_wiki_documents(config.out_dir)
     wikis = inventory.documents
     facts, missing = _materialize_facts(wikis, config=config, graph=graph)
     if inventory.complete:
@@ -648,7 +648,7 @@ def _run_graph_stage(
 
 
 @dataclass
-class _WikiInventory:
+class WikiInventory:
     """`--out` 아래 위키 목록과, 그 목록을 믿어도 되는지에 대한 판정."""
 
     documents: dict[str, Path] = field(default_factory=dict)
@@ -658,13 +658,17 @@ class _WikiInventory:
     duplicates: list[Path] = field(default_factory=list)
 
 
-def _collect_wiki_documents(out_dir: Path) -> _WikiInventory:
+def collect_wiki_documents(out_dir: Path) -> WikiInventory:
     """`--out` 아래 위키를 모아 `doc_id` → 위키 경로로 만든다.
+
+    **공개 이름이다** (v0.9). GUI의 위키 상세가 `doc_id`로 위키 파일을 찾을 때 같은 규칙을
+    써야 하기 때문이다 — 중복 원문 처리와 「읽지 못한 위키는 목록을 불완전으로 표시한다」가
+    어댑터마다 복제되면, 한쪽만 고쳐지는 순간 두 경로가 같은 `--out`을 다르게 본다.
 
     front-matter의 `source_path`가 곧 `doc_id`다 (§4.1). 그 키가 없는 `.md`(사용자가 손으로
     둔 메모 등)는 조용히 건너뛰고, **읽지 못한 위키**는 목록을 불완전으로 표시한다.
     """
-    inventory = _WikiInventory()
+    inventory = WikiInventory()
     if not out_dir.is_dir():
         return inventory
     for path in sorted(out_dir.rglob("*.md")):

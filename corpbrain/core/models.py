@@ -215,6 +215,56 @@ class RelatedDocument:
 
 
 @dataclass(frozen=True)
+class RelatedLink:
+    """위키 본문의 「관련 문서」 한 줄을 그대로 옮긴 값 (v0.9 §4.6 · IX3).
+
+    `doc_id`가 **비어 있을 수 있다.** 위키 본문에 적혀 있는 것은 제목·상대경로·근거 문구뿐이고
+    (`render.py`), `doc_id`는 서버가 그 상대 링크를 풀어 대상 위키의 front-matter를 읽어야
+    얻어진다. 파서는 마크다운에 있는 것만 담고, 해석은 경로를 아는 어댑터가 한다 —
+    코어는 경로 해석 책임을 지지 않는다.
+    """
+
+    title: str
+    #: 이 위키 파일 기준 상대경로. `render.py`가 링크에 쓴 값 그대로다.
+    href: str
+    #: 근거 문구(「유사도 0.81 · 공유 태그 …」). v0.7이 못박은 어휘이므로 다시 만들지 않는다.
+    evidence: str = ""
+    #: 원문 절대경로. 어댑터가 채운다. 못 채우면 빈 문자열이다.
+    doc_id: str = ""
+
+
+@dataclass(frozen=True)
+class WikiDocument:
+    """렌더된 위키 마크다운 1개를 front-matter 5키와 7섹션으로 편 값 (v0.9 §4.6).
+
+    **GUI가 마크다운을 그대로 내려주지 않는 이유**가 이 타입이다 — 프론트엔드에 마크다운
+    파서를 두지 않으므로, 마크다운 렌더 경로의 XSS 방어도 프론트엔드 책임이 아니다.
+
+    `parse_wiki_markdown()`(임베딩용 3-튜플)으로는 이 값을 만들 수 없다. 그 함수는 ①
+    front-matter를 통째로 버리고 ② 섹션별 원문을 남기지 않으며 ③ 불릿 기호 제거·태그 분해로
+    구조를 **되돌릴 수 없게** 정규화한다.
+    """
+
+    #: front-matter 5키 (`render.py`의 `FRONT_MATTER_KEYS`와 같은 순서).
+    source_path: str = ""
+    generated_at: str = ""
+    model: str = ""
+    #: 「이 문서가 외부로 나갔는가」를 생성물만 보고 아는 값 (v0.5 §4.6). 빠뜨리지 않는다.
+    engine: str = ""
+    source_bytes: int = 0
+    #: 7섹션.
+    title: str = ""
+    one_line_summary: str = ""
+    key_points: list[str] = field(default_factory=list)
+    summary: str = ""
+    tags: list[str] = field(default_factory=list)
+    #: 「원문」 섹션이 가리키는 절대경로. GUI는 링크가 아니라 **경로 표시 + 복사 버튼**으로
+    #: 낸다 — `file://`는 http 페이지에서 브라우저가 차단해 죽은 링크가 된다 (§4.6 · IX2).
+    source_link: str = ""
+    related: list[RelatedLink] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class GraphNode:
     """그래프 노드 1개 (v0.6 스펙 §4.1 노드 ID 체계)."""
 

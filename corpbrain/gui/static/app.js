@@ -23,7 +23,6 @@ const DEFAULT_VIEW = 'dashboard';
 
 /** 아직 구현되지 않은 화면의 빈 상태 (§5 — 탭을 잠그거나 강제 이동시키지 않는다). */
 const PENDING_VIEWS = {
-  wiki: '위키 탐색기는 다음 슬라이스에서 붙습니다.',
   graph: '지식그래프 화면은 다음 슬라이스에서 붙습니다.',
   search: '검색 화면은 다음 슬라이스에서 붙습니다.',
   settings: '설정 화면은 다음 슬라이스에서 붙습니다.',
@@ -691,6 +690,162 @@ async function renderScan(content, generation) {
   });
 }
 
+/* --- 위키 탐색기 (§4.6 · §4.6.2 · §4.10.4) ------------------------------------- */
+
+/** `#/wiki?doc=<doc_id>` 로 이동한다 — 화면 전환은 해시를 바꾸는 것으로만 일어난다. */
+function navigateTo(view, params) {
+  const query = new URLSearchParams(params || {}).toString();
+  window.location.hash = query ? `#/${view}?${query}` : `#/${view}`;
+}
+
+function treeCard(tree, selected) {
+  const card = el('div', 'card tree');
+  card.appendChild(el('div', 'card-title', '문서'));
+  if (tree.message) card.appendChild(el('p', 'metric-caption', tree.message));
+  const groups = new Map();
+  for (const entry of tree.documents) {
+    if (!groups.has(entry.directory)) groups.set(entry.directory, []);
+    groups.get(entry.directory).push(entry);
+  }
+  for (const [directory, entries] of groups) {
+    const group = el('div', 'tree-group');
+    group.appendChild(el('div', 'tree-dir', directory));
+    for (const entry of entries) {
+      const item = el('button', 'tree-item', entry.title || entry.name);
+      item.type = 'button';
+      item.title = entry.doc_id;
+      if (entry.doc_id === selected) item.setAttribute('aria-current', 'true');
+      item.addEventListener('click', () => navigateTo('wiki', { doc: entry.doc_id }));
+      group.appendChild(item);
+    }
+    card.appendChild(group);
+  }
+  return card;
+}
+
+function copyButton(text) {
+  const button = el('button', 'btn', '경로 복사');
+  button.type = 'button';
+  button.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      button.textContent = '복사됨';
+      window.setTimeout(() => { button.textContent = '경로 복사'; }, 1500);
+    } catch (_err) {
+      button.textContent = '복사 실패';
+    }
+  });
+  return button;
+}
+
+function section(title, build) {
+  const box = el('div', 'doc-section');
+  box.appendChild(el('h3', null, title));
+  box.appendChild(build());
+  return box;
+}
+
+function documentCard(doc) {
+  const card = el('div', 'card');
+  card.appendChild(el('div', 'doc-title', doc.title || '(제목 없음)'));
+  card.appendChild(el('p', 'doc-lead', doc.one_line_summary));
+
+  const meta = el('div', 'doc-meta');
+  // `engine` 을 가장 먼저 보인다 — 「이 문서가 외부로 나갔는가」를 생성물만 보고 아는
+  // 값이다 (v0.5 §4.6 · §4.6).
+  meta.appendChild(badge(doc.engine === 'cloud' ? 'warn' : 'info', `engine: ${doc.engine || '?'}`));
+  meta.appendChild(badge('info', `model: ${doc.model || '?'}`));
+  meta.appendChild(badge('info', `${doc.source_bytes} bytes`));
+  meta.appendChild(badge('info', doc.generated_at || '?'));
+  card.appendChild(meta);
+
+  card.appendChild(section('핵심 포인트', () => {
+    const list = el('ul');
+    for (const point of doc.key_points) list.appendChild(el('li', null, point));
+    return list;
+  }));
+  card.appendChild(section('요약', () => el('p', null, doc.summary)));
+  card.appendChild(section('태그·키워드', () => {
+    const box = el('div');
+    for (const tag of doc.tags) box.appendChild(el('span', 'tag-chip', tag));
+    return box;
+  }));
+  card.appendChild(section('원문', () => {
+    // `file://` 링크는 http 페이지에서 브라우저가 **차단**한다 — 죽은 링크를 그리지 않고
+    // 경로 표시 + 복사 버튼으로 낸다 (§4.6 · IX2). 파일을 OS 기본 앱으로 여는 엔드포인트는
+    // 두지 않는다 (MVP 스펙 §2 비목표).
+    const row = el('div', 'source-row');
+    row.appendChild(el('div', 'source-path', doc.source_path || '(알 수 없음)'));
+    if (doc.source_path) row.appendChild(copyButton(doc.source_path));
+    return row;
+  }));
+  card.appendChild(section('관련 문서', () => {
+    const box = el('div');
+    if (!doc.related.length) {
+      box.appendChild(el('p', 'metric-caption', '관련 문서 없음'));
+      return box;
+    }
+    for (const item of doc.related) {
+      const row = el('div', 'related-item');
+      const link = el('button', 'related-link', item.title);
+      link.type = 'button';
+      if (item.doc_id) {
+        // 서버가 실어 준 `doc_id` 로 해시를 조립하기만 한다 — 프론트에 경로 해석 규칙이
+        // 생기지 않는다 (§4.6 · IX3).
+        link.addEventListener('click', () => navigateTo('wiki', { doc: item.doc_id }));
+      } else {
+        link.disabled = true;
+        link.title = '대상 위키를 찾지 못했습니다';
+      }
+      row.appendChild(link);
+      if (item.evidence) row.appendChild(el('div', 'related-evidence', item.evidence));
+      box.appendChild(row);
+    }
+    return box;
+  }));
+  return card;
+}
+
+async function renderWiki(content, generation, params) {
+  content.appendChild(el('p', 'metric-caption', '불러오는 중…'));
+  const tree = await getJson('/api/wiki');
+  if (generation !== renderGeneration) return;
+  clear(content);
+  if (isError(tree)) {
+    content.appendChild(
+      emptyState({
+        title: '아직 볼 것이 없습니다',
+        body: tree.message,
+        actionLabel: '플랜 & 스캔으로',
+        actionView: 'scan',
+      })
+    );
+    return;
+  }
+
+  const selected = params.get('doc') || '';
+  const split = el('div', 'split');
+  split.appendChild(treeCard(tree, selected));
+  const detail = el('div');
+  split.appendChild(detail);
+  content.appendChild(split);
+
+  if (!selected) {
+    detail.appendChild(
+      emptyState({ title: '문서를 고르세요', body: '왼쪽 트리에서 문서를 선택하면 상세가 열립니다.' })
+    );
+    return;
+  }
+  const doc = await getJson(`/api/wiki/document?doc=${encodeURIComponent(selected)}`);
+  if (generation !== renderGeneration) return;
+  clear(detail);
+  if (isError(doc)) {
+    detail.appendChild(emptyState({ title: '문서를 불러오지 못했습니다', body: doc.message }));
+    return;
+  }
+  detail.appendChild(documentCard(doc));
+}
+
 function renderPending(content, view) {
   content.appendChild(
     emptyState({
@@ -713,7 +868,7 @@ let renderGeneration = 0;
 
 async function render() {
   const generation = ++renderGeneration;
-  const { view } = currentRoute();
+  const { view, params } = currentRoute();
   const entry = VIEWS.find((item) => item.id === view);
   document.getElementById('view-title').textContent = entry.label;
   document.getElementById('view-subtitle').textContent = entry.subtitle;
@@ -726,6 +881,8 @@ async function render() {
     await renderDashboard(content, generation);
   } else if (view === 'scan') {
     await renderScan(content, generation);
+  } else if (view === 'wiki') {
+    await renderWiki(content, generation, params);
   } else {
     renderPending(content, view);
   }

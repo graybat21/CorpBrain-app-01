@@ -1,10 +1,18 @@
-"""임베딩 입력 텍스트 조립 — 위키 요약 콘텐츠에서 청크 분할 없이 문서당 1개 텍스트를 뽑는다
+"""위키 마크다운 파싱 — 임베딩 입력 텍스트와 상세 화면용 구조화 값.
+
+임베딩 입력은 위키 요약 콘텐츠에서 청크 분할 없이 문서당 1개 텍스트를 뽑는다
 (v0.4 스펙 §4.3: "문서당 벡터 1개", 입력은 렌더링된 위키의 요약 콘텐츠).
+
+**마크다운 구조 지식은 이 파일 하나에 모인다** (v0.6 §4.4 결정 계승). v0.9의 위키 상세
+화면이 필요로 하는 `parse_wiki_document()`도 새 모듈로 나가지 않고 여기 있다 — 나가면
+같은 헤더 목록이 두 곳에 생기고, 한쪽만 고쳐지는 순간 두 화면이 오류 없이 어긋난다.
 """
 
 from __future__ import annotations
 
-from corpbrain.core.models import SummaryResult
+import re
+
+from corpbrain.core.models import RelatedLink, SummaryResult, WikiDocument
 
 
 def summary_embedding_text(summary: SummaryResult) -> str:
@@ -51,38 +59,156 @@ def parse_wiki_markdown(markdown: str) -> tuple[str, str, list[str]]:
     세 번째 반환값인 태그는 v0.6의 재료 복원 fallback이 쓴다 (§4.4) — `doc_facts`에 행이
     없는 기존 위키에서 제목·태그를 되살려 태그·참조·유사도 3종이 동작하는 부분 그래프를
     만든다. 파서를 둘로 나누지 않아 마크다운 구조 지식이 이 파일 하나에 모인다.
+
+    **반환은 3-튜플 그대로다** (v0.9 §4.6). 이 함수는 `parse_wiki_document()`를 부르는 얇은
+    래퍼이며, 반환을 바꾸지 않는 것이 기존 호출부 세 곳(`_backfill_embedding`·그래프 재료
+    복원·단위테스트)을 한 줄도 건드리지 않는 이유다.
     """
-    body = _strip_front_matter(markdown).strip()
-    title = ""
+    document = parse_wiki_document(markdown)
+    parts = [
+        document.title,
+        *(_debullet(line) for line in document.one_line_summary.splitlines()),
+        *document.key_points,
+        *(_debullet(line) for line in document.summary.splitlines()),
+        *document.tags,
+    ]
+    text = "\n".join(part for part in parts if part)
+    return document.title, text, list(document.tags)
+
+
+def _debullet(line: str) -> str:
+    """불릿 기호를 뗀다 — 임베딩 입력에는 마크다운 구문이 들어가지 않는다.
+
+    `key_points` 밖의 섹션에도 적용하는 것은 **기존 동작을 그대로 보존하기 위함**이다.
+    이 함수가 만드는 문자열이 바뀌면 갓 생성된 문서와 백필된 문서의 임베딩 텍스트가 어긋나
+    검색 랭킹이 흔들린다.
+    """
+    return line[2:].strip() if line.startswith("- ") else line.strip()
+
+
+#: 「관련 문서」 한 줄: `- [제목](상대경로) — 근거`. 근거는 없을 수 있다 (v0.6 §4.5).
+_RELATED_LINE = re.compile(r"^-\s+\[(?P<title>.*?)\]\((?P<href>.*?)\)(?:\s+—\s+(?P<evidence>.*))?$")
+
+#: 「원문」 링크: `[원본 파일 열기](file://<절대경로>)`.
+_SOURCE_LINK = re.compile(r"^\[.*?\]\(file://(?P<path>.*)\)$")
+
+
+def parse_wiki_document(markdown: str) -> WikiDocument:
+    """렌더된 위키 마크다운을 front-matter 5키 + 7섹션으로 편다 (v0.9 §4.6).
+
+    `parse_wiki_markdown()`과 **같은 섹션 지식**(`_ALL_SECTIONS`)을 쓰되 정규화하지 않는다 —
+    그 함수는 임베딩 입력을 만들려고 불릿 기호를 떼고 태그를 분해하며 빈 줄을 버리므로 화면에
+    보여 줄 원문이 남지 않는다.
+
+    파싱에 실패한 부분은 **빈 값으로 둔다.** 위키가 조금 낡았거나 사용자가 손으로 고쳤다고
+    해서 상세 화면 전체가 실패하지 않게 한다 — v0.6이 「재료가 없으면 그 엣지만 빠진다」로
+    세운 방침과 같은 결이다.
+    """
+    front, body = _split_front_matter(markdown)
+    sections = _raw_sections(body)
+    key_points = [
+        line[2:].strip()
+        for line in sections.get("## 핵심 포인트", [])
+        if line.startswith("- ")
+    ]
+    tags = [
+        tag.strip()
+        for line in sections.get(_TAGS_SECTION, [])
+        for tag in line.split(",")
+        if tag.strip()
+    ]
+    return WikiDocument(
+        source_path=front.get("source_path", ""),
+        generated_at=front.get("generated_at", ""),
+        model=front.get("model", ""),
+        engine=front.get("engine", ""),
+        source_bytes=_as_int(front.get("source_bytes", "")),
+        title=_first_title(body),
+        one_line_summary="\n".join(sections.get("## 한 줄 요약", [])),
+        key_points=key_points,
+        summary="\n".join(sections.get("## 요약", [])),
+        tags=tags,
+        source_link=_source_link(sections.get("## 원문", [])),
+        related=_related_links(sections.get("## 관련 문서", [])),
+    )
+
+
+def _split_front_matter(markdown: str) -> tuple[dict[str, str], str]:
+    """front-matter를 `{키: 값}`으로 읽고 본문과 나눈다.
+
+    값의 따옴표를 벗기지만 그 이상 해석하지 않는다 — YAML 파서를 들이지 않는다(신규 의존성 0).
+    `render.py`가 쓰는 다섯 키는 전부 `"…"` 또는 숫자 한 줄이다.
+    """
+    if not markdown.startswith("---"):
+        return {}, markdown
+    end = markdown.find("\n---", 3)
+    if end == -1:
+        return {}, markdown
+    front: dict[str, str] = {}
+    for line in markdown[3:end].splitlines():
+        key, sep, value = line.partition(":")
+        if not sep:
+            continue
+        front[key.strip()] = value.strip().strip('"')
+    return front, markdown[end + len("\n---") :]
+
+
+def _raw_sections(body: str) -> dict[str, list[str]]:
+    """섹션 헤더로 본문을 가르되 **줄을 그대로** 담는다 (마커·빈 줄만 버린다)."""
     sections: dict[str, list[str]] = {}
     current: str | None = None
     for line in body.splitlines():
         stripped = line.strip()
-        if not title and stripped.startswith("# ") and not stripped.startswith("## "):
-            title = stripped[2:].strip()
-            continue
         if stripped in _ALL_SECTIONS:
             current = stripped
-            sections[current] = []
+            sections.setdefault(current, [])
             continue
+        if stripped.startswith("<!-- corpbrain:"):
+            continue  # 기계 관리 마커는 화면에 보일 것이 아니다 (v0.6 §4.5)
         if current is not None and stripped:
-            for part in stripped.split(", ") if current == "## 태그·키워드" else [stripped]:
-                text = part[2:].strip() if part.startswith("- ") else part.strip()
-                if text:
-                    sections[current].append(text)
-
-    parts = [title]
-    for header in _EMBEDDABLE_SECTIONS:
-        parts.extend(sections.get(header, []))
-    text = "\n".join(part for part in parts if part)
-    return title, text, list(sections.get(_TAGS_SECTION, []))
+            sections[current].append(stripped)
+    return sections
 
 
-def _strip_front_matter(markdown: str) -> str:
-    """앞의 `---...---` front-matter 블록을 제거한다(경로·시각 등 임베딩에 무의미한 메타데이터)."""
-    if not markdown.startswith("---"):
-        return markdown
-    end = markdown.find("\n---", 3)
-    if end == -1:
-        return markdown
-    return markdown[end + len("\n---") :]
+def _first_title(body: str) -> str:
+    for line in body.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("# ") and not stripped.startswith("## "):
+            return stripped[2:].strip()
+    return ""
+
+
+def _as_int(raw: str) -> int:
+    try:
+        return int(raw)
+    except ValueError:
+        return 0
+
+
+def _source_link(lines: list[str]) -> str:
+    for line in lines:
+        match = _SOURCE_LINK.match(line)
+        if match:
+            return match.group("path")
+    return ""
+
+
+def _related_links(lines: list[str]) -> list[RelatedLink]:
+    """「관련 문서」 불릿을 그대로 옮긴다. `관련 문서 없음`이면 빈 목록이다.
+
+    **`doc_id`는 여기서 채우지 않는다** — 위키 본문에 적혀 있지 않고, 상대 링크를 푸는 것은
+    경로를 아는 어댑터의 일이다 (§4.6 · IX3).
+    """
+    links: list[RelatedLink] = []
+    for line in lines:
+        match = _RELATED_LINE.match(line)
+        if match is None:
+            continue
+        links.append(
+            RelatedLink(
+                title=match.group("title"),
+                href=match.group("href"),
+                evidence=(match.group("evidence") or "").strip(),
+            )
+        )
+    return links

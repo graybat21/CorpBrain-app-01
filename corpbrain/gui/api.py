@@ -21,11 +21,20 @@ from typing import Any
 from urllib.parse import parse_qsl
 
 from corpbrain.core.config import DEFAULT_EMBED_MODEL, DEFAULT_MODEL, DEFAULT_OLLAMA_URL
+from corpbrain.core.embedding_text import parse_wiki_document
 from corpbrain.core.environment import DoctorReport, diagnose
-from corpbrain.core.errors import CorpBrainError
+from corpbrain.core.errors import CorpBrainError, PreconditionError
 from corpbrain.core.graphstore import SqliteGraphStore, graph_path_for
-from corpbrain.core.models import GraphStats, ScanPlan, ScanResult
+from corpbrain.core.models import (
+    GraphStats,
+    NodeType,
+    ScanPlan,
+    ScanResult,
+    WikiDocument,
+)
+from corpbrain.core.pipeline import collect_wiki_documents
 from corpbrain.core.report import build_summary_lines
+from corpbrain.core.rerun import read_source_path
 from corpbrain.core.scanner import ScanFindings
 from corpbrain.gui.assets import AssetNotFound, content_type_for, read_asset
 from corpbrain.gui.errors import BadRequest
@@ -268,6 +277,8 @@ class GuiApp:
             "/api/scan": {"GET": self._scan_status, "POST": self._scan_run},
             "/api/scan/plan": {"POST": self._scan_plan},
             "/api/scan/cancel": {"POST": self._scan_cancel},
+            "/api/wiki": {"GET": self._wiki_tree},
+            "/api/wiki/document": {"GET": self._wiki_document},
         }
 
     def handle(
@@ -424,6 +435,72 @@ class GuiApp:
             # 안내 문장이 되고, 버그면 여기서 다시 올라가 500이 된다.
             "failure": _section(_reraise(failure)) if failure is not None else None,
         }
+
+    # --- 위키 (§4.6 · §4.6.2) -------------------------------------------------------
+
+    def _wiki_tree(self, request: Request) -> Response:
+        """트리 — **제목은 그래프 `nodes.label`에서 얻는다** (§4.6.2).
+
+        `degree_ranking()`으로 전 노드 id를 받아 `nodes_of()`로 `Document` 노드의 라벨을
+        가져온다. sqlite 조회 2번이고 위키 파일을 하나도 열지 않는다. 라벨 선택 규칙은
+        `build_graph()` 한 곳에만 있고 조회는 저장된 값을 읽는다(v0.6.1 결정 계승) — 같은
+        문서가 화면마다 다른 제목으로 불리지 않는다.
+
+        **그래프가 없으면 파일명으로 대체하고 그 사실을 알린다** — §4.6.2의 파생 결정이다.
+        이 fallback 이 제목을 «파싱»하지 않는다는 점이 중요하다. 파일명을 쓰므로 제목 파싱
+        경로는 여전히 서버 안에 하나뿐이다.
+        """
+        path = graph_path_for(self.out_dir)
+        if path.exists():
+            store = SqliteGraphStore(path, read_only=True)
+            try:
+                ids = [node_id for node_id, _degree in store.degree_ranking()]
+                nodes = store.nodes_of(ids)
+            finally:
+                store.close()
+            documents = [
+                _tree_entry(node.id, node.label)
+                for node in sorted(nodes.values(), key=lambda node: node.id)
+                if node.type is NodeType.DOCUMENT
+            ]
+            if documents:
+                return json_response({"source": "graph", "documents": documents})
+
+        inventory = collect_wiki_documents(self.out_dir)
+        if not inventory.documents:
+            raise PreconditionError(
+                "아직 스캔하지 않았습니다 — 먼저 스캔하면 위키 트리가 채워집니다."
+            )
+        return json_response(
+            {
+                "source": "files",
+                "message": "그래프가 아직 없어 파일명을 제목 대신 씁니다 — 다시 스캔하면 채워집니다.",
+                "documents": [
+                    _tree_entry(doc_id, Path(doc_id).name)
+                    for doc_id in sorted(inventory.documents)
+                ],
+            }
+        )
+
+    def _wiki_document(self, request: Request) -> Response:
+        """상세 — front-matter 5키와 7섹션을 **필드로 분리해** 담는다 (§4.6).
+
+        프론트엔드에 마크다운 파서를 두지 않으므로 마크다운 렌더 경로의 XSS 방어도
+        프론트엔드 책임이 아니다.
+        """
+        doc_id = request.query.get("doc", "")
+        if not doc_id:
+            raise BadRequest("어느 문서인지 지정하세요 (`doc`).")
+        inventory = collect_wiki_documents(self.out_dir)
+        wiki_path = inventory.documents.get(doc_id)
+        if wiki_path is None:
+            raise PreconditionError(
+                f"그 문서의 위키가 `{self.out_dir}` 아래에 없습니다 — 다시 스캔해 보세요."
+            )
+        document = parse_wiki_document(wiki_path.read_text(encoding="utf-8"))
+        return json_response(
+            _wiki_dict(document, wiki_path=wiki_path, out_dir=self.out_dir)
+        )
 
     def _doctor_payload(self) -> dict[str, Any]:
         return _doctor_dict(
@@ -684,3 +761,74 @@ def _result_dict(result: ScanResult) -> dict[str, Any]:
         "graph": None if graph is None or graph.stats is None else _stats_dict(graph.stats),
         "summary_lines": build_summary_lines(result),
     }
+
+
+def _tree_entry(doc_id: str, title: str) -> dict[str, Any]:
+    """트리 항목 — 키는 `doc_id`이며 그래프 화면·검색과 **같은 키**를 쓴다 (§4.6.2).
+
+    `directory`를 서버가 실어 보내는 것은 화면이 폴더별로 묶어 그리기 때문이다. 프론트가
+    절대경로를 잘라 쓰게 두지 않는다 — 경로 해석은 어댑터의 책임이다.
+    """
+    path = Path(doc_id)
+    return {
+        "doc_id": doc_id,
+        "title": title,
+        "name": path.name,
+        "directory": str(path.parent),
+    }
+
+
+def _wiki_dict(document: WikiDocument, *, wiki_path: Path, out_dir: Path) -> dict[str, Any]:
+    return {
+        # front-matter 5키 — `engine`을 빼지 않는다. 「이 문서가 외부로 나갔는가」를
+        # 생성물만 보고 아는 값이라 상세 화면에서 가장 먼저 보여야 할 값에 가깝다 (§4.6).
+        "source_path": document.source_path,
+        "generated_at": document.generated_at,
+        "model": document.model,
+        "engine": document.engine,
+        "source_bytes": document.source_bytes,
+        # 7섹션.
+        "title": document.title,
+        "one_line_summary": document.one_line_summary,
+        "key_points": list(document.key_points),
+        "summary": document.summary,
+        "tags": list(document.tags),
+        # 「원문」은 링크가 아니라 **경로**로 내려간다. `file://`는 http 페이지에서 브라우저가
+        # 차단하므로 화면은 경로 표시 + 복사 버튼으로 낸다 (§4.6 · IX2). 파일을 OS 기본 앱으로
+        # 여는 엔드포인트는 두지 않는다 — MVP 스펙 §2의 명시적 비목표다.
+        "source_link": document.source_link,
+        "related": _related_dicts(document, wiki_path=wiki_path, out_dir=out_dir),
+        "wiki_path": str(wiki_path),
+        "wiki_relative": str(wiki_path.relative_to(out_dir)) if wiki_path.is_relative_to(out_dir) else str(wiki_path),
+    }
+
+
+def _related_dicts(
+    document: WikiDocument, *, wiki_path: Path, out_dir: Path
+) -> list[dict[str, Any]]:
+    """「관련 문서」에 `doc_id`를 실어 내린다 (§4.6 · IX3).
+
+    위키 본문에는 `doc_id`가 **적혀 있지 않다** — 적혀 있는 것은 제목·상대경로·근거 문구뿐이다.
+    서버가 그 상대경로를 **이 위키 파일 기준**으로 풀어 대상 위키의 front-matter `source_path`를
+    읽는다. 비용은 상세 1건당 최대 `related_top_k`개(기본 5)의 head 읽기다.
+
+    **그래프에서 `rank_related()`로 다시 계산하지 않는다** — 동점 정렬 키가 달라져 화면 순서가
+    파일에 적힌 순서와 어긋나고, 「조회 시점에 파생값을 다시 계산하지 않는다」는 v0.6 불변식과도
+    부딪친다. 프론트가 링크를 파싱해 되돌리게 하지도 않는다 — 경로 해석이 프론트로 넘어가고
+    「프론트엔드에 마크다운 파서를 두지 않는다」와도 부딪친다.
+    """
+    entries: list[dict[str, Any]] = []
+    for link in document.related:
+        target = (wiki_path.parent / link.href).resolve()
+        doc_id = read_source_path(target) if target.is_file() else None
+        entries.append(
+            {
+                "title": link.title,
+                # 못 풀면 빈 문자열이다 — 화면은 링크 대신 제목만 보여 준다. 위키가 지워졌거나
+                # 사용자가 손으로 고친 경우이며, 상세 전체를 실패시킬 이유가 아니다.
+                "doc_id": doc_id or "",
+                # 근거 문구는 v0.6·v0.7이 못박은 **어휘**라 그대로 싣는다 (§4.6.1).
+                "evidence": link.evidence,
+            }
+        )
+    return entries
