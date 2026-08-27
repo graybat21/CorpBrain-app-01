@@ -167,3 +167,40 @@ def test_request_headers_are_case_insensitive(app: GuiApp) -> None:
     lowered = {"host": HOST, "cookie": f"{SESSION_COOKIE}={SESSION}"}
     assert app.handle("GET", "/api/dashboard", lowered).status == 200
     assert isinstance(Request(method="GET", path="/"), Request)
+
+
+# --- 자격 비교의 견고성 (PR ① 자기 검토에서 발견) --------------------------------
+
+
+@pytest.mark.parametrize("credential", ["한글토큰", "🔑", "tok\x80"])
+def test_non_ascii_credentials_are_refused_not_crashed(
+    app: GuiApp, credential: str
+) -> None:
+    """비-ASCII 자격은 401로 수렴한다 — 예외로 터지지 않는다.
+
+    `secrets.compare_digest`는 `str`을 받으면 비-ASCII 문자에 `TypeError`를 올린다. 초판
+    구현은 그 비교를 `handle()`의 `try` **밖**에서 했기 때문에, `?token=한글` 요청 하나가
+    응답 없이 핸들러를 죽였다(실측 재현). 자격이 틀린 것은 요청의 정상적인 실패이지
+    서버의 버그가 아니므로 401이어야 한다.
+    """
+    from_query = app.handle(
+        "GET", f"/api/dashboard?token={credential}", _headers(Cookie=None)
+    )
+    from_cookie = app.handle(
+        "GET", "/api/dashboard", _headers(Cookie=f"{SESSION_COOKIE}={credential}")
+    )
+    assert (from_query.status, from_cookie.status) == (401, 401)
+
+
+def test_authorization_failures_are_mapped_not_leaked(
+    app: GuiApp, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """인증 검사가 예외를 올려도 응답은 나간다 — 매핑 규칙이 닿지 않는 구멍을 두지 않는다."""
+
+    def _boom(_request: object) -> None:
+        raise RuntimeError("자격 검증이 깨졌다")
+
+    monkeypatch.setattr(app, "_authorize", _boom)
+    response = app.handle("GET", "/api/dashboard", _headers())
+    # 검증 자체가 깨진 것은 진짜 버그다 — 5xx가 맞고, 연결이 끊기는 것은 아니다.
+    assert response.status == 500

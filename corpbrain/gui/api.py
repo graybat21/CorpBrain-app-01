@@ -232,14 +232,14 @@ class GuiApp:
 
     def _has_valid_credential(self, request: Request) -> bool:
         session = _cookie_value(request.headers.get("cookie", ""), SESSION_COOKIE)
-        if session is not None and secrets.compare_digest(session, self.session_token):
+        if session is not None and _matches(session, self.session_token):
             return True
         return self._is_bootstrap(request)
 
     def _is_bootstrap(self, request: Request) -> bool:
         """부트스트랩 쿼리 토큰이 실려 있고 값이 맞는가."""
         supplied = request.query.get(TOKEN_QUERY_PARAM)
-        return supplied is not None and secrets.compare_digest(supplied, self.token)
+        return supplied is not None and _matches(supplied, self.token)
 
     # --- 라우팅 -----------------------------------------------------------------
 
@@ -265,20 +265,23 @@ class GuiApp:
             body: 요청 본문 바이트.
         """
         request = _make_request(method, path, headers, body)
-        refusal = self._authorize(request)
-        if refusal is not None:
-            return refusal
+        # 인증 검사도 **이 `try` 안에서** 돈다. 밖에 두면 자격 검증이 예외를 올릴 때
+        # 응답이 아예 나가지 않고 핸들러가 죽는다 — 500 보다 나쁜 결과이며, 매핑 규칙
+        # (§4.3.2)이 닿지 못하는 구멍이 하나 생긴다.
         try:
+            refusal = self._authorize(request)
+            if refusal is not None:
+                return refusal
             response = self._dispatch(request)
+            if self._is_bootstrap(request):
+                # 부트스트랩 토큰을 **세션 쿠키로 교환**한다 (§4.2). 쿠키는 `fetch`와
+                # `EventSource`가 자동으로 함께 나르므로 인증 경로가 하나로 유지된다 —
+                # `EventSource`는 커스텀 헤더를 붙일 수 없어 `Authorization` 방식은 SSE
+                # 하나에서 깨진다.
+                response = _with_session_cookie(response, self.session_token)
+            return response
         except Exception as exc:  # noqa: BLE001 — 매핑 규칙이 종류를 가른다
-            response = response_for_exception(exc)
-        if self._is_bootstrap(request):
-            # 부트스트랩 토큰을 **세션 쿠키로 교환**한다 (§4.2). 쿠키는 `fetch`와
-            # `EventSource`가 자동으로 함께 나르므로 인증 경로가 하나로 유지된다 —
-            # `EventSource`는 커스텀 헤더를 붙일 수 없어 `Authorization` 방식은 SSE
-            # 하나에서 깨진다.
-            response = _with_session_cookie(response, self.session_token)
-        return response
+            return response_for_exception(exc)
 
     def _dispatch(self, request: Request) -> Response:
         if request.path == "/" or request.path.startswith(ASSETS_PREFIX):
@@ -418,6 +421,19 @@ def _stats_dict(stats: GraphStats) -> dict[str, Any]:
         "edges": stats.edges,
         "edges_by_type": {str(key): value for key, value in stats.edges_by_type.items()},
     }
+
+
+def _matches(supplied: str, expected: str) -> bool:
+    """자격 하나를 상수 시간으로 비교한다.
+
+    **UTF-8 바이트로 비교한다.** `secrets.compare_digest`는 `str`을 받으면 비-ASCII 문자에
+    `TypeError`를 올리므로, 한글이 든 쿠키·쿼리 토큰 하나로 인증 경로가 예외를 던진다 —
+    실측으로 `?token=한글` 요청이 `handle()` 밖으로 탈출했다. 자격이 틀린 것은 요청의
+    정상적인 실패이지 버그가 아니므로 그냥 `False`로 수렴해야 한다.
+
+    바이트로 비교해도 상수 시간 성질은 그대로다.
+    """
+    return secrets.compare_digest(supplied.encode("utf-8"), expected.encode("utf-8"))
 
 
 def _refused(status: int) -> Response:

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import webbrowser
 from collections.abc import Iterator
+from contextlib import closing
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -100,12 +101,17 @@ class _Handler(BaseHTTPRequestHandler):
         # 스트림은 길이를 미리 알 수 없다 — `Content-Length` 대신 청크 없이 흘려보낸다.
         self.send_header("Connection", "close")
         self.end_headers()
-        try:
-            for chunk in self._frames():
-                self.wfile.write(chunk.encode("utf-8"))
-                self.wfile.flush()
-        except (BrokenPipeError, ConnectionResetError, OSError):
-            return  # 브라우저가 떠났다 — `EventSource`가 알아서 재연결한다
+        # `closing`으로 감싸 **구독 해제를 GC에 맡기지 않는다.** 브라우저가 떠나면 아래
+        # `except`가 함수를 벗어나는데, 제너레이터가 즉시 닫히지 않으면 그 안의
+        # `stream.subscribe()` 컨텍스트가 살아 있어 구독자(큐 하나)가 프로세스 수명 내내
+        # 남는다. CPython 참조 계수가 대개 곧바로 닫아 주지만 그것은 구현 세부다.
+        with closing(self._frames()) as frames:
+            try:
+                for chunk in frames:
+                    self.wfile.write(chunk.encode("utf-8"))
+                    self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                return  # 브라우저가 떠났다 — `EventSource`가 알아서 재연결한다
 
     def _frames(self) -> Iterator[str]:
         stream = self._app.events
