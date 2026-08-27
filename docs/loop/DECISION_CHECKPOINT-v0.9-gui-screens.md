@@ -208,3 +208,7 @@ front-matter 5키 + 7섹션에 `wiki_path`·`wiki_relative`를 더한다.
 **PR ① 코드를 최소 수정했다** — 대시보드의 리터럴 dict을 `raise GraphNotBuilt(…)`로 바꿨다.
 본문을 손으로 짜면 `_section()`이 §4.3.2 매핑을 적용할 기회 자체가 사라지고, 같은 조건이
 화면마다 다른 식별자를 갖게 된다. 기존 테스트가 단언하던 문자열(`"GraphNotBuilt"`)은 그대로다.
+
+---
+
+STOP REASON: ALL_DONE
