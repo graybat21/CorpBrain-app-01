@@ -12,8 +12,11 @@ from corpbrain.core._progress import (
     FileSkipped,
     FileStage,
     FileStarted,
+    GraphFinished,
+    GraphStarted,
     ModelLoading,
     ModelReady,
+    RelatedInjected,
     RunFinished,
     RunStarted,
     Stage,
@@ -21,6 +24,7 @@ from corpbrain.core._progress import (
     reduce,
     render_status_line,
 )
+from corpbrain.core.models import GraphStats
 
 
 def _fold(events: list) -> StatusSnapshot:
@@ -138,3 +142,88 @@ def test_run_finished_marks_done_and_first_event_is_run_started() -> None:
     finished = reduce(started, RunFinished(at=1.0))
     assert finished.state == "done"
     assert RunStarted(at=0.0, model="m", total=0).kind == EventKind.RUN_STARTED
+
+
+# --- v0.9 U2: 그래프 단계 진행 이벤트 3종 (v0.9 스펙 §4.7 · DoD 7) --------------------
+
+
+def test_graph_events_fold_into_their_own_axis() -> None:
+    """그래프 3종이 `reduce()`를 통과해 스냅샷에 반영된다 (DoD 7).
+
+    파일 루프의 축(`generated`·`index`·`stage`)은 건드리지 않는다 — 그것이 `FileStage`의
+    `Stage` enum에 값을 더하지 않고 새 이벤트를 둔 이유다 (§4.7).
+    """
+    snapshot = _fold(
+        [
+            RunStarted(at=0.0, model="m", total=1),
+            FileStarted(at=1.0, index=1, total=1, path="/x/a.txt", bytes=10),
+            FileGenerated(at=2.0, index=1, total=1, path="/x/a.txt",
+                          output_path="/o/a.txt.md", latency=1.0),
+            GraphStarted(at=3.0),
+        ]
+    )
+    assert snapshot.state == "graph"
+    assert snapshot.graph_stage == "building"
+    # 패스2는 쪼갤 수 없다 — 없는 진행률을 지어내지 않는다.
+    assert (snapshot.graph_index, snapshot.graph_total) == (0, 0)
+    # 파일 루프의 잔상은 지운다. 그래프 단계는 문서 1개를 처리하는 중이 아니다.
+    assert snapshot.current_file is None
+    assert snapshot.stage is None
+    # 파일 축은 그대로다.
+    assert (snapshot.generated, snapshot.index, snapshot.total) == (1, 1, 1)
+
+    injected = reduce(
+        snapshot, RelatedInjected(at=4.0, index=2, total=6, path="/o/인사/온보딩.md.md")
+    )
+    assert injected.graph_stage == "injecting"
+    assert (injected.graph_index, injected.graph_total) == (2, 6)
+    assert injected.current_file == "/o/인사/온보딩.md.md"
+    assert injected.generated == 1  # 그래프 진행이 생성 카운트를 오염시키지 않는다
+
+    stats = GraphStats(documents=6, entities=3, tags=2, edges_by_type={"TAGGED_WITH": 4})
+    done = reduce(injected, GraphFinished(at=5.0, stats=stats))
+    assert done.graph_stage == "done"
+    assert done.current_file is None
+    assert done.state == "graph"  # 실행이 끝났다는 판정은 `RunFinished`만 한다
+
+    assert reduce(done, RunFinished(at=6.0)).state == "done"
+
+
+def test_graph_events_are_json_serializable_for_sse() -> None:
+    """SSE가 `to_dict()`를 그대로 싣는다 (§4.3) — 변환 계층 없이 직렬화돼야 한다."""
+    started = json.loads(json.dumps(GraphStarted(at=1.0).to_dict()))
+    assert started == {"kind": "graph_started", "at": 1.0}
+
+    injected = json.loads(
+        json.dumps(RelatedInjected(at=2.0, index=1, total=3, path="/o/a.md").to_dict())
+    )
+    assert injected == {
+        "kind": "related_injected", "at": 2.0, "index": 1, "total": 3, "path": "/o/a.md",
+    }
+
+    stats = GraphStats(documents=2, entities=1, tags=1, edges_by_type={"REFERENCES": 1})
+    finished = json.loads(json.dumps(GraphFinished(at=3.0, stats=stats).to_dict()))
+    assert finished["kind"] == "graph_finished"
+    assert finished["stats"]["documents"] == 2
+    assert finished["stats"]["edges_by_type"] == {"REFERENCES": 1}
+
+    # 빌드 실패 경로 — 그래도 구간을 닫는다 (v0.6 §5).
+    assert json.loads(json.dumps(GraphFinished(at=4.0).to_dict()))["stats"] is None
+
+
+def test_graph_progress_does_not_pollute_rate_and_eta() -> None:
+    """`RelatedInjected`는 rate·ETA 계산의 입력(`generated`·`total`)을 바꾸지 않는다."""
+    before = _fold(
+        [
+            RunStarted(at=0.0, model="m", total=2),
+            FileGenerated(at=1.0, index=1, total=2, path="/x/a.txt",
+                          output_path="/o/a.md", latency=1.0),
+            FileGenerated(at=2.0, index=2, total=2, path="/x/b.txt",
+                          output_path="/o/b.md", latency=1.0),
+        ]
+    )
+    after = reduce(
+        reduce(before, GraphStarted(at=2.0)),
+        RelatedInjected(at=2.0, index=1, total=99, path="/o/a.md"),
+    )
+    assert (after.rate, after.eta, after.total) == (before.rate, before.eta, before.total)

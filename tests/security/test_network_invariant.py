@@ -23,6 +23,7 @@ from corpbrain.core.llm.embed import EmbeddingError, embed
 from corpbrain.core.llm.ollama_client import OllamaNotAvailableError, detect
 from corpbrain.core.pipeline import run_scan
 from corpbrain.core.plan import plan_scan
+from corpbrain.gui.httpd import create_server
 
 FIXTURE_CORPUS = Path(__file__).resolve().parents[1] / "fixtures" / "sample_corpus"
 LOCALHOST_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
@@ -37,17 +38,30 @@ SUMMARY_JSON = {
 
 
 class SocketWatcher:
-    """소켓 연결 목적지를 수집하는 감시 장치."""
+    """소켓 **연결 목적지**와 **바인드 주소**를 수집하는 감시 장치.
+
+    두 축은 성질이 다르다 — 연결은 「나가는 곳」이고 바인드는 「듣는 곳」이다. v0.9 GUI가
+    처음으로 듣는 소켓을 열면서 후자가 필요해졌다 (v0.9 §3 항목3).
+    """
 
     def __init__(self) -> None:
         self.addresses: list[tuple[str, int]] = []
+        #: `bind`가 실제로 받은 주소들. 포트는 임의 할당(0)이라 호스트만 의미가 있다.
+        self.binds: list[tuple[str, int]] = []
 
     def record(self, address: Any) -> None:
         if isinstance(address, tuple) and len(address) >= 2:
             self.addresses.append((str(address[0]), int(address[1])))
 
+    def record_bind(self, address: Any) -> None:
+        if isinstance(address, tuple) and len(address) >= 2:
+            self.binds.append((str(address[0]), int(address[1])))
+
     def offenders(self, allowed_hosts: frozenset[str]) -> list[tuple[str, int]]:
         return [addr for addr in self.addresses if addr[0] not in allowed_hosts]
+
+    def bind_offenders(self, allowed_hosts: frozenset[str]) -> list[tuple[str, int]]:
+        return [addr for addr in self.binds if addr[0] not in allowed_hosts]
 
 
 @pytest.fixture
@@ -62,8 +76,26 @@ def watch_sockets(monkeypatch: pytest.MonkeyPatch) -> SocketWatcher:
         watcher.record(address)
         raise ConnectionRefusedError("보안 감시: 실제 연결을 차단했습니다")
 
+    real_bind = socket.socket.bind
+
+    def _watched_bind(self: socket.socket, address: Any) -> None:
+        """주소를 **기록한 뒤 원래 `bind`에 그대로 넘긴다** (pass-through).
+
+        가로채면 안 된다 — `ThreadingHTTPServer`는 `server_bind()` 직후
+        `server_activate()`에서 `listen()`을 부르고, **바인드되지 않은 TCP 소켓에
+        `listen()`을 걸면 커널이 `0.0.0.0`의 임의 포트로 자동 바인드한다.** 「듣는 소켓은
+        127.0.0.1뿐」을 단언하려는 테스트가 오히려 전 인터페이스에 소켓을 여는 셈이 되고,
+        `server_address`도 `('0.0.0.0', 0)`이 되어 서버 객체가 일관되지 않은 상태로 남는다.
+
+        `bind`는 `connect`가 아니므로 이 fixture의 연결 차단과 **애초에 부딪치지 않는다** —
+        실제로 바인드한 뒤 즉시 `server_close()` 하면 나가는 연결이 하나도 생기지 않는다.
+        """
+        watcher.record_bind(address)
+        real_bind(self, address)
+
     monkeypatch.setattr(socket.socket, "connect", _fake_connect)
     monkeypatch.setattr(socket, "create_connection", _fake_create_connection)
+    monkeypatch.setattr(socket.socket, "bind", _watched_bind)
     return watcher
 
 
@@ -449,3 +481,48 @@ def test_gateway_blocks_a_cloud_call_to_a_wrong_host(watch_sockets: SocketWatche
         )
 
     assert watch_sockets.addresses == []  # 소켓을 아예 열지 않았다
+
+
+# --- v0.9 U7: 듣는 소켓의 바인드 주소 (v0.9 §3 항목3 · DoD 3) ------------------------
+
+
+def test_gui_server_binds_only_to_loopback(
+    watch_sockets: SocketWatcher, tmp_path: Path
+) -> None:
+    """GUI 서버가 여는 듣는 소켓의 바인드 주소가 `127.0.0.1`뿐이다.
+
+    상수만 단언하는 방식(`HOST == "127.0.0.1"` 확인)은 택하지 않았다 — 상수는 맞는데 실제
+    `bind` 호출이 다른 값을 쓰는 경우를 놓쳐 감시장치가 공허하게 통과한다. 여기서는
+    **실제 `bind` 호출**을 기록해 단언한다.
+
+    새 파일로 분리하지 않는다 — 소켓 패치 관용구가 복제되고,
+    `test_watcher_flags_a_gateway_bypass`의 보호를 받지 못한다 (v0.6·v0.7·v0.8 계승).
+    """
+    server = create_server(tmp_path / "wiki")
+    try:
+        assert watch_sockets.binds, "bind가 한 번도 기록되지 않았다 — 감시가 공허하다"
+        assert watch_sockets.bind_offenders(LOCALHOST_HOSTS) == []
+        # pass-through 이므로 서버 객체도 실제 바인드 결과를 들고 있다.
+        assert server.server_address[0] == "127.0.0.1"
+        assert server.server_address[1] != 0  # OS가 고른 임의 포트
+        assert server.app.port == server.server_address[1]
+    finally:
+        server.server_close()
+
+    # 서버를 여는 동안 **나가는** 연결은 하나도 생기지 않는다.
+    assert watch_sockets.addresses == []
+
+
+def test_bind_watcher_flags_a_non_loopback_bind(watch_sockets: SocketWatcher) -> None:
+    """감시장치가 공허하게 통과하지 않음을 증명한다 (`test_watcher_flags_a_gateway_bypass` 대칭).
+
+    `0.0.0.0`으로 바인드하면 실제로 잡히는지 확인한다 — 잡히지 않으면 위 케이스는 아무것도
+    보장하지 않는다.
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind(("0.0.0.0", 0))
+    finally:
+        sock.close()
+
+    assert watch_sockets.bind_offenders(LOCALHOST_HOSTS) != []

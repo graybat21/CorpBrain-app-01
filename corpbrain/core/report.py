@@ -310,13 +310,19 @@ def build_search_lines(results: list[SearchResult]) -> list[str]:
         )
         if result.expansion is not None:
             lines.append(
-                _EVIDENCE_INDENT + _expansion_evidence(result.expansion, result.score)
+                _EVIDENCE_INDENT
+                + build_expansion_evidence(result.expansion, result.score)
             )
     return lines
 
 
-def _expansion_evidence(expansion: GraphExpansion, score: float) -> str:
+def build_expansion_evidence(expansion: GraphExpansion, score: float) -> str:
     """확산 문서의 근거 항목을 `·`로 잇는다 (v0.7 §4.6).
+
+    이 모듈의 공개 관용구(`build_*`)를 따르는 이름이다 — v0.9 GUI 가 검색 결과 카드의
+    근거 줄에 이 반환 문자열을 **그대로** 싣는다 (v0.9 §4.6.1). 다른 어댑터가 밑줄
+    함수를 import 하는 상태로 두지 않으려고 공개 이름으로 올렸을 뿐, 반환 문자열은 한
+    글자도 바뀌지 않는다 — v0.7 §4.6 이 정확 문자열까지 못박은 계약 그대로다.
 
     나열 관용구는 v0.6 `render.py:_evidence()`와 같은 결로 맞춘다 — 조사로 문장을 잇지
     않는다. 항목을 기계적으로 잇는 그 관용구가 라벨 받침에 따라 조사가 갈리는 문제를 애초에

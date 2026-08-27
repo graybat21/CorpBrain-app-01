@@ -46,6 +46,7 @@ from corpbrain.core.scanner import (
     scan_folder,
     validated_root,
 )
+from corpbrain.gui.httpd import serve
 
 #: `--model`을 대신 지정할 수 있는 환경변수 (스펙 §4.1).
 MODEL_ENV_VAR = "CORPBRAIN_MODEL"
@@ -424,6 +425,25 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="URL",
         help=f"로컬 Ollama 주소 (기본 {core.DEFAULT_OLLAMA_URL}).",
     )
+
+    gui = subparsers.add_parser(
+        "gui",
+        help="브라우저 GUI를 로컬 서버로 띄운다 (127.0.0.1 · 임의 포트).",
+    )
+    gui.add_argument(
+        "--out",
+        dest="out_dir",
+        type=Path,
+        default=core.DEFAULT_OUT_DIR,
+        metavar="DIR",
+        help=f"위키·인덱스·그래프 DB 위치 (기본 {core.DEFAULT_OUT_DIR}).",
+    )
+    gui.add_argument(
+        "--no-browser",
+        dest="open_browser",
+        action="store_false",
+        help="브라우저를 자동으로 열지 않는다.",
+    )
     return parser
 
 
@@ -479,7 +499,20 @@ def main(argv: list[str] | None = None) -> int:
         return _run_consent(args)
     if args.command == "graph":
         return _run_graph(args)
+    if args.command == "gui":
+        return _run_gui(args)
     return _run_scan(args)
+
+
+def _run_gui(args: argparse.Namespace) -> int:
+    """`gui` — 로컬 서버를 포그라운드로 띄운다 (v0.9 §4.1).
+
+    포트는 OS가 고르는 빈 포트이며 플래그로 지정하지 않는다. 바인드 주소는 `127.0.0.1`
+    상수이고 바꿀 수 없다 (§2 「외부 노출」 비목표). 기동 시 토큰이 실린 URL을 stdout에
+    내고 브라우저를 자동으로 연다 — `--no-browser`로 끈다.
+    """
+    serve(args.out_dir, open_browser=args.open_browser)
+    return EXIT_OK
 
 
 def _run_consent(args: argparse.Namespace) -> int:

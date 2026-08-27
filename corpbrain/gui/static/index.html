@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CorpBrain</title>
+    <link rel="stylesheet" href="/assets/style.css" />
+  </head>
+  <body>
+    <nav id="sidebar" aria-label="주요 화면">
+      <div class="brand">
+        <span class="brand-name">CorpBrain</span>
+        <span class="brand-badge">local</span>
+      </div>
+      <div class="nav">
+        <div class="nav-title" id="nav-title">화면</div>
+        <div id="nav" role="list" aria-labelledby="nav-title"></div>
+      </div>
+      <div class="sidebar-footer" id="workspace-path"></div>
+    </nav>
+
+    <main id="main">
+      <header id="header">
+        <h1 id="view-title">대시보드</h1>
+        <p id="view-subtitle"></p>
+      </header>
+      <div id="content" tabindex="-1"></div>
+    </main>
+
+    <script src="/assets/app.js"></script>
+  </body>
+</html>

@@ -52,3 +52,49 @@ jobs:
             git status --porcelain
             exit 1
           fi
+
+      # v0.9: 이 저장소의 CI는 지금까지 휠을 빌드해 본 적이 없다. hatchling의
+      # `packages = ["corpbrain"]`가 정적 자산(HTML·CSS·JS)까지 실제로 거두는지는 wheel을
+      # 만들어 봐야만 드러나고, 로컬은 `-e` 설치라 배치가 틀어져 있어도 조용히 동작한다 —
+      # v0.9 스펙 §4.10.1이 경계한 그 분기다. (스펙 §3 항목9)
+      - name: wheel 빌드
+        run: uv build --wheel
+
+      - name: wheel에 GUI 정적 자산이 들어갔는지 확인
+        run: |
+          python - <<'PY'
+          import pathlib, sys, zipfile
+
+          wheel = next(iter(sorted(pathlib.Path("dist").glob("*.whl"))), None)
+          if wheel is None:
+              sys.exit("dist/에 wheel이 없다")
+          names = zipfile.ZipFile(wheel).namelist()
+          assets = sorted(n for n in names if n.startswith("corpbrain/gui/static/"))
+          print("\n".join(assets) or "(없음)")
+          if not assets:
+              sys.exit(f"{wheel.name}에 corpbrain/gui/static/ 자산이 하나도 없다")
+          PY
+
+      # 깨끗한 환경(개발 의존성·소스 트리 없음)에서 그 wheel로 실제 기동한다.
+      # `--no-browser`가 없으면 러너에서 브라우저를 여는 명령이 되고, 서버는 포그라운드로
+      # 떠 Ctrl+C까지 살아 있으므로(스펙 §4.1) 종료 절차가 없으면 CI가 타임아웃까지 매달린다.
+      - name: wheel 기동 스모크
+        run: |
+          set -euo pipefail
+          smoke="${RUNNER_TEMP}/smoke"
+          uv venv "${smoke}/venv"
+          uv pip install --python "${smoke}/venv/bin/python" "$(ls dist/*.whl)"
+          cd "${smoke}"
+          PYTHONUNBUFFERED=1 "${smoke}/venv/bin/corpbrain" gui --no-browser \
+            > "${smoke}/gui.log" 2>&1 &
+          pid=$!
+          trap 'kill "${pid}" 2>/dev/null || true' EXIT
+          for _ in $(seq 1 60); do
+            if grep -q "http://127.0.0.1:" "${smoke}/gui.log"; then break; fi
+            sleep 1
+          done
+          cat "${smoke}/gui.log"
+          grep -q "http://127.0.0.1:" "${smoke}/gui.log"
+          grep -q "token=" "${smoke}/gui.log"
+          kill "${pid}"
+          wait "${pid}" 2>/dev/null || true
