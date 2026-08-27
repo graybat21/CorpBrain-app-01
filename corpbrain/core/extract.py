@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -24,10 +25,6 @@ from pypdf.errors import PyPdfError
 
 from corpbrain.core.errors import CorpBrainError
 from corpbrain.core.models import SkippedFile, SkipReason
-
-PLAINTEXT_EXTENSIONS: frozenset[str] = frozenset({".txt", ".md"})
-DOCX_EXTENSION = ".docx"
-PDF_EXTENSION = ".pdf"
 
 
 class ExtractionError(CorpBrainError):
@@ -78,14 +75,12 @@ def extract_text(path: Path, max_chars: int) -> str:
     Raises:
         ExtractionError: 지원하지 않는 확장자이거나 읽기·파싱에 실패한 경우.
     """
-    suffix = path.suffix.lower()
-    if suffix in PLAINTEXT_EXTENSIONS:
-        return _extract_plaintext(path, max_chars)
-    if suffix == DOCX_EXTENSION:
-        return _extract_docx(path, max_chars)
-    if suffix == PDF_EXTENSION:
-        return _extract_pdf(path, max_chars)
-    raise ExtractionError(f"지원하지 않는 확장자입니다: {path.suffix}")
+    extractor = EXTRACTORS.get(path.suffix.lower())
+    if extractor is None:
+        # 스캐너가 이미 `SUPPORTED_EXTENSIONS`로 걸러 주므로 정상 경로에서는 닿지 않는다.
+        # 스캐너를 우회한 직접 호출용 방어선이다 (스펙 §4.2).
+        raise ExtractionError(f"지원하지 않는 확장자입니다: {path.suffix}")
+    return extractor(path, max_chars)
 
 
 def _extract_plaintext(path: Path, max_chars: int) -> str:
@@ -154,3 +149,22 @@ def _extract_pdf(path: Path, max_chars: int) -> str:
         raise ExtractionError(f"pdf 텍스트를 읽지 못했습니다: {path}") from exc
 
     return "\n".join(parts)[:max_chars]
+
+
+#: 확장자 → 추출기 디스패치 (스펙 §4.2). **`extract.py`의 지원 포맷 목록은 이 매핑 하나뿐이다** —
+#: 확장자 상수를 따로 두지 않는다.
+#:
+#: `config.SUPPORTED_EXTENSIONS`와 **키 집합이 정확히 같아야 하며**, 그 정합성은
+#: `tests/unit/test_extract.py`의 단위테스트가 단언한다. 두 정의를 한쪽에서 다른 쪽을 참조해
+#: 파생시키지 않는 것은 의도적이다 — 파생시키면 단언이 공허해지고, 어긋남을 잡아낼 감시장치가
+#: 사라진다. 정본은 `config.SUPPORTED_EXTENSIONS`이고 이 매핑은 「그 목록을 실제로 처리할 수
+#: 있는가」를 독립적으로 진술한다.
+#:
+#: 값은 전부 `(path, max_chars) -> str` 시그니처를 공유한다. 포맷을 더할 때 손댈 곳은
+#: 추출기 함수 하나와 이 매핑 한 줄, 그리고 `config.SUPPORTED_EXTENSIONS` 한 값이다.
+EXTRACTORS: dict[str, Callable[[Path, int], str]] = {
+    ".txt": _extract_plaintext,
+    ".md": _extract_plaintext,
+    ".docx": _extract_docx,
+    ".pdf": _extract_pdf,
+}

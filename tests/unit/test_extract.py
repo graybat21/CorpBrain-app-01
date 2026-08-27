@@ -9,7 +9,13 @@ import pytest
 from docx import Document
 from pypdf import PdfReader, PdfWriter
 
-from corpbrain.core.extract import ExtractionError, extract_text, prepare_summary_input
+from corpbrain.core.config import SUPPORTED_EXTENSIONS
+from corpbrain.core.extract import (
+    EXTRACTORS,
+    ExtractionError,
+    extract_text,
+    prepare_summary_input,
+)
 from corpbrain.core.models import SkipReason
 
 MAX_CHARS = 12000
@@ -78,6 +84,23 @@ def _write_blank_pdf(path: Path) -> None:
     writer.add_blank_page(width=200, height=200)
     with path.open("wb") as stream:
         writer.write(stream)
+
+
+def test_dispatch_table_keys_match_supported_extensions() -> None:
+    """확장자 디스패치 매핑의 키 집합이 `SUPPORTED_EXTENSIONS`와 정확히 같다 (스펙 §3 항목7).
+
+    지원 포맷 목록이 `config.SUPPORTED_EXTENSIONS`와 `extract.py`에 따로 정의돼 있어 둘이
+    어긋나도 아무도 검증하지 않던 구멍을 닫는다 — 지금까지의 유일한 방어는 `test_scanner.py`의
+    리터럴 단언뿐이었고, 그것은 상수 쪽만 본다. 한쪽에만 확장자를 더하면 스캐너가 통과시킨
+    파일을 추출기가 「지원하지 않는 확장자」로 되던지거나(추출 실패로 위장된 미지원), 추출기는
+    아는데 스캐너가 걸러 영원히 불리지 않는 죽은 코드가 된다.
+    """
+    assert set(EXTRACTORS) == set(SUPPORTED_EXTENSIONS)
+
+
+def test_dispatch_table_maps_every_extension_to_a_callable() -> None:
+    """매핑 값은 모두 호출 가능해야 한다 — 키만 맞고 값이 비면 위 단언이 공허해진다."""
+    assert all(callable(extractor) for extractor in EXTRACTORS.values())
 
 
 def test_txt_extraction_returns_plain_text(tmp_path: Path) -> None:
