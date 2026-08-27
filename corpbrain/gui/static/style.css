@@ -433,3 +433,23 @@ body {
 }
 .related-link:disabled { color: var(--text-muted); cursor: default; }
 .related-evidence { font-size: 11px; color: var(--text-muted); margin-top: 3px; }
+
+/* --- 지식그래프 (§4.3.1 · §5) --------------------------------------------------- */
+
+.graph-canvas-wrap { position: relative; }
+.graph-canvas {
+  width: 100%;
+  height: 62vh;
+  min-height: 380px;
+  display: block;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  cursor: grab;
+}
+.graph-canvas:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: 2px; }
+.legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 10px; font-size: 11px; }
+.legend-item { display: flex; align-items: center; gap: 6px; color: var(--text-secondary); }
+.legend-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+.node-list { max-height: 62vh; overflow-y: auto; }
+.node-degree { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); }

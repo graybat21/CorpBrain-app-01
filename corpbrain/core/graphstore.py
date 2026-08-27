@@ -79,6 +79,22 @@ class GraphStore(Protocol):
         """이 노드에 닿는 모든 엣지. 대칭 엣지는 한 행만 저장되므로 `src`·`dst` 양쪽을 본다."""
         ...
 
+    def iter_edges(self) -> Iterator[GraphEdge]:
+        """저장된 **모든** 엣지 — `replace_graph()`의 읽기 대칭항이다 (v0.9 §4.3.1).
+
+        전체 그래프를 그리려면 엣지를 통째로 받는 길이 필요한데 `stats()`는 개수만,
+        `neighbors()`는 한 노드 주변만 준다. 전 노드에 `neighbors()`를 돌리는 방식은 N+1
+        쿼리가 나가고 **대칭 엣지 중복 제거 로직이 조회 어댑터에 생겨** 「대칭 엣지는 한 행으로
+        저장한다」는 저장 규칙 지식이 저장소 밖으로 샌다 (v0.6 §4.1).
+
+        v0.7이 계약을 넓히지 않고 넘어갈 수 있었던 것은 `search(top_k=전 문서)`처럼 **이미 있는
+        메서드가 전 행을 돌려주는 길**이 있었기 때문이며, 엣지에는 그 길이 없다. 새 테이블·새
+        저장 계층은 만들지 않는다.
+
+        읽기 전용이므로 `read_only=True` 개봉에서도 동작해야 한다.
+        """
+        ...
+
     def degree_ranking(self) -> list[tuple[str, int]]:
         """`Document` 노드를 연결 차수 내림차순으로 — 동점은 노드 id 사전순 (스펙 §4.7)."""
         ...
@@ -271,6 +287,18 @@ class SqliteGraphStore:
             (node_id, node_id),
         ).fetchall()
         return [GraphEdge(src=r[0], dst=r[1], type=EdgeType(r[2]), weight=r[3]) for r in rows]
+
+    def iter_edges(self) -> Iterator[GraphEdge]:
+        """저장된 모든 엣지를 결정적 순서로 낸다 (v0.9 §4.3.1).
+
+        정렬을 두는 이유는 조회 결과가 실행마다 흔들리지 않게 하기 위함이다 — 화면이 같은
+        그래프를 열 때마다 다른 순서를 받으면 노드 배치가 이유 없이 달라진다.
+        """
+        rows = self._conn.execute(
+            "SELECT src, dst, type, weight FROM edges ORDER BY type, src, dst"
+        ).fetchall()
+        for row in rows:
+            yield GraphEdge(src=row[0], dst=row[1], type=EdgeType(row[2]), weight=row[3])
 
     def degree_ranking(self) -> list[tuple[str, int]]:
         rows = self._conn.execute(

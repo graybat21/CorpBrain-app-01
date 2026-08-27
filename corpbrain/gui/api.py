@@ -279,6 +279,7 @@ class GuiApp:
             "/api/scan/cancel": {"POST": self._scan_cancel},
             "/api/wiki": {"GET": self._wiki_tree},
             "/api/wiki/document": {"GET": self._wiki_document},
+            "/api/graph": {"GET": self._graph},
         }
 
     def handle(
@@ -435,6 +436,78 @@ class GuiApp:
             # 안내 문장이 되고, 버그면 여기서 다시 올라가 500이 된다.
             "failure": _section(_reraise(failure)) if failure is not None else None,
         }
+
+    # --- 지식그래프 (§4.3.1) ---------------------------------------------------------
+
+    def _graph(self, request: Request) -> Response:
+        """전체 노드와 엣지 (§4.3.1).
+
+        노드는 기존 계약으로 얻는다 — 엣지만 `iter_edges()`가 필요했고, 그래서 계약이
+        10 → 11멤버가 됐다.
+
+        **`degree_ranking()`은 `Document` 노드만 준다** (v0.6 §4.7 `--central`이 문서 목록이라
+        그렇게 정의됐다). 스펙 §4.3.1은 그것이 「전 노드 id를 준다」고 적었으나 사실이 아니며,
+        그대로 믿고 짜면 `Entity`·`Tag` 노드가 통째로 빠진 그래프가 그려진다(실측 확인).
+        전 노드는 **`degree_ranking()`의 문서 ∪ 엣지 끝점**으로 얻는다 — `Entity`·`Tag`
+        노드는 문서가 그것을 가리켜야만 존재하므로 반드시 어떤 엣지의 끝점이고, 엣지가 하나도
+        없는 고립 문서는 `degree_ranking()`이 담는다. 두 집합의 합이 곧 전 노드다.
+
+        계약을 더 넓히지 않는다 — 이 길이 이미 있으므로 12번째 멤버를 만들 이유가 없다.
+
+        **규모 상한·필터·차수 추림을 두지 않는다** — 4종 노드를 제한 없이 전부 그리며,
+        대규모에서 느려지는 것은 §5가 명시한 알려진 한계이자 issue #58로 분리돼 있다.
+        여기서 조용히 잘라 내면 화면이 「이게 전부」라고 말하면서 아닌 것을 보여 준다.
+        """
+        path = graph_path_for(self.out_dir)
+        if not path.exists():
+            raise PreconditionError(
+                "아직 스캔하지 않았습니다 — 먼저 스캔하면 지식그래프가 채워집니다."
+            )
+        store = SqliteGraphStore(path, read_only=True)
+        try:
+            edges = list(store.iter_edges())
+            node_ids = {node_id for node_id, _degree in store.degree_ranking()}
+            for edge in edges:
+                node_ids.add(edge.src)
+                node_ids.add(edge.dst)
+            nodes = store.nodes_of(sorted(node_ids))
+            stats = store.stats()
+        finally:
+            store.close()
+        # 차수는 **엣지에서 센다** — `degree_ranking()`은 문서만 담아 `Entity`·`Tag`가 전부
+        # 0이 되고, 화면이 노드 크기를 그것으로 정하므로 허브 태그가 가장 작게 그려진다.
+        # 문서의 값은 어차피 같다(둘 다 닿는 엣지 수).
+        degrees: dict[str, int] = {node_id: 0 for node_id in node_ids}
+        for edge in edges:
+            degrees[edge.src] = degrees.get(edge.src, 0) + 1
+            degrees[edge.dst] = degrees.get(edge.dst, 0) + 1
+        return json_response(
+            {
+                "stats": _stats_dict(stats),
+                "nodes": [
+                    {
+                        # 노드 종류는 코어 `NodeType` 값을 **그대로** 쓴다 — 프론트가 자기
+                        # 리터럴을 가지면 어휘가 갈린다 (§4.11).
+                        "id": node.id,
+                        "type": str(node.type),
+                        "label": node.label,
+                        "degree": degrees.get(node.id, 0),
+                    }
+                    for node in sorted(nodes.values(), key=lambda node: node.id)
+                ],
+                "edges": [
+                    {
+                        # 엣지 종류도 `EdgeType` 값 그대로 — `graph --stats` 출력·DB의 type
+                        # 컬럼·`--expand-edges` 플래그와 한 문자열이어야 한다 (§4.11).
+                        "src": edge.src,
+                        "dst": edge.dst,
+                        "type": str(edge.type),
+                        "weight": edge.weight,
+                    }
+                    for edge in edges
+                ],
+            }
+        )
 
     # --- 위키 (§4.6 · §4.6.2) -------------------------------------------------------
 

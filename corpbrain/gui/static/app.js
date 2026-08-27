@@ -23,7 +23,6 @@ const DEFAULT_VIEW = 'dashboard';
 
 /** 아직 구현되지 않은 화면의 빈 상태 (§5 — 탭을 잠그거나 강제 이동시키지 않는다). */
 const PENDING_VIEWS = {
-  graph: '지식그래프 화면은 다음 슬라이스에서 붙습니다.',
   search: '검색 화면은 다음 슬라이스에서 붙습니다.',
   settings: '설정 화면은 다음 슬라이스에서 붙습니다.',
 };
@@ -846,6 +845,193 @@ async function renderWiki(content, generation, params) {
   detail.appendChild(documentCard(doc));
 }
 
+/* --- 지식그래프 (§4.3.1 · §4.11 · §5) ------------------------------------------- */
+
+/**
+ * 노드 종류별 색 — **계승한 디자인 토큰만** 쓴다 (§4.10.5).
+ *
+ * 캔버스는 CSS 변수를 직접 못 쓰므로 이름만 들고 있다가 그릴 때 한 번 푼다. 새 색을 여기
+ * 하드코딩하면 토큰 밖의 값이 생기고, minimalist 가 대비비를 재서 올린 비용이 무효가 된다.
+ */
+const NODE_COLOR_VARS = {
+  Document: '--accent-blue',
+  Entity: '--accent-purple',
+  Tag: '--accent-emerald',
+};
+
+function cssVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+/**
+ * 결정적 레이아웃 — 종류별 동심원.
+ *
+ * 물리 시뮬레이션을 쓰지 않는다. 같은 그래프가 열 때마다 다르게 배치되면 「이 문서가 어디
+ * 있었더라」가 성립하지 않고, 규모가 커질수록 프레임 예산이 먼저 무너진다(§5의 알려진 한계를
+ * 더 나쁘게 만든다). 각도는 노드 id 순서로 결정되므로 두 번 열어도 같은 그림이다.
+ */
+function layoutNodes(nodes, width, height) {
+  const byType = { Document: [], Entity: [], Tag: [] };
+  for (const node of nodes) (byType[node.type] || byType.Document).push(node);
+  const cx = width / 2;
+  const cy = height / 2;
+  const unit = Math.min(width, height) / 2 - 28;
+  const rings = [
+    { type: 'Document', radius: unit * 0.42 },
+    { type: 'Entity', radius: unit * 0.78 },
+    { type: 'Tag', radius: unit * 1.0 },
+  ];
+  const placed = new Map();
+  for (const ring of rings) {
+    const list = byType[ring.type];
+    list.forEach((node, index) => {
+      const angle = (index / Math.max(1, list.length)) * Math.PI * 2 - Math.PI / 2;
+      placed.set(node.id, {
+        node,
+        x: cx + Math.cos(angle) * ring.radius,
+        y: cy + Math.sin(angle) * ring.radius,
+      });
+    });
+  }
+  return placed;
+}
+
+function drawGraph(canvas, data, selected) {
+  const ratio = window.devicePixelRatio || 1;
+  const width = canvas.clientWidth;
+  const height = canvas.clientHeight;
+  canvas.width = width * ratio;
+  canvas.height = height * ratio;
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+
+  const colors = Object.fromEntries(
+    Object.entries(NODE_COLOR_VARS).map(([type, name]) => [type, cssVar(name)])
+  );
+  const placed = layoutNodes(data.nodes, width, height);
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = 'rgba(17, 17, 17, 0.10)';
+  for (const edge of data.edges) {
+    const from = placed.get(edge.src);
+    const to = placed.get(edge.dst);
+    if (!from || !to) continue;
+    const touches = selected && (edge.src === selected || edge.dst === selected);
+    ctx.strokeStyle = touches ? 'rgba(46, 106, 147, 0.55)' : 'rgba(17, 17, 17, 0.08)';
+    ctx.beginPath();
+    ctx.moveTo(from.x, from.y);
+    ctx.lineTo(to.x, to.y);
+    ctx.stroke();
+  }
+  for (const spot of placed.values()) {
+    const radius = spot.node.id === selected ? 7 : Math.min(6, 3 + spot.node.degree * 0.35);
+    ctx.beginPath();
+    ctx.arc(spot.x, spot.y, radius, 0, Math.PI * 2);
+    ctx.fillStyle = colors[spot.node.type] || colors.Document;
+    ctx.fill();
+    if (spot.node.id === selected) {
+      ctx.strokeStyle = '#111111';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.lineWidth = 1;
+    }
+  }
+  return placed;
+}
+
+function graphLegend() {
+  const box = el('div', 'legend');
+  for (const [type, name] of Object.entries(NODE_COLOR_VARS)) {
+    const item = el('div', 'legend-item');
+    const dot = el('span', 'legend-dot');
+    dot.style.background = `var(${name})`;
+    item.appendChild(dot);
+    item.appendChild(el('span', null, type));
+    box.appendChild(item);
+  }
+  return box;
+}
+
+async function renderGraph(content, generation, params) {
+  content.appendChild(el('p', 'metric-caption', '불러오는 중…'));
+  const data = await getJson('/api/graph');
+  if (generation !== renderGeneration) return;
+  clear(content);
+  if (isError(data)) {
+    content.appendChild(
+      emptyState({
+        title: '아직 그래프가 없습니다',
+        body: data.message,
+        actionLabel: '플랜 & 스캔으로',
+        actionView: 'scan',
+      })
+    );
+    return;
+  }
+
+  const selected = params.get('node') || '';
+  const split = el('div', 'split');
+
+  const listCard = el('div', 'card node-list');
+  listCard.appendChild(el('div', 'card-title', `노드 ${data.stats.nodes} / 엣지 ${data.stats.edges}`));
+  for (const node of [...data.nodes].sort((a, b) => b.degree - a.degree || a.id.localeCompare(b.id))) {
+    const item = el('button', 'tree-item', node.label || node.id);
+    item.type = 'button';
+    item.title = node.id;
+    if (node.id === selected) item.setAttribute('aria-current', 'true');
+    item.appendChild(el('span', 'node-degree', ` · ${node.type} ${node.degree}`));
+    item.addEventListener('click', () => navigateTo('graph', { node: node.id }));
+    listCard.appendChild(item);
+  }
+
+  const canvasCard = el('div', 'card graph-canvas-wrap');
+  const canvas = el('canvas', 'graph-canvas');
+  // 캔버스도 키보드로 닿아야 한다 — 클릭으로만 되는 조작을 남기지 않는다 (§4.10.5).
+  canvas.tabIndex = 0;
+  canvas.setAttribute('role', 'img');
+  canvas.setAttribute(
+    'aria-label',
+    `지식그래프 — 노드 ${data.stats.nodes}개, 엣지 ${data.stats.edges}개. 왼쪽 목록에서 노드를 고르세요.`
+  );
+  canvasCard.appendChild(canvas);
+  canvasCard.appendChild(graphLegend());
+  const detail = el('div');
+  canvasCard.appendChild(detail);
+
+  split.appendChild(listCard);
+  split.appendChild(canvasCard);
+  content.appendChild(split);
+
+  let placed = drawGraph(canvas, data, selected);
+  const redraw = () => { placed = drawGraph(canvas, data, selected); };
+  window.addEventListener('resize', redraw);
+  canvas.addEventListener('click', (event) => {
+    const box = canvas.getBoundingClientRect();
+    const x = event.clientX - box.left;
+    const y = event.clientY - box.top;
+    let hit = null;
+    for (const spot of placed.values()) {
+      if ((spot.x - x) ** 2 + (spot.y - y) ** 2 <= 100) { hit = spot.node; break; }
+    }
+    if (hit) navigateTo('graph', { node: hit.id });
+  });
+
+  if (selected) {
+    const node = data.nodes.find((entry) => entry.id === selected);
+    if (node) {
+      detail.appendChild(el('div', 'card-title', node.label || node.id));
+      detail.appendChild(el('p', 'metric-caption', `${node.type} · 연결 ${node.degree}`));
+      if (node.type === 'Document') {
+        // 문서 노드의 id 가 곧 `doc_id` 다 — 위키 화면과 **같은 키**를 쓴다 (§4.6.2).
+        const open = el('button', 'btn btn-primary', '위키에서 보기');
+        open.type = 'button';
+        open.addEventListener('click', () => navigateTo('wiki', { doc: node.id }));
+        detail.appendChild(open);
+      }
+    }
+  }
+}
+
 function renderPending(content, view) {
   content.appendChild(
     emptyState({
@@ -883,6 +1069,8 @@ async function render() {
     await renderScan(content, generation);
   } else if (view === 'wiki') {
     await renderWiki(content, generation, params);
+  } else if (view === 'graph') {
+    await renderGraph(content, generation, params);
   } else {
     renderPending(content, view);
   }
