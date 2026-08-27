@@ -392,6 +392,15 @@ const SCAN_FIELDS_ADVANCED = [
 ];
 
 /**
+ * 다음 렌더에서 한 번 보여 줄 안내 — **렌더를 넘겨야 하는** 메시지가 여기 담긴다.
+ *
+ * 409(이미 진행 중)처럼 「상태를 다시 읽어야 하는데 이유도 보여야 하는」 경우가 있다.
+ * 화면 안에서만 그리면 곧바로 이어지는 `render()` 가 그것을 지워, 사용자는 아무 일도
+ * 일어나지 않은 것처럼 본다. 렌더 밖에 두고 `renderScan` 이 한 번 소비한다.
+ */
+let scanNotice = null;
+
+/**
  * 폼 입력값 — 화면을 오갈 때 유지된다.
  *
  * 브라우저 `localStorage` 를 쓰지 않는다 (§4.8) — 브라우저를 바꾸거나 시크릿 창에서 열면
@@ -656,7 +665,12 @@ async function renderScan(content, generation) {
     notice.appendChild(box);
   };
 
-  if (state.failure) showNotice(state.failure.message, 'fail');
+  if (scanNotice) {
+    showNotice(scanNotice.message, scanNotice.kind);
+    scanNotice = null;
+  } else if (state.failure) {
+    showNotice(state.failure.message, 'fail');
+  }
 
   const onMeasure = async () => {
     showNotice('계량 중…');
@@ -671,8 +685,9 @@ async function renderScan(content, generation) {
   const onRun = async () => {
     const body = await postJson('/api/scan', scanPayload());
     if (isError(body)) {
-      // 409(이미 진행 중)도 여기로 온다 — 화면은 이유를 그대로 보여 주고 상태를 다시 읽는다.
-      showNotice(body.message, 'fail');
+      // 409(이미 진행 중)도 여기로 온다. 상태는 다시 읽어야 하고(다른 탭에서 시작된 스캔을
+      // 이 화면이 아직 모를 수 있다) 이유도 보여야 하므로, 안내를 렌더 밖에 남긴다.
+      scanNotice = { message: body.message, kind: 'fail' };
     }
     render();
   };
