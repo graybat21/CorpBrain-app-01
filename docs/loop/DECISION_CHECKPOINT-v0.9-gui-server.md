@@ -7,7 +7,21 @@
 위임한 것이므로 **MINOR** 로 센다.
 
 CORE: 0
-MINOR: 0
+MINOR: 2
 
 ## 기록
 
+### M1 — 공유 설정 쓰기 헬퍼를 신규 모듈 `corpbrain/core/configstore.py`에 둔다 (MINOR · U1)
+
+스펙 §4.8은 「그 쓰기 절차를 `gui`·`cloud_consent` 두 섹션이 공유하는 헬퍼 하나로 뽑아 쓴다」
+까지만 정하고 **어디에 둘지는 정하지 않았다.** `consent.py`에 남기면 GUI 설정이 「동의」라는
+이름의 모듈을 import 하게 되어 모듈명이 내용과 갈린다. 파일 경로 상수(`CONFIG_DIR_NAME`·
+`CONFIG_FILENAME`·`default_config_path()`)도 함께 옮기고 `consent.py`가 재수출해, 기존
+호출부(`corpbrain/core/__init__.py`·테스트 4파일)는 한 줄도 고치지 않는다.
+
+### M2 — 공유 헬퍼가 올릴 예외 클래스를 인자(`error_type`)로 받는다 (MINOR · U1)
+
+`update_section()`이 `ConfigStoreError`를 올리게 두면 `pytest.raises(ConsentStoreError)`로
+단언하는 기존 테스트 4건이 깨진다(상위 클래스는 하위 클래스 단언을 만족시키지 못한다). 동의
+경로가 v0.5부터 공표해 온 예외 종류를 그대로 유지하려고 `error_type` 기본값 인자를 둔다 —
+`ConsentStoreError`는 `ConfigStoreError`의 하위이므로 계층은 하나로 유지된다.
