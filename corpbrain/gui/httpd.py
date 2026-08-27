@@ -69,8 +69,7 @@ class _Handler(BaseHTTPRequestHandler):
         self._respond(self._app.handle("GET", self.path, dict(self.headers)))
 
     def do_POST(self) -> None:  # BaseHTTPRequestHandler 규약 이름이다
-        length = int(self.headers.get("Content-Length") or 0)
-        body = self.rfile.read(length) if length > 0 else b""
+        body = self.rfile.read(_content_length(self.headers.get("Content-Length")))
         self._respond(self._app.handle("POST", self.path, dict(self.headers), body))
 
     def do_DELETE(self) -> None:  # BaseHTTPRequestHandler 규약 이름이다
@@ -120,6 +119,23 @@ class _Handler(BaseHTTPRequestHandler):
             while True:
                 payload = subscriber.get(timeout=KEEPALIVE_INTERVAL)
                 yield SSE_KEEPALIVE if payload is None else format_sse(payload)
+
+
+def _content_length(raw: str | None) -> int:
+    """`Content-Length` 헤더를 길이로 바꾼다 — 해석할 수 없으면 0이다.
+
+    `int()`를 그대로 쓰면 `Content-Length: abc` 하나가 `ValueError`로 핸들러를 죽인다(응답
+    없이 연결이 끊긴다). 잘못된 헤더는 요청의 잘못이지 서버의 버그가 아니므로, 본문을 빈
+    바이트로 보고 라우팅까지 보내 정상적인 4xx가 나가게 한다.
+
+    음수도 0으로 접는다 — `rfile.read(-1)`은 EOF까지 읽어 요청 스레드가 매달린다.
+    """
+    if raw is None:
+        return 0
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 0
 
 
 def create_server(out_dir: Path) -> GuiServer:

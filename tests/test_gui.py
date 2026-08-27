@@ -146,3 +146,22 @@ def test_dashboard_passes_core_defaults_to_diagnose(
     assert seen["embed_model"] == DEFAULT_EMBED_MODEL
     assert seen["ollama_url"] == DEFAULT_OLLAMA_URL
     assert body["doctor"]["model"] == DEFAULT_MODEL
+
+
+# --- 소켓 계층의 헤더 해석 (PR ① 자기 검토에서 발견) --------------------------------
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [(None, 0), ("", 0), ("12", 12), ("abc", 0), ("-5", 0), ("1e3", 0), (" 7 ", 7)],
+)
+def test_content_length_never_raises_or_goes_negative(raw: str | None, expected: int) -> None:
+    """`Content-Length` 해석이 요청 하나로 핸들러를 죽이지 않는다.
+
+    `int()`를 그대로 쓰면 `Content-Length: abc` 가 `ValueError` 로 응답 없이 연결을 끊는다.
+    음수는 `rfile.read(-1)` 이 EOF 까지 읽어 요청 스레드가 매달린다. 둘 다 요청의 잘못이지
+    서버의 버그가 아니므로 본문을 빈 바이트로 보고 라우팅까지 보낸다.
+    """
+    from corpbrain.gui.httpd import _content_length
+
+    assert _content_length(raw) == expected
