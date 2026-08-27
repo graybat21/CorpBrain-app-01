@@ -7,7 +7,7 @@
 위임한 것이므로 **MINOR** 로 센다.
 
 CORE: 1
-MINOR: 5
+MINOR: 8
 
 ## 기록
 
@@ -65,3 +65,24 @@ MINOR: 5
 쿠키 값이 무엇인지는 정하지 않았다. 기동 시 `secrets.token_urlsafe(32)`로 두 값을 따로
 만든다 — 프론트엔드가 `history.replaceState`로 URL을 지운 뒤, 브라우저 히스토리·리퍼러에
 남은 부트스트랩 토큰이 세션 쿠키 값과 같지 않다. 쿠키 이름은 `corpbrain_session`이다.
+
+### M6 — SSE 첫 프레임은 `{"kind":"snapshot", "running":…, "snapshot":…}` 이다 (MINOR · U6)
+
+스펙 §4.3은 「스냅샷도 `{"kind": "snapshot", …}`으로 감싸 모든 프레임이 `kind`를 갖게
+한다」까지만 정했다. `StatusSnapshot` 필드를 최상위에 펴지 않고 `snapshot` 키 아래 넣는다 —
+그래야 스냅샷이 **없는 상태**(이 프로세스에서 스캔이 한 번도 돌지 않음)를 `null`로 표현할 수
+있다. 기본 `StatusSnapshot()`을 대신 보내면 `state="starting"` 이라 화면이 「곧 시작한다」로
+읽는다. `running`은 서버가 워커의 생존을 아는 자기 값이며 PR ②의 409 판정이 같은 값을 쓴다.
+
+### M7 — 정적 자산의 Content-Type을 `mimetypes` 대신 확장자 표로 정한다 (MINOR · U7)
+
+`mimetypes`는 OS 레지스트리에 의존해 환경마다 갈린다 — 특히 Windows에서 `.js`가
+`text/plain`으로 나와 브라우저가 스크립트를 거부하는 사고가 흔하다. 우리가 내는 자산은 몇
+종뿐이므로 `assets.py`에 표를 둔다. 자산 경로는 `/assets/<파일명>` 한 층이고 하위 디렉터리를
+두지 않는다 — 경로 조립을 하지 않으므로 트래버설이 원천적으로 성립하지 않는다.
+
+### M8 — SSE 유휴 연결에 15초 주기의 주석 keepalive를 보낸다 (MINOR · U7)
+
+스펙에 없는 값이다. `EventSource`는 SSE 주석(`: …`)을 무시하므로 프론트에 판별 부담이 없고,
+유휴 연결이 끊겨도 자동 재연결되지만 그때마다 스냅샷 프레임을 다시 주고받게 된다. 브라우저·
+프록시의 기본 유휴 한계보다 넉넉히 짧은 값을 골랐다.

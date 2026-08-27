@@ -25,6 +25,7 @@ from corpbrain.core.environment import DoctorReport, diagnose
 from corpbrain.core.errors import CorpBrainError
 from corpbrain.core.graphstore import SqliteGraphStore, graph_path_for
 from corpbrain.core.models import GraphStats
+from corpbrain.gui.assets import AssetNotFound, content_type_for, read_asset
 from corpbrain.gui.sse import EventStream
 
 __all__ = [
@@ -52,6 +53,10 @@ SESSION_COOKIE = "corpbrain_session"
 #: 가로채 처리한다(§3 항목4: `Response.body`를 이터레이터까지 받도록 넓히지 않는다).
 #: 인증은 그 계층도 `GuiApp.authorize()`를 부르므로 경로가 갈리지 않는다 (§4.2).
 EVENTS_PATH = "/api/events"
+#: 정적 자산 경로 접두사. 하위 디렉터리를 두지 않는다 — 경로 조립이 없으면 트래버설도 없다.
+ASSETS_PREFIX = "/assets/"
+#: 기동 시 여는 첫 화면.
+INDEX_ASSET = "index.html"
 
 #: 상태를 바꾸는 메서드 — `Origin` 헤더를 **필수**로 요구하는 쪽 (§4.2).
 UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
@@ -276,6 +281,8 @@ class GuiApp:
         return response
 
     def _dispatch(self, request: Request) -> Response:
+        if request.path == "/" or request.path.startswith(ASSETS_PREFIX):
+            return self._asset(request)
         by_method = self._routes().get(request.path)
         if by_method is None:
             return error_response(
@@ -293,6 +300,28 @@ class GuiApp:
         return handler(request)
 
     # --- 엔드포인트 --------------------------------------------------------------
+
+    def _asset(self, request: Request) -> Response:
+        """정적 자산 — 프론트엔드는 빌드 스텝이 없어 파일이 그대로 나간다 (§4.10)."""
+        if request.method != "GET":
+            return error_response(
+                "MethodNotAllowed",
+                f"{request.method}는 이 경로에서 허용되지 않습니다 (허용: GET).",
+                status=405,
+                headers=(("Allow", "GET"),),
+            )
+        name = (
+            INDEX_ASSET
+            if request.path == "/"
+            else request.path[len(ASSETS_PREFIX) :]
+        )
+        try:
+            body = read_asset(name)
+        except AssetNotFound:
+            return error_response(
+                "NotFound", f"그런 자산이 없습니다: {name}", status=404
+            )
+        return Response(status=200, body=body, content_type=content_type_for(name))
 
     def _dashboard(self, request: Request) -> Response:
         """대시보드 — Doctor 카드와 그래프 지표 (§4.3).

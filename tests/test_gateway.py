@@ -426,6 +426,13 @@ def _imported_module_names(tree: ast.Module) -> set[str]:
 #: 축이 다르므로 장치도 다르다.
 _INBOUND_ALLOWANCES: dict[str, frozenset[str]] = {
     "gui/api.py": frozenset({"http.cookies", "http.cookies.SimpleCookie"}),
+    "gui/httpd.py": frozenset(
+        {
+            "http.server",
+            "http.server.BaseHTTPRequestHandler",
+            "http.server.ThreadingHTTPServer",
+        }
+    ),
 }
 
 
