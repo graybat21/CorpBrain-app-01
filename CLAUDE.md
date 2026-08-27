@@ -77,7 +77,9 @@ CorpBrain — 100% 로컬 구동형 AI 지식 관리 솔루션. 현재 **그린�
 ## v0.9 GUI 불변식
 
 착수 예정인 v0.9 GUI 슬라이스의 계약은 @static/docs/specs/features/corpbrain-v0.9-gui.md 에
-있다. 구현 시 유지할 것:
+있다. **구현 순서·PR 절단·단계별 완료 판정은 @docs/plans/corpbrain-v0.9-gui.md 를 따른다** —
+2 PR 수직 절단(인프라+대시보드 → 화면 5개), 코어 변경은 첫 호출자와 같은 커밋, DoD 12항목의
+PR별 배분이 거기에 있다. 구현 시 유지할 것:
 
 - 코어의 취소는 **순수 술어**(`should_cancel: Callable[[], bool]`)로 받는다. `threading.Event`
   같은 동시성 자료형을 코어 시그니처에 박지 않는다 — 코어에는 `threading`·`asyncio`·`signal`
