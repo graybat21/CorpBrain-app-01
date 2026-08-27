@@ -85,6 +85,29 @@ function isError(section) {
   return Boolean(section) && typeof section.error === 'string';
 }
 
+/**
+ * 진행 스트림에 붙는다 (§4.3).
+ *
+ * `EventSource`는 커스텀 헤더를 붙일 수 없다 — 인증이 세션 쿠키인 이유이며, 쿠키는
+ * 자동으로 함께 나가므로 여기에 인증 코드가 없다 (§4.2).
+ *
+ * 끊기면 브라우저가 알아서 재연결하고, 서버는 접속 즉시 현재 스냅샷을 한 번 보낸다.
+ * 그래서 클라이언트가 놓친 이벤트를 되감을 필요가 없다 — 리플레이 버퍼가 없는 이유다.
+ */
+function connectEvents(onFrame) {
+  const source = new EventSource('/api/events');
+  source.addEventListener('message', (event) => {
+    let payload;
+    try {
+      payload = JSON.parse(event.data);
+    } catch (_err) {
+      return; // keepalive 주석은 여기까지 오지 않지만, 깨진 프레임에 화면이 죽지 않게 둔다
+    }
+    onFrame(payload);
+  });
+  return source;
+}
+
 /* --- DOM 헬퍼 ----------------------------------------------------------------- */
 
 function el(tag, className, text) {
@@ -148,9 +171,74 @@ async function renderDashboard(content) {
   }
   setWorkspacePath(body.out_dir);
   const grid = el('div', 'bento');
+  const runCard = el('div', 'card');
+  grid.appendChild(runCard);
   grid.appendChild(doctorCard(body.doctor));
   grid.appendChild(graphCard(body.graph, body.out_dir));
   content.appendChild(grid);
+  renderRunCard(runCard, null);
+  openStream((payload) => renderRunCard(runCard, payload));
+}
+
+/** 현재 화면이 쥐고 있는 SSE 연결. 화면을 떠날 때 반드시 닫는다. */
+let activeStream = null;
+
+function closeStream() {
+  if (activeStream !== null) {
+    activeStream.close();
+    activeStream = null;
+  }
+}
+
+function openStream(onFrame) {
+  closeStream();
+  activeStream = connectEvents(onFrame);
+}
+
+/** 마지막으로 받은 스냅샷 — 이벤트 프레임은 스냅샷을 통째로 주지 않으므로 함께 들고 있는다. */
+let lastSnapshot = null;
+let lastRunning = false;
+
+function renderRunCard(card, payload) {
+  if (payload !== null) {
+    if (payload.kind === 'snapshot') {
+      lastSnapshot = payload.snapshot;
+      lastRunning = payload.running;
+    } else {
+      // 이벤트 프레임은 「무엇이 일어났는가」다. 집계는 서버가 접어 둔 스냅샷이 소유하므로
+      // 여기서는 지금 무엇을 하고 있는지만 갱신한다 — 프론트에 reduce()를 두 벌로 두지 않는다.
+      lastRunning = payload.kind !== 'run_finished';
+      lastSnapshot = Object.assign({}, lastSnapshot || {}, describeEvent(payload));
+    }
+  }
+  clear(card);
+  card.appendChild(el('div', 'card-title', '실행 상태'));
+  if (lastSnapshot === null) {
+    card.appendChild(el('div', 'metric-number', '대기 중'));
+    card.appendChild(el('p', 'metric-caption', '진행 중인 스캔이 없습니다.'));
+    return;
+  }
+  const done = (lastSnapshot.generated || 0) + (lastSnapshot.skipped || 0);
+  card.appendChild(el('div', 'metric-number', `${done} / ${lastSnapshot.total || 0}`));
+  card.appendChild(el('p', 'metric-caption', lastRunning ? '진행 중' : '완료'));
+  card.appendChild(countRow('생성', lastSnapshot.generated || 0));
+  card.appendChild(countRow('스킵', lastSnapshot.skipped || 0));
+  if (lastSnapshot.graph_stage) {
+    card.appendChild(countRow('그래프 단계', lastSnapshot.graph_stage));
+  }
+  if (lastSnapshot.current_file) {
+    card.appendChild(el('p', 'metric-caption', lastSnapshot.current_file));
+  }
+}
+
+/** 이벤트 하나에서 화면이 바로 쓰는 필드만 뽑는다. */
+function describeEvent(payload) {
+  const patch = {};
+  if (typeof payload.path === 'string') patch.current_file = payload.path;
+  if (payload.kind === 'graph_started') patch.graph_stage = 'building';
+  if (payload.kind === 'related_injected') patch.graph_stage = 'injecting';
+  if (payload.kind === 'graph_finished') patch.graph_stage = 'done';
+  return patch;
 }
 
 function badge(kind, label) {
@@ -193,8 +281,13 @@ function graphCard(graph, outDir) {
   const card = el('div', 'card');
   card.appendChild(el('div', 'card-title', '지식그래프'));
   if (isError(graph)) {
-    // 첫 실행에 그래프 DB가 없는 것은 정상이다 — 카드가 자기 빈 상태를 그린다 (§5).
+    // 첫 실행에 그래프 DB가 없는 것은 정상이다 — 카드가 자기 빈 상태를 그리고 스캔 화면으로
+    // 보낸다. 탭을 잠그거나 강제 이동시키지 않는다 (§5).
     card.appendChild(el('p', 'metric-caption', graph.message));
+    const button = el('button', 'btn', '플랜 & 스캔으로');
+    button.type = 'button';
+    button.addEventListener('click', () => navigate('scan'));
+    card.appendChild(button);
     return card;
   }
   card.appendChild(el('div', 'metric-number', `${graph.nodes} / ${graph.edges}`));
@@ -244,6 +337,7 @@ async function render() {
 
   const content = document.getElementById('content');
   clear(content);
+  closeStream();
   if (view === 'dashboard') {
     await renderDashboard(content);
   } else {
