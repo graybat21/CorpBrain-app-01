@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import json
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -74,6 +75,15 @@ def _write_pptx(path: Path, slides: list[list[str]]) -> None:
             )
             box.text_frame.text = text
     presentation.save(str(path))
+
+
+def _corrupt_ooxml_part(source: Path, target: Path, member: str, payload: bytes) -> None:
+    """zip 구조는 멀쩡한 채 내부 XML 파트 하나만 깨뜨린다 — 실사용에서 흔한 손상 모양이다."""
+    with zipfile.ZipFile(source) as archive, zipfile.ZipFile(target, "w") as out:
+        for item in archive.infolist():
+            data = payload if item.filename == member else archive.read(item.filename)
+            out.writestr(item, data)
+
 
 
 def _ok_gateway(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -226,3 +236,57 @@ def test_office_extraction_respects_max_chars(
     # 상한 자체가 무의미해지지 않았음을 함께 본다 — 절단이 실제로 일어났다.
     assert all(count > 0 for count in marker_counts)
     assert sum(prompt.count("X") for prompt in prompts) < 40 * 200
+
+
+def test_a_broken_office_file_does_not_abort_the_whole_scan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """DoD 5의 본질 — 손상된 파일 하나가 **스캔 전체를 죽이지 않는다** (v0.1 §5 계승).
+
+    기존 손상 픽스처는 zip이 아닌 쓰레기 바이트였고, 그것은 `BadZipFile` 하나만 밟는다.
+    실사용에서 훨씬 흔한 손상은 컨테이너는 열리는데 안쪽 XML이 잘린 경우이며, 그때
+    `openpyxl`은 `xml.etree.ElementTree.ParseError`, `python-pptx`는
+    `lxml.etree.XMLSyntaxError`를 올린다 — 둘 다 `SyntaxError` 하위라 최초 구현이 열거해
+    둔 예외 목록을 그대로 통과해 코어 밖으로 탈출했다. 그러면 CLI에 넓은 catch가 없어
+    사용자는 traceback과 비-0 종료를 보고, 같은 폴더의 멀쩡한 문서는 처리되지 않는다.
+
+    차트시트가 든 통합문서(`openpyxl` 내부 `AttributeError`)도 함께 넣는다 — 손상 파일이
+    아니라 **정상 엑셀 기능**인데도 같은 방식으로 새던 경로다.
+    """
+    _ok_gateway(monkeypatch)
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+
+    healthy_xlsx = tmp_path / "seed.xlsx"
+    _write_xlsx(healthy_xlsx, {"시트": [["값"]]})
+    _corrupt_ooxml_part(
+        healthy_xlsx, corpus / "손상시트.xlsx", "xl/worksheets/sheet1.xml", b"<worksheet><BROKEN"
+    )
+
+    healthy_pptx = tmp_path / "seed.pptx"
+    _write_pptx(healthy_pptx, [["본문"]])
+    _corrupt_ooxml_part(
+        healthy_pptx, corpus / "손상슬라이드.pptx", "ppt/slides/slide1.xml", b"<p:sld><BROKEN"
+    )
+
+    chart_book = Workbook()
+    chart_book.active["A1"] = "값"
+    chart_book.create_chartsheet("차트")
+    chart_book.save(str(corpus / "차트시트.xlsx"))
+
+    _write_xlsx(corpus / "정상.xlsx", {"시트": [["정상 내용"]]})
+    (corpus / "정상.txt").write_text("평문 문서", encoding="utf-8")
+    out_dir = tmp_path / "wiki"
+
+    result = run_scan(ScanConfig(folder=corpus, out_dir=out_dir, force_gates=True))
+
+    skipped = {skip.path.name: skip.reason.value for skip in result.skipped}
+    assert skipped == {
+        "손상시트.xlsx": "extraction_failed",
+        "손상슬라이드.pptx": "extraction_failed",
+        "차트시트.xlsx": "extraction_failed",
+    }
+    # 부분 성공 — 멀쩡한 문서는 그대로 처리된다.
+    assert {wiki.source_path.name for wiki in result.generated} == {"정상.xlsx", "정상.txt"}
+    assert (out_dir / "정상.xlsx.md").exists()
+    assert (out_dir / "정상.txt.md").exists()

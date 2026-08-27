@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import zipfile
 from datetime import date, datetime
 from pathlib import Path
 
@@ -17,7 +18,7 @@ from corpbrain.core.config import SUPPORTED_EXTENSIONS
 from corpbrain.core.extract import (
     EXTRACTORS,
     ExtractionError,
-    _open_failure_detail,
+    _diagnose_open_failure,
     extract_text,
     prepare_summary_input,
 )
@@ -105,7 +106,7 @@ def test_ole_signature_yields_encrypted_or_legacy_detail(tmp_path: Path) -> None
     source = tmp_path / "locked.xlsx"
     source.write_bytes(OLE_SIGNATURE_BYTES + b"\x00" * 32)
 
-    detail = _open_failure_detail(source)
+    detail, _ = _diagnose_open_failure(source)
 
     assert "암호화되었거나 구형 이진 포맷" in detail
     assert str(source) in detail
@@ -116,7 +117,7 @@ def test_non_ole_file_yields_plain_open_failure_detail(tmp_path: Path) -> None:
     source = tmp_path / "broken.xlsx"
     source.write_bytes(b"PK\x03\x04not-a-real-zip")
 
-    detail = _open_failure_detail(source)
+    detail, _ = _diagnose_open_failure(source)
 
     assert "암호화되었거나 구형 이진 포맷" not in detail
     assert str(source) in detail
@@ -127,7 +128,7 @@ def test_ole_detail_names_the_actual_extension(tmp_path: Path) -> None:
     source = tmp_path / "macro.xlsm"
     source.write_bytes(OLE_SIGNATURE_BYTES)
 
-    assert "xlsm" in _open_failure_detail(source)
+    assert "xlsm" in _diagnose_open_failure(source)[0]
 
 
 def test_ole_probe_survives_an_unreadable_file(tmp_path: Path) -> None:
@@ -138,9 +139,11 @@ def test_ole_probe_survives_an_unreadable_file(tmp_path: Path) -> None:
     """
     missing = tmp_path / "gone.xlsx"
 
-    detail = _open_failure_detail(missing)
+    detail, access_error = _diagnose_open_failure(missing)
 
     assert "암호화되었거나 구형 이진 포맷" not in detail
+    # 접근 실패는 삼켜지지 않고 호출자에게 원인으로 넘겨진다 — 그래야 `permission_denied`가 산다.
+    assert isinstance(access_error, OSError)
 
 
 def test_office_formats_add_no_new_skip_reasons() -> None:
@@ -210,6 +213,20 @@ def _add_textbox(slide: object, text: str, *, top: int = 0) -> object:
     box = slide.shapes.add_textbox(Emu(0), Emu(top), Emu(1_000_000), Emu(500_000))
     box.text_frame.text = text
     return box
+
+
+
+def _corrupt_ooxml_part(source: Path, target: Path, member: str, payload: bytes) -> None:
+    """zip 구조는 멀쩡한 채 **내부 XML 파트 하나만** 깨뜨린다.
+
+    기존 손상 픽스처(`b"PK\\x03\\x04 not really a zip"`)는 zip 개봉 자체를 실패시켜
+    `BadZipFile` 경로만 밟는다. 실사용에서 훨씬 흔한 손상은 컨테이너는 열리는데 안쪽
+    XML이 잘린 경우이고, 그때 라이브러리는 전혀 다른 예외를 올린다.
+    """
+    with zipfile.ZipFile(source) as archive, zipfile.ZipFile(target, "w") as out:
+        for item in archive.infolist():
+            data = payload if item.filename == member else archive.read(item.filename)
+            out.writestr(item, data)
 
 
 
@@ -960,3 +977,100 @@ def test_unreadable_xlsx_is_skipped_as_permission_denied(tmp_path: Path) -> None
 
     assert prepared.skipped is not None
     assert prepared.skipped.reason is SkipReason.PERMISSION_DENIED
+
+
+# --- 제3자 파서가 올리는 «열거되지 않은» 예외 (코드리뷰 지적) ------------------------
+
+
+def test_corrupted_xlsx_xml_is_an_extraction_error_not_a_crash(tmp_path: Path) -> None:
+    """zip은 열리는데 시트 XML이 깨진 `.xlsx`도 `ExtractionError`로 흡수된다.
+
+    `openpyxl`은 이때 `xml.etree.ElementTree.ParseError`를 올린다. 그것은 `SyntaxError`
+    하위라 `ValueError`·`OSError`·`BadZipFile` 어디에도 걸리지 않는다 — 열거해 둔 예외
+    목록을 그대로 통과해 코어 밖으로 탈출하면 **그 파일 하나가 스캔 전체를 죽인다.**
+    """
+    healthy = tmp_path / "ok.xlsx"
+    _write_xlsx(healthy, {"시트": [["값"]]})
+    broken = tmp_path / "broken.xlsx"
+    _corrupt_ooxml_part(healthy, broken, "xl/worksheets/sheet1.xml", b"<worksheet><BROKEN")
+
+    with pytest.raises(ExtractionError):
+        extract_text(broken, MAX_CHARS)
+
+
+def test_corrupted_pptx_xml_is_an_extraction_error_not_a_crash(tmp_path: Path) -> None:
+    """슬라이드 파트가 깨진 `.pptx`도 마찬가지다 — `python-pptx`는 `lxml.etree.XMLSyntaxError`를 올린다."""
+    healthy = tmp_path / "ok.pptx"
+    presentation = Presentation()
+    _add_textbox(_blank_slide(presentation), "본문")
+    presentation.save(str(healthy))
+    broken = tmp_path / "broken.pptx"
+    _corrupt_ooxml_part(healthy, broken, "ppt/slides/slide1.xml", b"<p:sld><BROKEN")
+
+    with pytest.raises(ExtractionError):
+        extract_text(broken, MAX_CHARS)
+
+
+def test_chartsheet_workbook_is_an_extraction_error_not_a_crash(tmp_path: Path) -> None:
+    """차트시트가 든 통합문서도 흡수된다 — **손상 파일이 아니라 정상 엑셀 기능**이다.
+
+    `openpyxl` 3.1.5는 `read_only=True`로 차트시트를 열 때 라이브러리 내부에서
+    `AttributeError: 'list' object has no attribute 'find'`로 죽는다(실측). 열거 전략이
+    왜 부족한지 보여 주는 사례라 회귀 테스트로 남긴다 — 사용자가 만든 평범한 파일 하나에
+    스캔 전체가 멈추면 안 된다.
+    """
+    source = tmp_path / "chart.xlsx"
+    workbook = Workbook()
+    workbook.active["A1"] = "값"
+    workbook.create_chartsheet("차트")
+    workbook.save(str(source))
+
+    with pytest.raises(ExtractionError):
+        extract_text(source, MAX_CHARS)
+
+
+@needs_posix_permissions
+def test_unreadable_pptx_is_skipped_as_permission_denied(tmp_path: Path) -> None:
+    """읽을 수 없는 `.pptx`가 `extraction_failed`가 아니라 `permission_denied`가 된다.
+
+    `python-pptx`는 `zipfile.is_zipfile()`로 읽기 가능 여부를 확인하면서 `PermissionError`를
+    **삼키고** `__cause__`가 없는 `PackageNotFoundError`를 올린다. 그것을 그대로 `from exc`에
+    실으면 `prepare_summary_input()`의 `__cause__` 판정이 원인을 보지 못해 스킵 사유가
+    조용히 바뀐다. 같은 조건의 `.xlsx`·`.docx`·`.pdf`·`.txt`는 전부 `permission_denied`다.
+    """
+    source = tmp_path / "secret.pptx"
+    presentation = Presentation()
+    _add_textbox(_blank_slide(presentation), "기밀")
+    presentation.save(str(source))
+    source.chmod(0o000)
+
+    try:
+        prepared = prepare_summary_input(source, MAX_CHARS)
+    finally:
+        source.chmod(0o600)
+
+    assert prepared.skipped is not None
+    assert prepared.skipped.reason is SkipReason.PERMISSION_DENIED
+
+
+def test_xlsx_whitespace_only_cells_count_as_no_content(tmp_path: Path) -> None:
+    """공백만 든 셀은 내용이 아니다 — 경계 줄도 나오지 않는다.
+
+    `_tab_joined_row()`는 **빈** 셀만 뒤에서 떼어내므로 `" "` 같은 값은 살아남는다. 행 필터가
+    `if not line`이면 그 행이 내용으로 통과해 `[시트: …]` 경계 줄까지 딸려 나오고, 결과 문자열이
+    `text.strip()` 검사를 통과해 **시트 이름만 든 입력이 LLM까지 간다** — §4.2 T1이 막으려던
+    바로 그 실패가 `None`이 아니라 공백을 통해 재현된다. PPTX 표 경로는 이미 `.strip()`을 쓴다.
+    """
+    source = tmp_path / "서식만.xlsx"
+    _write_xlsx(source, {"서식만": [[" ", "  "], ["\t"]]})
+
+    assert extract_text(source, MAX_CHARS) == ""
+    assert prepare_summary_input(source, MAX_CHARS).skipped.reason is SkipReason.EMPTY_DOCUMENT
+
+
+def test_whitespace_cells_do_not_hide_real_content(tmp_path: Path) -> None:
+    """다만 같은 행에 실제 값이 있으면 공백 셀은 열 위치로 그대로 남는다."""
+    source = tmp_path / "혼합.xlsx"
+    _write_xlsx(source, {"시트": [[" ", "값"], [" ", "  "], ["끝"]]})
+
+    assert extract_text(source, MAX_CHARS) == "[시트: 시트]\n \t값\n끝"

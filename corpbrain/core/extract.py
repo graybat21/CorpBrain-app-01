@@ -25,14 +25,11 @@ from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
-from zipfile import BadZipFile
 
 from docx import Document
 from docx.opc.exceptions import PackageNotFoundError
 from openpyxl import load_workbook
-from openpyxl.utils.exceptions import InvalidFileException
 from pptx import Presentation
-from pptx.exc import PackageNotFoundError as PptxPackageNotFoundError
 from pptx.shapes.group import GroupShape
 from pypdf import PdfReader
 from pypdf.errors import PyPdfError
@@ -104,8 +101,8 @@ def extract_text(path: Path, max_chars: int) -> str:
     return extractor(path, max_chars)
 
 
-def _open_failure_detail(path: Path) -> str:
-    """열기에 실패한 오피스 파일의 스킵 detail 문구를 만든다 (스펙 §4.3.1).
+def _diagnose_open_failure(path: Path) -> tuple[str, OSError | None]:
+    """열기에 실패한 오피스 파일의 detail 문구와, 접근 자체가 막힌 경우 그 원인을 돌려준다.
 
     **원인 판정을 예외 메시지 문자열 매칭으로 하지 않는다** — 라이브러리 버전이 올라가면
     조용히 깨진다. 대신 파일 앞 8바이트라는 안정된 근거를 쓴다. 이 함수는 이미 열기에
@@ -115,19 +112,29 @@ def _open_failure_detail(path: Path) -> str:
     근거가 두 원인을 가르지 못하므로 detail에 둘을 함께 적어 정직하게 둔다 — 어느 쪽이든
     사용자가 할 일은 같다(암호를 풀거나 최신 포맷으로 다시 저장).
 
-    시그니처를 읽지 못하면(파일 소실·권한 거부) 기본 문구로 떨어진다. 여기서 새 예외를
-    올리면 원래의 추출 실패가 다른 예외로 뒤덮여 스킵 사유 자체가 바뀐다.
+    **접근 자체가 막혔으면 그 `OSError`를 함께 돌려준다.** 호출자가 그것을 `from`에 실어
+    `PermissionError`가 `__cause__`에 남게 하기 위함이다 — `prepare_summary_input()`이
+    `permission_denied`와 `extraction_failed`를 가르는 판정이 거기에 의존한다 (§4.3.1).
+    이 반환값이 필요한 이유는 라이브러리마다 원인 보존이 다르기 때문이다: `openpyxl`은
+    `PermissionError`를 그대로 전파하지만, `python-pptx`는 `zipfile.is_zipfile()`로 읽기
+    가능 여부를 확인하며 그것을 **삼키고** `__cause__` 없는 `PackageNotFoundError`를 올린다.
+    그대로 두면 읽을 수 없는 `.pptx`만 `extraction_failed`로 분류돼 `docs/USAGE.md` §8이
+    약속한 「권한 거부」 라벨을 받지 못한다.
+
+    여기서 예외를 올리지는 않는다 — 이 함수는 이미 실패한 경로에서만 불리므로, 새 예외를
+    올리면 원래의 추출 실패가 뒤덮여 스킵 사유 자체가 바뀐다.
     """
     label = path.suffix.lower().lstrip(".") or "파일"
     base = f"{label}를 열지 못했습니다: {path}"
     try:
         with path.open("rb") as stream:
             head = stream.read(len(OLE_SIGNATURE))
-    except OSError:
-        return base
+    except OSError as access_error:
+        return base, access_error
     if head == OLE_SIGNATURE:
-        return f"{base} — 암호화되었거나 구형 이진 포맷입니다"
-    return base
+        return f"{base} — 암호화되었거나 구형 이진 포맷입니다", None
+    return base, None
+
 
 
 def _extract_plaintext(path: Path, max_chars: int) -> str:
@@ -198,10 +205,24 @@ def _extract_pdf(path: Path, max_chars: int) -> str:
     return "\n".join(parts)[:max_chars]
 
 
-#: 엑셀·PPTX 개봉이 실패할 때 라이브러리가 올리는 예외들 (스펙 §4.3.1).
-#: `PermissionError`는 `OSError`의 하위 타입이라 여기에 포함되며, `from exc`로 원인을 보존해
-#: 호출자가 `permission_denied`와 `extraction_failed`를 계속 가를 수 있다.
-_OFFICE_OPEN_ERRORS = (InvalidFileException, BadZipFile, OSError, ValueError, KeyError)
+#: 오피스 추출기가 흡수하는 예외 범위 — **열거하지 않고 `Exception` 전체를 받는다.**
+#:
+#: 최초 구현은 `(InvalidFileException, BadZipFile, OSError, ValueError, KeyError)`를 열거했다.
+#: 그 목록은 «zip이 아닌 쓰레기 바이트»만 덮었고, 실사용에서 훨씬 흔한 손상 — 컨테이너는
+#: 열리는데 안쪽 XML이 잘린 경우 — 를 통째로 놓쳤다. 두 라이브러리는 그때 파싱 예외를
+#: 올리는데(`openpyxl` → `xml.etree.ElementTree.ParseError`, `python-pptx` →
+#: `lxml.etree.XMLSyntaxError`) 둘 다 **`SyntaxError` 하위**라 위 목록 어디에도 걸리지 않고
+#: 코어 밖으로 탈출했다. 그러면 그 파일 하나가 스캔 전체를 죽여, v0.1 §5의 「개별 파일 실패는
+#: 전체 실패로 위장하지 않는다」와 스펙 §4.3이 함께 무너진다.
+#:
+#: 열거를 늘리는 대신 범위를 넓힌 이유는, 이 경계가 **제3자 파서에게 신뢰할 수 없는 이진
+#: 입력을 먹이는 자리**여서 무엇이 올라올지 미리 셀 수 없기 때문이다. 실제로 손상되지도 않은
+#: 파일에서도 샌다 — 차트시트가 든 통합문서는 `openpyxl` 3.1.5 내부에서 `AttributeError`로
+#: 죽는다(실측). 사용자가 만든 평범한 엑셀 파일 하나에 스캔이 멈추는 셈이다.
+#:
+#: `BaseException`이 아니라 `Exception`이므로 `KeyboardInterrupt`·`SystemExit`은 그대로
+#: 통과한다 — 사용자의 중단 요청이 「추출 실패」로 둔갑하지 않는다.
+_OFFICE_ERRORS = Exception
 
 
 def _cell_text(value: object) -> str:
@@ -265,8 +286,11 @@ def _extract_xlsx(path: Path, max_chars: int) -> str:
     """
     try:
         workbook = load_workbook(str(path), read_only=True, data_only=True)
-    except _OFFICE_OPEN_ERRORS as exc:
-        raise ExtractionError(_open_failure_detail(path)) from exc
+    except _OFFICE_ERRORS as exc:
+        detail, access_error = _diagnose_open_failure(path)
+        # 접근이 막혀 실패했다면 그 `OSError`를 원인으로 싣는다 — 라이브러리가 원인을
+        # 삼켰더라도 `permission_denied` 판정이 성립하게 한다 (§4.3.1).
+        raise ExtractionError(detail) from (access_error or exc)
 
     parts: list[str] = []
     accumulated = 0
@@ -278,7 +302,12 @@ def _extract_xlsx(path: Path, max_chars: int) -> str:
             pending_boundary: str | None = f"[시트: {worksheet.title}]"
             for row in worksheet.iter_rows(values_only=True):
                 line = _tab_joined_row(row)
-                if not line:
+                if not line.strip():
+                    # 공백만 든 셀은 내용이 아니다. `_tab_joined_row()`는 **빈** 셀만 뒤에서
+                    # 떼어내므로 `" "` 같은 값이 살아남는데, 그것을 내용으로 세면 `[시트: …]`
+                    # 경계 줄까지 딸려 나와 호출자의 `text.strip()` 검사를 통과한다 — §4.2 T1이
+                    # 막으려던 실패가 `None`이 아니라 공백을 통해 그대로 재현된다.
+                    # PPTX 표 경로(`_pptx_shape_lines`)도 같은 판정을 쓴다.
                     continue
                 if pending_boundary is not None:
                     parts.append(pending_boundary)
@@ -290,8 +319,10 @@ def _extract_xlsx(path: Path, max_chars: int) -> str:
                     break
             if accumulated >= max_chars:
                 break
-    except (BadZipFile, OSError, ValueError, KeyError) as exc:
-        raise ExtractionError(f"{path.suffix.lstrip('.')} 시트를 읽지 못했습니다: {path}") from exc
+    except _OFFICE_ERRORS as exc:
+        raise ExtractionError(
+            f"{path.suffix.lstrip('.')} 시트를 읽지 못했습니다: {path}"
+        ) from exc
     finally:
         workbook.close()
 
@@ -358,8 +389,11 @@ def _extract_pptx(path: Path, max_chars: int) -> str:
     """
     try:
         presentation = Presentation(str(path))
-    except (PptxPackageNotFoundError, *_OFFICE_OPEN_ERRORS) as exc:
-        raise ExtractionError(_open_failure_detail(path)) from exc
+    except _OFFICE_ERRORS as exc:
+        detail, access_error = _diagnose_open_failure(path)
+        # 접근이 막혀 실패했다면 그 `OSError`를 원인으로 싣는다 — 라이브러리가 원인을
+        # 삼켰더라도 `permission_denied` 판정이 성립하게 한다 (§4.3.1).
+        raise ExtractionError(detail) from (access_error or exc)
 
     parts: list[str] = []
     accumulated = 0
@@ -379,7 +413,7 @@ def _extract_pptx(path: Path, max_chars: int) -> str:
                     break
             if accumulated >= max_chars:
                 break
-    except (PptxPackageNotFoundError, BadZipFile, OSError, ValueError, KeyError) as exc:
+    except _OFFICE_ERRORS as exc:
         raise ExtractionError(f"pptx 슬라이드를 읽지 못했습니다: {path}") from exc
 
     return "\n".join(parts)[:max_chars]
