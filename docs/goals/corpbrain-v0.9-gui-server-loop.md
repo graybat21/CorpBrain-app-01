@@ -72,7 +72,12 @@
   5) `uv run pytest tests/security/test_network_invariant.py -v` 를 실행해 `bind` 주소 단언 케이스가 pass 로 보이는 출력을 대화에 남긴다 **(DoD 3)**.
   6) `uv build` 를 실행한 뒤 `unzip -l dist/*.whl | grep -c "corpbrain/gui/static/"` 가 **0보다 큰 수**를 보이는 출력을 대화에 남긴다 **(DoD 9 전반부)**.
   7) 깨끗한 임시 venv 에 그 wheel 을 설치하고 `corpbrain gui --no-browser` 를 백그라운드로 띄워 **stdout 에 `http://127.0.0.1:` 과 `token=` 이 함께 보이는 줄**을 대화에 남긴 뒤 프로세스를 종료한다 **(DoD 9 후반부 · ready-1)**. 이어 그 서버에 `curl` 로 ① 토큰 없는 요청이 401, ② 토큰을 실은 대시보드 요청이 200 + 실제 값 JSON, ③ SSE 첫 프레임에 `"kind": "snapshot"` 이 보이는 출력을 남긴다 **(ready-1 · ready-2 · ready-3)**. 확인이 끝나면 서버와 임시 venv, `dist/` 를 정리해 작업 트리를 다시 깨끗하게 만든다.
-  8) `grep -c "먼저 스캔" corpbrain/gui/static/*.js` 가 **5 이상**을 보이는 출력을 대화에 남긴다 **(ready-4)**.
+  8) 미구현 화면 5개가 빈 상태를 갖는지 두 줄로 남긴다 **(ready-4)**:
+     `sed -n '/^const PENDING_VIEWS/,/^};/p' corpbrain/gui/static/app.js | grep -c "다음 슬라이스"` 가 **5**,
+     `grep -c "먼저 스캔" corpbrain/gui/static/app.js` 가 **1 이상**(다섯 화면이 공유하는 한 템플릿).
+     초판은 「`grep -c "먼저 스캔"` 이 5 이상」이었으나 그것은 같은 문구를 다섯 번 복제한
+     구현을 전제한 명령이다. 조건(「미구현 화면 5개가 §5의 빈 상태를 그린다」)은 그대로 두고,
+     한 템플릿을 다섯 화면이 공유하는 실제 구현을 그대로 측정하도록 명령만 고친다.
   9) `grep -nE "corpbrain (plan|doctor|search|graph|gui)|qwen3-embedding" README.md` 를 실행해 명령 5종과 임베딩 모델 pull 이 모두 보이는 출력을 대화에 남긴다 **(DoD 11)**.
   10) `cat docs/loop/DECISION_CHECKPOINT-v0.9-gui-server.md` 로 `CORE: N` · `MINOR: M` 카운터 줄과 `STOP REASON:` 줄을 남긴다.
   11) `git diff --name-only main` 으로 변경 파일이 §1 작업 대상 범위 안에만 있음을 남긴다.
