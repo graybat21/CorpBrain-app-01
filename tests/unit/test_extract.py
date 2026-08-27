@@ -864,3 +864,99 @@ def test_broken_pptx_is_skipped_as_extraction_failed(tmp_path: Path) -> None:
 
     assert prepared.skipped is not None
     assert prepared.skipped.reason is SkipReason.EXTRACTION_FAILED
+
+
+def test_pptx_one_deck_carries_all_four_elements_in_order(tmp_path: Path) -> None:
+    """스펙 §3 항목4가 명시한 검증 방법 — **네 요소를 모두 담은 픽스처 하나**로 단언한다.
+
+    요소별로 픽스처를 갈라 두면 각 요소가 뽑힌다는 사실은 증명되지만 **요소 사이의 관계**가
+    미검증으로 남는다. 이 테스트가 고정하는 것은 그 관계다.
+
+    - 슬라이드 안에서 도형 → 표 → 그룹은 **파일에 적힌 순서**로 나오고, **발표자 노트는 그
+      전부보다 뒤**에 온다. 노트를 도형 사이에 끼우거나 슬라이드 앞에 두는 구현도 요소별
+      테스트는 전부 통과한다.
+    - 표가 **그룹 안에 중첩**돼 있어도 뽑힌다 — 재귀가 표 분기보다 먼저 끊기면 여기서만 걸린다.
+    - `[슬라이드 N]` 경계 줄은 그 모든 것 **앞에 정확히 한 번** 나온다.
+    """
+    source = tmp_path / "deck.pptx"
+    presentation = Presentation()
+    slide = _blank_slide(presentation)
+    _add_textbox(slide, "표지 문구")
+
+    frame = slide.shapes.add_table(2, 2, Emu(0), Emu(1_000_000), Emu(2_000_000), Emu(1_000_000))
+    frame.table.cell(0, 0).text = "항목"
+    frame.table.cell(0, 1).text = "금액"
+    frame.table.cell(1, 0).text = "인건비"
+    frame.table.cell(1, 1).text = "1200"
+
+    grouped_text = _add_textbox(slide, "그룹 안 문구", top=3_000_000)
+    grouped_table = slide.shapes.add_table(
+        1, 2, Emu(0), Emu(4_000_000), Emu(2_000_000), Emu(500_000)
+    )
+    grouped_table.table.cell(0, 0).text = "그룹표A"
+    grouped_table.table.cell(0, 1).text = "그룹표B"
+    slide.shapes.add_group_shape([grouped_text, grouped_table])
+
+    slide.notes_slide.notes_text_frame.text = "발표자 노트 본문"
+    presentation.save(str(source))
+
+    extracted = extract_text(source, MAX_CHARS)
+
+    assert extracted == (
+        "[슬라이드 1]\n"
+        "표지 문구\n"
+        "항목\t금액\n"
+        "인건비\t1200\n"
+        "그룹 안 문구\n"
+        "그룹표A\t그룹표B\n"
+        "[노트]\n"
+        "발표자 노트 본문"
+    )
+
+
+def test_pptx_notes_only_slide_still_gets_its_boundary_line(tmp_path: Path) -> None:
+    """도형은 없고 노트만 있는 슬라이드도 `[슬라이드 N]` 경계 줄을 받는다.
+
+    경계 줄의 의미가 「뒤에 내용이 온다」이므로 뒤에 노트가 오면 신호가 필요하다. 내지 않으면
+    `[노트]` 블록이 어느 슬라이드 것인지 알 수 없는 채로 놓인다. 「도형이 없으면 생략」은
+    이미지만 있는 슬라이드를 겨냥한 규칙이지 노트를 버리라는 규칙이 아니다.
+
+    스펙 §4.2는 이 경계 사례를 명시하지 않는다 — `docs/loop/DECISION_CHECKPOINT-v0.8.md`의
+    M3이 결정과 근거를 기록했고, 이 테스트가 그 결정을 코드에 고정한다.
+    """
+    source = tmp_path / "deck.pptx"
+    presentation = Presentation()
+    first = _blank_slide(presentation)
+    _add_textbox(first, "본문 있는 슬라이드")
+    notes_only = _blank_slide(presentation)
+    notes_only.notes_slide.notes_text_frame.text = "노트만 있다"
+    presentation.save(str(source))
+
+    extracted = extract_text(source, MAX_CHARS)
+
+    assert extracted == (
+        "[슬라이드 1]\n본문 있는 슬라이드\n[슬라이드 2]\n[노트]\n노트만 있다"
+    )
+
+
+@needs_posix_permissions
+def test_unreadable_xlsx_is_skipped_as_permission_denied(tmp_path: Path) -> None:
+    """읽을 수 없는 오피스 파일이 `extraction_failed`가 아니라 `permission_denied`가 된다.
+
+    이 경로에는 **실패가 두 번** 일어난다 — 개봉이 권한으로 실패하고, 그 뒤 원인을 가르려는
+    `_open_failure_detail()`이 같은 파일을 다시 열다 또 실패한다. 헬퍼가 그 두 번째
+    `OSError`를 삼키지 않고 올리거나 `from exc`가 빠지면, `prepare_summary_input()`의
+    `__cause__` 판정이 원래의 `PermissionError`를 보지 못해 스킵 사유가 조용히 바뀐다.
+    기존 권한 테스트 2건은 `.txt`만 보므로 이 이중 실패 경로를 지나지 않는다.
+    """
+    source = tmp_path / "secret.xlsx"
+    _write_xlsx(source, {"시트": [["기밀"]]})
+    source.chmod(0o000)
+
+    try:
+        prepared = prepare_summary_input(source, MAX_CHARS)
+    finally:
+        source.chmod(0o600)
+
+    assert prepared.skipped is not None
+    assert prepared.skipped.reason is SkipReason.PERMISSION_DENIED

@@ -263,9 +263,25 @@ def test_is_supported_ignores_extension_case(name: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "name", ["sheet.xls", "old.doc", "photo.JPG", "README", "a.mdx"]
+    "name",
+    [
+        "sheet.xls",  # 구형 BIFF — `openpyxl`이 열지 못한다 (v0.8 §2)
+        "deck.ppt",  # 구형 OLE — 순수 파이썬 경로가 없다 (v0.8 §2)
+        "macro.pptm",  # 매크로 포함 PPT (v0.8 §2)
+        "old.doc",
+        "photo.JPG",
+        "README",
+        "a.mdx",
+    ],
 )
 def test_is_supported_rejects_unsupported_extensions(name: str) -> None:
+    """v0.8 비목표 확장자 3종이 여기 포함된 이유 — 방어선이 이 상수 하나뿐이기 때문이다.
+
+    `.pptm`은 U1 실측에서 **`python-pptx`가 거부하지 않음**이 확인됐다(확장자만 바꾼 파일도,
+    메인 파트 content type을 macroEnabled로 바꾼 파일도 열렸다). 즉 이 확장자를 막는 것은
+    라이브러리가 아니라 `SUPPORTED_EXTENSIONS`뿐이며, 누군가 매핑에 한 줄을 더하면 아무
+    저항 없이 지원 포맷이 된다. `.ppt`도 같은 이유로 함께 못박는다.
+    """
     assert is_supported(Path(name)) is False
 
 
