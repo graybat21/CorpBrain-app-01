@@ -24,8 +24,17 @@ from corpbrain.core.config import DEFAULT_EMBED_MODEL, DEFAULT_MODEL, DEFAULT_OL
 from corpbrain.core.environment import DoctorReport, diagnose
 from corpbrain.core.errors import CorpBrainError
 from corpbrain.core.graphstore import SqliteGraphStore, graph_path_for
-from corpbrain.core.models import GraphStats
+from corpbrain.core.models import GraphStats, ScanPlan, ScanResult
+from corpbrain.core.report import build_summary_lines
+from corpbrain.core.scanner import ScanFindings
 from corpbrain.gui.assets import AssetNotFound, content_type_for, read_asset
+from corpbrain.gui.errors import BadRequest
+from corpbrain.gui.scan import (
+    Measurement,
+    ScanController,
+    ScanInProgressError,
+    config_from_payload,
+)
 from corpbrain.gui.sse import EventStream
 
 __all__ = [
@@ -34,6 +43,7 @@ __all__ = [
     "JSON_CONTENT_TYPE",
     "SESSION_COOKIE",
     "TOKEN_QUERY_PARAM",
+    "BadRequest",
     "GuiApp",
     "Response",
     "json_response",
@@ -121,11 +131,15 @@ def response_for_exception(exc: BaseException) -> Response:
       기본값으로 열리고 `ThreadingHTTPServer`는 요청마다 스레드가 다르므로, 그 예외는
       손상이 아니라 **스레드 오용 버그**다. 200 + 「DB를 지우고 다시 스캔하세요」로 내보내면
       사용자가 멀쩡한 DB를 지운다.
+    - `BadRequest` → **400**. 요청 본문이 이 엔드포인트의 모양이 아니다 — 404·405와 같은
+      프로토콜 층 사건이다.
     - 그 밖의 예외 → 500. 5xx가 오직 버그일 때만 나므로 **로그의 500이 그대로 버그 신호**다.
 
     열거하지 않는 이유는 `CorpBrainError` 계층에 `GatewayError`·`ExtractionError` 등이
     더 있고, 목록에 없는 하나가 조회 경로로 새는 순간 버그가 아닌데 500이 되기 때문이다.
     """
+    if isinstance(exc, BadRequest):
+        return error_response(type(exc).__name__, str(exc), status=400)
     if isinstance(exc, sqlite3.ProgrammingError):
         return _bug_response(exc)
     if isinstance(exc, CorpBrainError | sqlite3.Error):
@@ -171,6 +185,7 @@ class GuiApp:
         port: int,
         session_token: str | None = None,
         events: EventStream | None = None,
+        scan: ScanController | None = None,
     ) -> None:
         self.out_dir = out_dir
         #: 진행 상태의 단일 출처. 스캔 상태는 서버가 소유하고 브라우저 세션이 소유하지
@@ -183,6 +198,9 @@ class GuiApp:
         #: 부트스트랩 토큰이 세션 값과 같지 않다.
         self.session_token = session_token or new_token()
         self.port = port
+        #: 스캔 상태의 단일 출처 (§4.4). 워커 스레드는 하나뿐이며, 진행 중에 들어온 새 스캔
+        #: 요청은 409로 거절된다.
+        self.scan = scan or ScanController(self.events)
 
     @property
     def origin(self) -> str:
@@ -247,6 +265,9 @@ class GuiApp:
         """경로 → 메서드 → 핸들러. 경로는 정확히 일치할 때만 매칭한다."""
         return {
             "/api/dashboard": {"GET": self._dashboard},
+            "/api/scan": {"GET": self._scan_status, "POST": self._scan_run},
+            "/api/scan/plan": {"POST": self._scan_plan},
+            "/api/scan/cancel": {"POST": self._scan_cancel},
         }
 
     def handle(
@@ -344,6 +365,65 @@ class GuiApp:
                 "graph": _section(self._graph_payload),
             }
         )
+
+    # --- 스캔 (§4.3.4 계량 → 확인 → 실행) -----------------------------------------
+
+    def _scan_plan(self, request: Request) -> Response:
+        """1단계 계량 — `plan_scan()`을 부르고 LLM은 부르지 않는다.
+
+        폴더를 고르는 즉시 자동으로 불리지 않는다(§4.3.4) — 이 엔드포인트는 사용자가
+        「계량하기」를 눌렀을 때만 호출된다. `plan_scan()`은 `nvidia-smi` subprocess와 전체
+        stat 패스를 돌리므로, 폴더를 둘러보는 동안 반복되면 탐색이 느려진다.
+        """
+        payload = _json_body(request)
+        config = config_from_payload(payload, default_out=self.out_dir)
+        return json_response(_measurement_dict(self.scan.measure(config)))
+
+    def _scan_run(self, request: Request) -> Response:
+        """2단계 실행 — 계량 결과 화면에서 눌러야 시작된다.
+
+        진행 중이면 **409**다(§4.4). 이것은 프로토콜 층 사건이라 도메인(200)으로 접지
+        않는다 — 화면이 「시작됐다」와 「이미 돌고 있다」를 같은 코드로 받으면 안 된다.
+        """
+        payload = _json_body(request)
+        config = config_from_payload(payload, default_out=self.out_dir)
+        try:
+            self.scan.start(config)
+        except ScanInProgressError as exc:
+            return error_response("ScanInProgress", str(exc), status=409)
+        return json_response(self._scan_state())
+
+    def _scan_cancel(self, request: Request) -> Response:
+        """취소 요청 — 진행 중인 문서를 마친 뒤 멈춘다 (§4.7).
+
+        진행 중이 아니어도 오류가 아니다. 취소는 **요청**이고, 이미 끝난 스캔에 대한 요청은
+        아무 일도 하지 않는 것이 옳다 — 화면과 서버 사이의 경합(마지막 문서가 끝나는 순간
+        누른 취소)을 오류로 만들면 사용자가 아무것도 잘못하지 않았는데 오류를 본다.
+        """
+        self.scan.cancel()
+        return json_response(self._scan_state())
+
+    def _scan_status(self, request: Request) -> Response:
+        """현재 스캔 상태 + 마지막 결과. 새로고침·다른 탭이 진행 중인 스캔에 다시 붙는 길이다."""
+        return json_response(self._scan_state())
+
+    def _scan_state(self) -> dict[str, Any]:
+        failure = self.scan.failure
+        return {
+            "running": self.scan.running,
+            "cancel_requested": self.scan.cancel_requested,
+            "plan": (
+                _measurement_dict(self.scan.measurement)
+                if self.scan.measurement is not None
+                else None
+            ),
+            "result": (
+                _result_dict(self.scan.result) if self.scan.result is not None else None
+            ),
+            # 워커 스레드에서 죽은 예외도 같은 매핑 규칙(§4.3.2)으로 가른다. 도메인이면
+            # 안내 문장이 되고, 버그면 여기서 다시 올라가 500이 된다.
+            "failure": _section(_reraise(failure)) if failure is not None else None,
+        }
 
     def _doctor_payload(self) -> dict[str, Any]:
         return _doctor_dict(
@@ -504,3 +584,103 @@ def _parse_query(raw: str) -> dict[str, str]:
     for key, value in parse_qsl(raw, keep_blank_values=True):
         parsed.setdefault(key, value)
     return parsed
+
+
+def _reraise(exc: BaseException) -> Callable[[], dict[str, Any]]:
+    """`_section`이 판정할 수 있도록 보관된 예외를 다시 올리는 얇은 호출자."""
+
+    def raise_it() -> dict[str, Any]:
+        raise exc
+
+    return raise_it
+
+
+def _json_body(request: Request) -> dict[str, Any]:
+    """요청 본문을 JSON 객체로 읽는다. 본문이 없으면 빈 객체로 본다."""
+    if not request.body:
+        return {}
+    try:
+        payload = json.loads(request.body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise BadRequest(f"본문을 JSON으로 읽지 못했습니다: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise BadRequest("본문은 JSON 객체여야 합니다.")
+    return payload
+
+
+def _measurement_dict(measurement: Measurement) -> dict[str, Any]:
+    """계량 결과 — 파일별 테이블과 게이트 판정 (§4.3.4 1단계)."""
+    return {
+        "plan": _plan_dict(measurement.plan),
+        "findings": _findings_dict(measurement.findings),
+    }
+
+
+def _plan_dict(plan: ScanPlan) -> dict[str, Any]:
+    gate = plan.gate
+    return {
+        "file_count": plan.file_count,
+        "total_est_tokens": plan.total_est_tokens,
+        "est_seconds": plan.est_seconds,
+        "hardware": {"gpu": plan.hardware.gpu, "label": plan.hardware.label},
+        "entries": [
+            {
+                "path": str(entry.path),
+                "ext": entry.ext,
+                "size_bytes": entry.size_bytes,
+                "est_tokens": entry.est_tokens,
+                "importance": entry.importance,
+            }
+            for entry in plan.entries
+        ],
+        "gate": (
+            None
+            if gate is None
+            else {
+                "gpu_ok": gate.gpu_ok,
+                "gpu_enforced": gate.gpu_enforced,
+                "tokens_ok": gate.tokens_ok,
+                "oversized_count": gate.oversized_count,
+                "max_file_size": gate.max_file_size,
+                "max_total_tokens": gate.max_total_tokens,
+                # 게이트가 걸리면 화면이 이유와 강행 토글(`force_gates`)을 함께 보여 준다 —
+                # CLI가 exit 3으로 막는 자리와 같다 (§4.3.4).
+                "blocked": (gate.gpu_enforced and not gate.gpu_ok) or not gate.tokens_ok,
+            }
+        ),
+    }
+
+
+def _findings_dict(findings: ScanFindings) -> dict[str, Any]:
+    return {
+        "discovered_count": findings.discovered_count,
+        "limit_exceeded": findings.limit_exceeded,
+        "target_count": len(findings.targets),
+        "skipped": [
+            {"path": str(item.path), "reason": str(item.reason), "detail": item.detail}
+            for item in findings.skipped
+        ],
+    }
+
+
+def _result_dict(result: ScanResult) -> dict[str, Any]:
+    """스캔 결과 — 구조화된 집계 + 종료 요약 줄.
+
+    **줄을 함께 싣는 이유**는 §4.6.1의 원칙 그대로다. 갈라지면 안 되는 것은 「어휘」이고,
+    「그래프 미반영 — 다시 스캔하면 반영됩니다」·스킵 사유 라벨 같은 문구를 프론트가 다시
+    구현하면 CLI와 GUI가 같은 결과를 다른 말로 설명한다. 검색 결과와 달리 이 줄들은 이미
+    **독립된 줄의 목록**이라 프론트가 정규식으로 다시 가를 일이 없다 — 그대로 출력하면 된다.
+    카드가 필요로 하는 숫자는 아래 필드가 따로 낸다.
+    """
+    graph = result.graph
+    return {
+        "cancelled": result.cancelled,
+        "limit_exceeded": result.limit_exceeded,
+        "discovered_count": result.discovered_count,
+        "generated_count": len(result.generated),
+        "skipped_count": len(result.skipped),
+        "embedding_failure_count": len(result.embedding_failures),
+        "out_dir": str(result.out_dir),
+        "graph": None if graph is None or graph.stats is None else _stats_dict(graph.stats),
+        "summary_lines": build_summary_lines(result),
+    }

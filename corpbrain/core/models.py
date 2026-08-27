@@ -306,6 +306,17 @@ class ScanResult:
     discovered_count: int = 0
     #: v0.6 그래프 단계의 결과. `None`이면 그래프 단계가 돌지 않았다.
     graph: GraphOutcome | None = None
+    #: 협조적 취소로 파일 루프가 일찍 끊겼는가 (v0.9 §4.7).
+    #:
+    #: **최상위 필드에 두는 이유**: 취소는 «실행 전체의 상태»이지 그래프 축의 속성이 아니다.
+    #: `GraphSkipReason` 안에 숨기면 그래프를 보지 않는 호출자가 취소를 알 길이 없어진다.
+    #: 이미 최상위에 있는 `limit_exceeded`와 성격도 모양도 같아 새 관용구를 만들지 않는다.
+    #: v0.6이 세운 「`ScanResult`는 9필드를 유지한다」는 «그래프 지표를 평면 필드로 흩뿌리지
+    #: 않는다»는 뜻이므로 그래프 지표가 아닌 이 값에는 적용되지 않는다.
+    #:
+    #: `True`면 그래프 단계(패스2·3)와 고아 벡터 정리를 건너뛴 것이므로 「그래프 미반영」도
+    #: 함께 참이다 — 판정이 한 곳에 있어 어댑터마다 복제되지 않는다.
+    cancelled: bool = False
 
     @property
     def indexing_skipped(self) -> bool:
