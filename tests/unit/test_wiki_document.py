@@ -177,7 +177,8 @@ class TestWikiEndpoints:
 
         # 선행 조건 실패는 **200 + 안내 문장**이다 — 4xx로 접지 않는다 (§4.3.2).
         assert response.status == 200
-        assert response.json()["error"] == "PreconditionError"
+        # 「지목이 잘못됐다」와 「아직 스캔하지 않았다」는 다른 사실이라 식별자도 다르다.
+        assert response.json()["error"] == "WikiNotFound"
 
     def test_detail_without_doc_is_400(self, out_dir: Path) -> None:
         response = self._app(out_dir).handle("GET", "/api/wiki/document", self.AUTH)
@@ -279,4 +280,4 @@ class TestWikiEndpoints:
         response = self._app(tmp_path / "없음").handle("GET", "/api/wiki", self.AUTH)
 
         assert response.status == 200
-        assert response.json()["error"] == "PreconditionError"
+        assert response.json()["error"] == "NothingScanned"

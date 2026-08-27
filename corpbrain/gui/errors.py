@@ -10,7 +10,9 @@
 
 from __future__ import annotations
 
-__all__ = ["BadRequest"]
+from corpbrain.core.errors import PreconditionError
+
+__all__ = ["BadRequest", "GraphNotBuilt", "NothingScanned", "WikiNotFound"]
 
 
 class BadRequest(Exception):
@@ -20,4 +22,33 @@ class BadRequest(Exception):
     그 앞 단계 — JSON으로 읽히지도 않거나 객체가 아니거나, 무엇을 스캔할지가 아예 지정되지
     않은 경우 — 로, 코어를 부를 인자를 만들 수조차 없다. 500으로 두면 「로그의 500 = 버그
     신호」가 사용자의 오타로 오염된다.
+    """
+
+
+class GraphNotBuilt(PreconditionError):
+    """그래프 DB가 아직 없다 — 첫 실행의 정상 상태이지 손상이 아니다 (§5 · T11).
+
+    코어는 그래프 DB의 **부재와 손상을 같은 `PreconditionError`로** 묶고 「파일을 지우고 다시
+    scan 하세요」라고 안내한다. 그것은 `graph` **CLI**의 계약(부재도 exit 1)에 맞춰진 문구이고,
+    GUI 첫 실행에서 그대로 내보내면 **만든 적도 없는 파일을 지우라는 안내**가 된다.
+
+    `PreconditionError` 하위이므로 §4.3.2의 매핑에서 **도메인(200)** 그대로다. 갈라지는 것은
+    상태코드가 아니라 **식별자**이며, 그래야 화면이 문자열을 파싱하지 않고 첫 실행을 가른다.
+    """
+
+
+class NothingScanned(PreconditionError):
+    """`--out` 아래 위키가 하나도 없다 — 그래프 유무와 별개의 사실이다.
+
+    그래프가 없어도 위키가 있으면 트리는 파일명으로 그려진다(§4.6.2 파생 결정). 그래서 이
+    조건은 `GraphNotBuilt`와 다르고, 같은 이름으로 뭉치면 화면이 「다시 스캔하면 제목이
+    채워집니다」와 「먼저 스캔하세요」를 구분하지 못한다.
+    """
+
+
+class WikiNotFound(PreconditionError):
+    """지목한 `doc_id`의 위키가 `--out` 아래에 없다.
+
+    위 둘과 달리 **지목이 잘못됐거나 산출물이 사라진** 경우다. v0.6이 `graph --neighbors`에서
+    「존재를 전제한 식별자 지목의 실패는 빈 결과가 아니라 잘못된 지목」이라고 가른 것과 같다.
     """

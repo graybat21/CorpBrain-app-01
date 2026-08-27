@@ -136,7 +136,13 @@ class TestGraphEndpoint:
         assert len(body["edges"]) == body["stats"]["edges"]
 
     def test_missing_graph_is_a_domain_state(self, tmp_path: Path) -> None:
+        """첫 실행은 오류가 아니라 정상적인 빈 상태다 (§5 · T11).
+
+        식별자가 일반 `PreconditionError`가 아니라 **`GraphNotBuilt`**인 것이 요점이다 —
+        화면이 「먼저 스캔하세요」와 「DB를 지우고 다시 스캔하세요」를 문자열을 파싱하지 않고
+        가르려면 식별자가 달라야 한다.
+        """
         response = self._app(tmp_path / "없음").handle("GET", "/api/graph", AUTH)
 
         assert response.status == 200
-        assert response.json()["error"] == "PreconditionError"
+        assert response.json()["error"] == "GraphNotBuilt"

@@ -34,7 +34,7 @@ from corpbrain.core.consent import (
 )
 from corpbrain.core.embedding_text import parse_wiki_document
 from corpbrain.core.environment import DoctorReport, diagnose
-from corpbrain.core.errors import CorpBrainError, PreconditionError
+from corpbrain.core.errors import CorpBrainError
 from corpbrain.core.graph import parse_expand_edges
 from corpbrain.core.graphstore import SqliteGraphStore, graph_path_for
 from corpbrain.core.models import (
@@ -52,7 +52,12 @@ from corpbrain.core.rerun import read_source_path
 from corpbrain.core.scanner import ScanFindings
 from corpbrain.core.search import search_index
 from corpbrain.gui.assets import AssetNotFound, content_type_for, read_asset
-from corpbrain.gui.errors import BadRequest
+from corpbrain.gui.errors import (
+    BadRequest,
+    GraphNotBuilt,
+    NothingScanned,
+    WikiNotFound,
+)
 from corpbrain.gui.scan import (
     Measurement,
     ScanController,
@@ -567,7 +572,7 @@ class GuiApp:
         """
         path = graph_path_for(self.out_dir)
         if not path.exists():
-            raise PreconditionError(
+            raise GraphNotBuilt(
                 "아직 스캔하지 않았습니다 — 먼저 스캔하면 지식그래프가 채워집니다."
             )
         store = SqliteGraphStore(path, read_only=True)
@@ -648,7 +653,7 @@ class GuiApp:
 
         inventory = collect_wiki_documents(self.out_dir)
         if not inventory.documents:
-            raise PreconditionError(
+            raise NothingScanned(
                 "아직 스캔하지 않았습니다 — 먼저 스캔하면 위키 트리가 채워집니다."
             )
         return json_response(
@@ -674,7 +679,7 @@ class GuiApp:
         inventory = collect_wiki_documents(self.out_dir)
         wiki_path = inventory.documents.get(doc_id)
         if wiki_path is None:
-            raise PreconditionError(
+            raise WikiNotFound(
                 f"그 문서의 위키가 `{self.out_dir}` 아래에 없습니다 — 다시 스캔해 보세요."
             )
         document = parse_wiki_document(wiki_path.read_text(encoding="utf-8"))
@@ -711,11 +716,12 @@ class GuiApp:
         path = graph_path_for(self.out_dir)
         if not path.exists():
             # 첫 실행은 오류가 아니라 정상적인 빈 상태다 (§5). 화면은 이 식별자를 보고
-            # 자기 빈 상태를 그리고 스캔 화면으로 보낸다.
-            return {
-                "error": "GraphNotBuilt",
-                "message": "아직 스캔하지 않았습니다 — 먼저 스캔하면 지식그래프가 채워집니다.",
-            }
+            # 자기 빈 상태를 그리고 스캔 화면으로 보낸다. **예외로 올린다** — 본문을 손으로
+            # 짜면 같은 조건이 화면마다 다른 식별자를 갖게 되고, `_section`이 §4.3.2 매핑을
+            # 적용할 기회도 사라진다.
+            raise GraphNotBuilt(
+                "아직 스캔하지 않았습니다 — 먼저 스캔하면 지식그래프가 채워집니다."
+            )
         store = SqliteGraphStore(path, read_only=True)
         try:
             return _stats_dict(store.stats())
