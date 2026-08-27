@@ -229,6 +229,32 @@ class TestWikiEndpoints:
             }
         ]
 
+    def test_related_link_with_a_space_in_the_path_resolves(self, out_dir: Path) -> None:
+        """`render.py`는 링크를 URL 인코딩하지 않으므로 원시 문자열이 곧 파일 경로다.
+
+        인코딩했다면 `%20`이 실려 서버의 해석이 조용히 실패한다 — 두 모듈의 이 약속을
+        여기서 고정한다.
+        """
+        (out_dir / "인사" / "채용 계획 v2.md.md").write_text(
+            _rendered("/원문/인사/채용 계획 v2.docx"), encoding="utf-8"
+        )
+        block = render_related_block(
+            [RelatedDocument(doc_id="/원문/인사/채용 계획 v2.docx", title="채용 계획 v2")],
+            relative_to="인사/온보딩.md.md",
+            relative_paths={"/원문/인사/채용 계획 v2.docx": "인사/채용 계획 v2.md.md"},
+        )
+        target = out_dir / "인사" / "온보딩.md.md"
+        target.write_text(
+            replace_related_block(target.read_text(encoding="utf-8"), block),
+            encoding="utf-8",
+        )
+
+        body = self._app(out_dir).handle(
+            "GET", "/api/wiki/document?doc=/원문/인사/온보딩.md", self.AUTH
+        ).json()
+
+        assert body["related"][0]["doc_id"] == "/원문/인사/채용 계획 v2.docx"
+
     def test_unresolvable_related_link_keeps_the_title(self, out_dir: Path) -> None:
         """대상 위키가 사라졌다고 상세 전체를 실패시키지 않는다."""
         block = render_related_block(
