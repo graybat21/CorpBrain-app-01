@@ -165,3 +165,30 @@ def test_content_length_never_raises_or_goes_negative(raw: str | None, expected:
     from corpbrain.gui.httpd import _content_length
 
     assert _content_length(raw) == expected
+
+
+def test_disconnect_errors_are_quiet_but_real_ones_are_not(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """상대가 떠나서 난 예외만 조용하다 — 「로그의 500이 버그 신호」를 지킨다 (§4.3.2).
+
+    포그라운드로 떠 있는 서버라 브라우저가 탭을 닫을 때마다 트레이스백이 사용자 터미널을
+    덮으면 안 된다. 그렇다고 전부 삼키면 진짜 버그가 보이지 않는다.
+    """
+    from corpbrain.gui.httpd import create_server
+
+    server = create_server(tmp_path / "wiki")
+    try:
+        try:
+            raise BrokenPipeError("client gone")
+        except BrokenPipeError:
+            server.handle_error(None, ("127.0.0.1", 1))
+        assert capsys.readouterr().err == ""
+
+        try:
+            raise ValueError("진짜 버그")
+        except ValueError:
+            server.handle_error(None, ("127.0.0.1", 1))
+        assert "진짜 버그" in capsys.readouterr().err
+    finally:
+        server.server_close()

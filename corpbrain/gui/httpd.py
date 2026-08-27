@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import sys
 import webbrowser
 from collections.abc import Iterator
 from contextlib import closing
@@ -48,6 +49,21 @@ class GuiServer(ThreadingHTTPServer):
     def __init__(self, app: GuiApp) -> None:
         self.app = app
         super().__init__((HOST, app.port), _Handler)
+
+    def handle_error(self, request: object, client_address: object) -> None:
+        """연결이 끊겨서 난 예외는 조용히 넘기고, **나머지는 그대로 출력한다**.
+
+        브라우저가 응답 도중 탭을 닫으면 `BrokenPipeError`가 나는데, 기본 구현은 그때마다
+        트레이스백을 stderr에 찍는다 — 포그라운드로 떠 있는 서버라 사용자 터미널이 그 노이즈로
+        덮인다. `log_message`를 죽여 둔 것과 같은 이유다.
+
+        전부를 삼키지는 않는다. 「로그의 500이 그대로 버그 신호」(§4.3.2)가 성립하려면 진짜
+        예외는 보여야 하고, 여기서 조용해지는 것은 **상대가 떠나서 난 것**뿐이다.
+        """
+        exc = sys.exc_info()[1]
+        if isinstance(exc, BrokenPipeError | ConnectionResetError | TimeoutError):
+            return
+        super().handle_error(request, client_address)
 
 
 class _Handler(BaseHTTPRequestHandler):
