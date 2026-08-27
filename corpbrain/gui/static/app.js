@@ -253,6 +253,29 @@ function mmss(seconds) {
   return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
 }
 
+/**
+ * 「경과 · ETA · 단계」 줄을 붙이고 1초마다 다시 그린다.
+ *
+ * **진행 상태를 그리는 카드가 둘이므로 여기 한 곳에 둔다** — 대시보드의 「실행 상태」와 스캔
+ * 화면의 「진행」이 같은 스냅샷을 보는데 한쪽만 시계를 가지면, 같은 스캔이 화면에 따라 살아
+ * 있어 보이기도 하고 멈춰 보이기도 한다.
+ *
+ * 어휘(`경과`·`ETA`·단계 이름)는 CLI `render_status_line()` 이 쓰는 것을 그대로 쓴다.
+ */
+function appendClock(card) {
+  const clock = el('p', 'metric-caption');
+  card.appendChild(clock);
+  const paint = () => {
+    const drift = lastFrameAt === null ? 0 : (Date.now() - lastFrameAt) / 1000;
+    const parts = [`경과 ${mmss((lastSnapshot.elapsed || 0) + drift)}`];
+    if (typeof lastSnapshot.eta === 'number') parts.push(`ETA ${mmss(lastSnapshot.eta)}`);
+    if (lastSnapshot.stage) parts.push(lastSnapshot.stage);
+    clock.textContent = parts.join(' · ');
+  };
+  paint();
+  startTicker(paint);
+}
+
 /** 마지막으로 받은 스냅샷 — 이벤트 프레임은 스냅샷을 통째로 주지 않으므로 함께 들고 있는다. */
 let lastSnapshot = null;
 let lastRunning = false;
@@ -286,6 +309,13 @@ function renderRunCard(card, payload) {
   }
   if (lastSnapshot.current_file) {
     card.appendChild(el('p', 'metric-caption', lastSnapshot.current_file));
+  }
+  // 대시보드에서 스캔을 지켜보는 경우도 있다. 시계가 없으면 문서 1건이 요약되는 47초 동안
+  // 이 카드만 멈춘 것처럼 보인다 — 같은 스냅샷을 보는 두 카드가 다르게 읽히면 안 된다.
+  if (lastRunning) {
+    appendClock(card);
+  } else {
+    stopTicker();
   }
 }
 
@@ -657,19 +687,7 @@ function renderProgressCard(card, payload, onCancel, cancelRequested) {
   }
   if (lastSnapshot.current_file) card.appendChild(el('p', 'metric-caption', lastSnapshot.current_file));
   if (lastRunning) {
-    // 이벤트가 오지 않는 동안에도 이 줄은 움직인다 — 어휘(`경과`·`ETA`·단계 이름)는 CLI
-    // `render_status_line()` 이 쓰는 것을 그대로 쓴다.
-    const clock = el('p', 'metric-caption');
-    card.appendChild(clock);
-    const paint = () => {
-      const drift = lastFrameAt === null ? 0 : (Date.now() - lastFrameAt) / 1000;
-      const parts = [`경과 ${mmss((lastSnapshot.elapsed || 0) + drift)}`];
-      if (typeof lastSnapshot.eta === 'number') parts.push(`ETA ${mmss(lastSnapshot.eta)}`);
-      if (lastSnapshot.stage) parts.push(lastSnapshot.stage);
-      clock.textContent = parts.join(' · ');
-    };
-    paint();
-    startTicker(paint);
+    appendClock(card);
   } else {
     stopTicker();
   }
