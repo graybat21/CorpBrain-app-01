@@ -6,6 +6,7 @@ CLI 어댑터 테스트와 같은 잣대다 — 이 파일은 **배선과 상태
 
 from __future__ import annotations
 
+import io
 import shutil
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -18,6 +19,7 @@ from corpbrain.core.graphstore import SqliteGraphStore, graph_path_for
 from corpbrain.core.llm import ollama_client
 from corpbrain.core.models import EdgeType, GraphEdge, GraphNode, HardwareInfo, NodeType
 from corpbrain.gui.api import SESSION_COOKIE, GuiApp
+from corpbrain.gui.httpd import _Handler
 
 PORT = 8765
 AUTH = {"Host": f"127.0.0.1:{PORT}", "Cookie": f"{SESSION_COOKIE}=sess"}
@@ -89,8 +91,33 @@ def test_dashboard_survives_a_missing_graph_db(app: GuiApp) -> None:
     assert response.status == 200
     body = response.json()
     assert body["doctor"]["installed"] is True  # 다른 절은 살아 있다
-    assert body["graph"]["error"] == "PreconditionError"
-    assert "scan" in body["graph"]["message"]
+    assert body["graph"]["error"] == "GraphNotBuilt"
+
+
+def test_absent_graph_db_is_not_reported_as_corruption(app: GuiApp) -> None:
+    """스캔한 적 없는 사용자에게 「파일을 지우라」고 안내하지 않는다 (§5 · T11).
+
+    코어는 부재와 손상을 같은 `PreconditionError`로 묶어 「손상되었거나 접근할 수 없습니다
+    … 파일을 지우고 다시 scan 하세요」라고 안내한다. 그것은 `graph` CLI의 계약(부재도
+    exit 1)에 맞춘 문구이고, GUI 첫 실행에서 그대로 내보내면 **만든 적도 없는 파일을
+    지우라는 안내**가 된다 — CLAUDE.md가 「사용자가 멀쩡한 DB를 지운다」로 경계한 상황이다.
+    """
+    graph = app.handle("GET", "/api/dashboard", AUTH).json()["graph"]
+
+    assert "지우" not in graph["message"]
+    assert "손상" not in graph["message"]
+    assert "먼저 스캔" in graph["message"]
+
+
+def test_corrupted_graph_db_is_still_reported_as_such(app: GuiApp, out_dir: Path) -> None:
+    """부재를 갈라 냈다고 **손상까지 조용해지지는 않는다** — 두 상태는 안내가 달라야 한다."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    graph_path_for(out_dir).write_bytes(b"not a sqlite file")  # 손상 흉내
+
+    graph = app.handle("GET", "/api/dashboard", AUTH).json()["graph"]
+
+    assert graph["error"] == "PreconditionError"
+    assert "손상" in graph["message"]
 
 
 def test_dashboard_opens_and_closes_the_store_per_request(
@@ -192,3 +219,51 @@ def test_disconnect_errors_are_quiet_but_real_ones_are_not(
         assert "진짜 버그" in capsys.readouterr().err
     finally:
         server.server_close()
+
+
+# --- keep-alive 프레이밍 (코드리뷰에서 실측으로 발견) --------------------------------
+
+
+class _FakeHandler:
+    """`_body()`만 떼어 시험하기 위한 최소 스텁 — 소켓을 열지 않는다."""
+
+    def __init__(self, headers: dict[str, str], raw: bytes) -> None:
+        self.headers = headers
+        self.rfile = io.BytesIO(raw)
+        self.close_connection = False
+
+    _body = _Handler._body  # type: ignore[assignment]
+
+
+def test_declared_body_is_drained_so_keep_alive_stays_aligned() -> None:
+    """본문을 쓰지 않는 메서드도 선언된 바이트를 읽어야 한다.
+
+    읽지 않으면 keep-alive 연결에 남아 **다음 요청의 요청줄로 파싱된다** — 실측에서 본문을
+    실은 `DELETE` 뒤의 정상 요청이 깨졌다. `protocol_version = "HTTP/1.1"` 이라 연결이
+    재사용되므로 이 구멍이 실재한다.
+    """
+    handler = _FakeHandler({"Content-Length": "7"}, b'{"a":1}GET / HTTP/1.1')
+
+    assert handler._body() == b'{"a":1}'
+    assert handler.rfile.read() == b"GET / HTTP/1.1"  # 다음 요청이 온전히 남는다
+    assert handler.close_connection is False
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"Content-Length": "abc"},
+        {"Content-Length": "-5"},
+        {"Transfer-Encoding": "chunked"},
+    ],
+)
+def test_untrustworthy_framing_closes_the_connection(headers: dict[str, str]) -> None:
+    """어디까지가 이 요청인지 모르면 응답 하나를 내고 연결을 끊는다.
+
+    이어 쓰면 남은 바이트가 다음 요청으로 오독된다. 요청의 잘못이지 서버의 버그가 아니므로
+    예외를 올리지 않고 정직하게 끊는다.
+    """
+    handler = _FakeHandler(headers, b"leftover bytes")
+
+    assert handler._body() == b""
+    assert handler.close_connection is True

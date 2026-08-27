@@ -159,9 +159,14 @@ function renderNav(activeView) {
 
 /* --- 화면 -------------------------------------------------------------------- */
 
-async function renderDashboard(content) {
+async function renderDashboard(content, generation) {
   content.appendChild(el('p', 'metric-caption', '불러오는 중…'));
   const body = await getJson('/api/dashboard');
+  // `/api/dashboard` 는 `diagnose()` 를 부르고 그것은 Ollama 를 실제로 두드린다 — 데몬이
+  // 죽어 있으면 수 초가 걸린다. 그 사이 사용자가 다른 화면으로 옮겨 갔다면 이 응답은
+  // **버린다.** 그러지 않으면 다른 화면의 제목 아래에 대시보드가 그려지고, 떠난 화면을
+  // 위해 SSE 연결이 열린 채로 남는다.
+  if (generation !== renderGeneration) return;
   clear(content);
   if (isError(body)) {
     content.appendChild(
@@ -202,13 +207,13 @@ let lastRunning = false;
 function renderRunCard(card, payload) {
   if (payload !== null) {
     if (payload.kind === 'snapshot') {
+      // 스냅샷은 **재동기화 지점**이다 — 접속·재접속 때 한 번 오고 그때까지의 집계를
+      // 통째로 복원한다 (§4.3).
       lastSnapshot = payload.snapshot;
       lastRunning = payload.running;
     } else {
-      // 이벤트 프레임은 「무엇이 일어났는가」다. 집계는 서버가 접어 둔 스냅샷이 소유하므로
-      // 여기서는 지금 무엇을 하고 있는지만 갱신한다 — 프론트에 reduce()를 두 벌로 두지 않는다.
+      lastSnapshot = foldEvent(lastSnapshot, payload);
       lastRunning = payload.kind !== 'run_finished';
-      lastSnapshot = Object.assign({}, lastSnapshot || {}, describeEvent(payload));
     }
   }
   clear(card);
@@ -231,14 +236,37 @@ function renderRunCard(card, payload) {
   }
 }
 
-/** 이벤트 하나에서 화면이 바로 쓰는 필드만 뽑는다. */
-function describeEvent(payload) {
-  const patch = {};
-  if (typeof payload.path === 'string') patch.current_file = payload.path;
-  if (payload.kind === 'graph_started') patch.graph_stage = 'building';
-  if (payload.kind === 'related_injected') patch.graph_stage = 'injecting';
-  if (payload.kind === 'graph_finished') patch.graph_stage = 'done';
-  return patch;
+/**
+ * 라이브 이벤트 하나를 현재 상태에 접는다.
+ *
+ * 서버는 스냅샷을 **접속 때 한 번만** 보내고 다시 보내지 않는다(리플레이 버퍼가 없는 것과
+ * 같은 이유 — §4.3). 그래서 화면이 이벤트를 접지 않으면 진행 카운터가 접속 시점 값에 멈춘
+ * 채 파일 이름만 바뀐다: 문서 50개를 도는 내내 `0 / 0` 이 보인다.
+ *
+ * 코어 `reduce()` 를 옮겨 오지 않는다 — 여기서 세는 것은 **화면이 그리는 값**(생성·스킵·
+ * 현재 파일·그래프 단계)뿐이고, rate·ETA 같은 파생값과 재동기화는 그대로 서버 스냅샷이
+ * 소유한다. 재접속 한 번이면 이 지역 집계가 서버 값으로 덮인다.
+ */
+function foldEvent(snapshot, payload) {
+  const next = Object.assign({}, snapshot || {});
+  if (payload.kind === 'run_started') {
+    next.total = payload.total;
+    next.generated = 0;
+    next.skipped = 0;
+  }
+  if (payload.kind === 'file_generated') next.generated = (next.generated || 0) + 1;
+  if (payload.kind === 'file_skipped') next.skipped = (next.skipped || 0) + 1;
+  if (typeof payload.path === 'string') next.current_file = payload.path;
+  if (payload.kind === 'graph_started') {
+    next.graph_stage = 'building';
+    next.current_file = null;
+  }
+  if (payload.kind === 'related_injected') next.graph_stage = 'injecting';
+  if (payload.kind === 'graph_finished') {
+    next.graph_stage = 'done';
+    next.current_file = null;
+  }
+  return next;
 }
 
 function badge(kind, label) {
@@ -328,7 +356,11 @@ function setWorkspacePath(path) {
   document.getElementById('workspace-path').textContent = path || '';
 }
 
+/** 렌더 세대 — 화면이 바뀔 때마다 증가한다. 늦게 온 응답을 가려내는 유일한 기준이다. */
+let renderGeneration = 0;
+
 async function render() {
+  const generation = ++renderGeneration;
   const { view } = currentRoute();
   const entry = VIEWS.find((item) => item.id === view);
   document.getElementById('view-title').textContent = entry.label;
@@ -339,7 +371,7 @@ async function render() {
   clear(content);
   closeStream();
   if (view === 'dashboard') {
-    await renderDashboard(content);
+    await renderDashboard(content, generation);
   } else {
     renderPending(content, view);
   }
@@ -349,7 +381,12 @@ window.addEventListener('hashchange', render);
 window.addEventListener('DOMContentLoaded', () => {
   stripBootstrapToken();
   if (!window.location.hash) {
+    // 해시를 넣는 것 자체가 `hashchange`를 큐에 넣는다. 여기서 `render()`까지 부르면 콜드
+    // 로드마다 대시보드를 **두 번** 그려 `/api/dashboard`(= `diagnose()` 네트워크 호출)가
+    // 두 번 나가고 `EventSource`도 두 번 열린다. 해시가 화면 상태의 단일 출처라는 것은
+    // (§4.10.4) 첫 렌더도 해시가 몰아야 한다는 뜻이다.
     window.location.replace(`#/${DEFAULT_VIEW}`);
+    return;
   }
   render();
 });

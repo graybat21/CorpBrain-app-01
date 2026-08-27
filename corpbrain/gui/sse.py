@@ -163,21 +163,37 @@ class EventStream:
             subscriber.offer(payload)
 
     def current_frame(self) -> str:
-        """접속 즉시 보내는 첫 프레임."""
+        """지금 상태의 스냅샷 프레임. 구독과 함께 원자적으로 얻으려면 `attach()`를 쓴다."""
         with self._lock:
             return format_sse(snapshot_payload(self._snapshot, running=self._running))
 
     @contextmanager
-    def subscribe(self) -> Iterator[Subscriber]:
-        """구독자를 등록하고, 블록을 벗어나면 반드시 해제한다."""
+    def attach(self) -> Iterator[tuple[str, Subscriber]]:
+        """**스냅샷 확보와 구독 등록을 한 번의 락 안에서** 한다 (§4.3).
+
+        둘을 따로 하면 그 사이에 `publish()`된 이벤트가 **어느 쪽에도 담기지 않아 영구히
+        사라진다** — 스냅샷은 그 이벤트 이전에 찍혔고 구독자는 아직 없었기 때문이다. 서버는
+        스냅샷을 다시 보내지 않으므로(리플레이 버퍼 없음) 그 화면은 끝까지 어긋난 채로 남는다.
+
+        반대로 구독을 먼저 하고 스냅샷을 나중에 찍으면 같은 이벤트가 **두 번** 반영된다
+        (스냅샷에 접힌 뒤 이벤트로 또 온다). 한 락 안에서 둘 다 하는 것만이 정확히 한 번을
+        보장한다.
+        """
         subscriber = Subscriber()
         with self._lock:
+            frame = format_sse(snapshot_payload(self._snapshot, running=self._running))
             self._subscribers.add(subscriber)
         try:
-            yield subscriber
+            yield frame, subscriber
         finally:
             with self._lock:
                 self._subscribers.discard(subscriber)
+
+    @contextmanager
+    def subscribe(self) -> Iterator[Subscriber]:
+        """구독자를 등록하고, 블록을 벗어나면 반드시 해제한다."""
+        with self.attach() as (_frame, subscriber):
+            yield subscriber
 
     @property
     def subscriber_count(self) -> int:

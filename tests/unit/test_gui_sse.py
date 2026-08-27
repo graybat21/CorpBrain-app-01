@@ -160,3 +160,33 @@ def test_get_returns_none_when_nothing_arrives() -> None:
     stream = EventStream()
     with stream.subscribe() as subscriber:
         assert subscriber.get(timeout=0.0) is None
+
+
+def test_attach_loses_no_event_between_snapshot_and_subscription() -> None:
+    """스냅샷 확보와 구독 등록 사이에 방출된 이벤트가 사라지지 않는다.
+
+    둘을 따로 하면 그 사이의 `publish()`가 **어느 쪽에도 담기지 않는다** — 스냅샷은 그
+    이전에 찍혔고 구독자는 아직 없었기 때문이며, 서버는 스냅샷을 다시 보내지 않으므로
+    그 화면은 끝까지 어긋난 채로 남는다. 아래는 그 창을 «스냅샷을 손에 든 채 이벤트를
+    방출」로 재현한다.
+    """
+    stream = EventStream()
+    stream.begin()
+
+    with stream.attach() as (snapshot, subscriber):
+        # 첫 프레임을 소켓에 흘려보내는 동안 스캔이 이벤트를 낸 상황.
+        stream.publish(RunStarted(at=0.0, model="m", total=1))
+        assert _payloads(snapshot)["snapshot"] is None  # 스냅샷에는 없고
+        assert [p["kind"] for p in subscriber.drain()] == ["run_started"]  # 큐에는 있다
+
+
+def test_attach_does_not_deliver_an_event_twice() -> None:
+    """반대 방향의 실수도 막는다 — 구독을 먼저 하고 스냅샷을 나중에 찍으면 이중 반영된다."""
+    stream = EventStream()
+    stream.begin()
+    stream.publish(RunStarted(at=0.0, model="m", total=1))
+
+    with stream.attach() as (snapshot, subscriber):
+        # 이미 스냅샷에 접힌 이벤트가 큐로 또 오지 않는다.
+        assert _payloads(snapshot)["snapshot"]["total"] == 1
+        assert subscriber.drain() == []

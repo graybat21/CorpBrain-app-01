@@ -363,8 +363,23 @@ class GuiApp:
 
         조회이므로 `read_only=True`로 연다 — 파일에 쓰지 않고, 스키마가 소실된 DB를
         되만들지 않는다 (v0.6.1 결정 계승).
+
+        **DB가 아직 없는 것과 손상된 것을 가른다** (§5 · T11). 코어는 둘을 같은
+        `PreconditionError`로 묶어 「손상되었거나 접근할 수 없습니다 … 파일을 지우고 다시
+        scan 하세요」라고 안내하는데, 그것은 `graph` **CLI**의 계약(부재도 선행 조건 실패,
+        exit 1)에 맞춰진 문구다. GUI에서 첫 실행 사용자가 그 문장을 보면 **만든 적도 없는
+        파일을 지우라는 안내**를 받는다 — CLAUDE.md가 「사용자가 멀쩡한 DB를 지운다」로
+        경계한 그 상황이다. 파일 존재 여부는 열기 전에 확인할 수 있으므로 여기서 가른다.
         """
-        store = SqliteGraphStore(graph_path_for(self.out_dir), read_only=True)
+        path = graph_path_for(self.out_dir)
+        if not path.exists():
+            # 첫 실행은 오류가 아니라 정상적인 빈 상태다 (§5). 화면은 이 식별자를 보고
+            # 자기 빈 상태를 그리고 스캔 화면으로 보낸다.
+            return {
+                "error": "GraphNotBuilt",
+                "message": "아직 스캔하지 않았습니다 — 먼저 스캔하면 지식그래프가 채워집니다.",
+            }
+        store = SqliteGraphStore(path, read_only=True)
         try:
             return _stats_dict(store.stats())
         finally:

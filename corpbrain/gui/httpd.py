@@ -82,14 +82,40 @@ class _Handler(BaseHTTPRequestHandler):
         if raw_path == EVENTS_PATH:
             self._stream_events()
             return
-        self._respond(self._app.handle("GET", self.path, dict(self.headers)))
+        self._handle("GET")
 
     def do_POST(self) -> None:  # BaseHTTPRequestHandler 규약 이름이다
-        body = self.rfile.read(_content_length(self.headers.get("Content-Length")))
-        self._respond(self._app.handle("POST", self.path, dict(self.headers), body))
+        self._handle("POST")
 
     def do_DELETE(self) -> None:  # BaseHTTPRequestHandler 규약 이름이다
-        self._respond(self._app.handle("DELETE", self.path, dict(self.headers)))
+        self._handle("DELETE")
+
+    def _handle(self, method: str) -> None:
+        """본문을 **반드시 배출한 뒤** 요청을 앱에 넘긴다.
+
+        메서드가 본문을 쓰지 않더라도 읽어야 한다. `Content-Length`가 선언된 바이트를 읽지
+        않으면 keep-alive 연결에 그대로 남아 **다음 요청의 요청줄로 파싱된다** — 실측에서
+        본문을 실은 `DELETE` 뒤의 정상 요청이 깨졌다. `protocol_version = "HTTP/1.1"`이라
+        연결이 재사용되므로 이 구멍이 실재한다.
+        """
+        self._respond(self._app.handle(method, self.path, dict(self.headers), self._body()))
+
+    def _body(self) -> bytes:
+        """선언된 길이만큼 본문을 읽는다. 프레이밍을 믿을 수 없으면 연결을 닫는다.
+
+        길이를 해석하지 못했거나(`Content-Length: abc`) 청크 전송이면 **어디까지가 이
+        요청인지 알 수 없다.** 그때 연결을 이어 쓰면 남은 바이트가 다음 요청으로 오독되므로,
+        응답 하나를 정직하게 내고 연결을 끊는다 — 요청의 잘못이지 서버의 버그가 아니다.
+        """
+        raw = self.headers.get("Content-Length")
+        if self.headers.get("Transfer-Encoding", "").strip().lower() == "chunked":
+            self.close_connection = True
+            return b""
+        length = _content_length(raw)
+        if raw is not None and length == 0 and raw.strip() not in {"", "0"}:
+            self.close_connection = True
+            return b""
+        return self.rfile.read(length) if length else b""
 
     def log_message(self, format: str, *args: object) -> None:  # `format` 이름은 상위 클래스 규약이다
         """요청 로그를 내지 않는다 — 포그라운드 stdout이 진행 안내로 남아야 한다."""
@@ -129,9 +155,11 @@ class _Handler(BaseHTTPRequestHandler):
                 return  # 브라우저가 떠났다 — `EventSource`가 알아서 재연결한다
 
     def _frames(self) -> Iterator[str]:
-        stream = self._app.events
-        yield stream.current_frame()
-        with stream.subscribe() as subscriber:
+        # `attach()`로 **스냅샷과 구독을 한 번에** 잡는다. 스냅샷을 먼저 흘려보낸 뒤 구독하면
+        # 그 사이에 방출된 이벤트가 어느 쪽에도 담기지 않아 영구히 사라진다 — 첫 프레임이
+        # 소켓에 flush 되기를 기다리는 동안이 그 창이다.
+        with self._app.events.attach() as (snapshot, subscriber):
+            yield snapshot
             while True:
                 payload = subscriber.get(timeout=KEEPALIVE_INTERVAL)
                 yield SSE_KEEPALIVE if payload is None else format_sse(payload)
