@@ -4,6 +4,13 @@
 - `.docx`: 문단 텍스트를 순서대로 이어 붙인다 (FR-007).
 - `.pdf`: 텍스트 레이어를 페이지 순서로 이어 붙인다 — 이미지/OCR·암호화는 다루지 않는다
   (v0.2 U1, 스펙 §4.1).
+- `.xlsx` / `.xlsm`: 내용이 있는 시트마다 경계 줄을 내고 행의 셀 값을 탭으로 잇는다. 숨긴
+  시트는 제외하고, 수식은 캐시된 계산값을 읽는다 (v0.8 §4.2).
+- `.pptx`: 내용이 있는 슬라이드마다 경계 줄을 내고 도형·표·그룹·발표자 노트의 텍스트를
+  파일 순서대로 잇는다 (v0.8 §4.2).
+
+구형 이진 포맷(`.xls`·`.ppt`)과 `.pptm`·`.xltx`·`.xltm`은 비목표이며, 스캐너가
+`unsupported_extension`으로 걸러 이 모듈에 닿지 않는다 (v0.8 §2).
 
 공통 규칙: 파일을 통째로 메모리에 올리지 않고 앞부분 `max_chars`까지만 읽는다.
 개별 파일의 추출 실패는 `ExtractionError`로 올리고, 호출자(FR-008/FR-015)가 스킵으로
@@ -14,20 +21,26 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
 from docx import Document
-from docx.opc.exceptions import PackageNotFoundError
+from openpyxl import load_workbook
+from pptx import Presentation
+from pptx.shapes.group import GroupShape
 from pypdf import PdfReader
-from pypdf.errors import PyPdfError
 
 from corpbrain.core.errors import CorpBrainError
 from corpbrain.core.models import SkippedFile, SkipReason
 
-PLAINTEXT_EXTENSIONS: frozenset[str] = frozenset({".txt", ".md"})
-DOCX_EXTENSION = ".docx"
-PDF_EXTENSION = ".pdf"
+#: OLE 복합문서(CFBF)의 매직 넘버 8바이트 (스펙 §4.3.1).
+#:
+#: 암호로 보호된 `.xlsx`/`.pptx`는 OOXML zip이 **아니라** 이 컨테이너로 감싸져 저장되므로,
+#: `openpyxl`·`python-pptx`는 「zip을 열지 못했다」는 예외만 던진다 — 손상된 파일과 예외 종류가
+#: 같아 그것만으로는 원인을 가를 수 없다. 구형 `.xls`/`.ppt`(BIFF·OLE)도 같은 시그니처를 갖는다.
+OLE_SIGNATURE: bytes = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 
 
 class ExtractionError(CorpBrainError):
@@ -78,14 +91,94 @@ def extract_text(path: Path, max_chars: int) -> str:
     Raises:
         ExtractionError: 지원하지 않는 확장자이거나 읽기·파싱에 실패한 경우.
     """
-    suffix = path.suffix.lower()
-    if suffix in PLAINTEXT_EXTENSIONS:
-        return _extract_plaintext(path, max_chars)
-    if suffix == DOCX_EXTENSION:
-        return _extract_docx(path, max_chars)
-    if suffix == PDF_EXTENSION:
-        return _extract_pdf(path, max_chars)
-    raise ExtractionError(f"지원하지 않는 확장자입니다: {path.suffix}")
+    extractor = EXTRACTORS.get(path.suffix.lower())
+    if extractor is None:
+        # 스캐너가 이미 `SUPPORTED_EXTENSIONS`로 걸러 주므로 정상 경로에서는 닿지 않는다.
+        # 스캐너를 우회한 직접 호출용 방어선이다 (스펙 §4.2).
+        raise ExtractionError(f"지원하지 않는 확장자입니다: {path.suffix}")
+    return extractor(path, max_chars)
+
+
+def _diagnose_open_failure(path: Path) -> tuple[str, OSError | None]:
+    """열기에 실패한 오피스 파일의 detail 문구와, 접근 자체가 막힌 경우 그 원인을 돌려준다.
+
+    **원인 판정을 예외 메시지 문자열 매칭으로 하지 않는다** — 라이브러리 버전이 올라가면
+    조용히 깨진다. 대신 파일 앞 8바이트라는 안정된 근거를 쓴다. 이 함수는 이미 열기에
+    실패한 경로에서만 불리므로 정상 경로에는 비용이 없다.
+
+    OLE 시그니처는 **암호화된 OOXML과 구형 이진 포맷(`.xls`/`.ppt`)을 구분하지 못한다.**
+    근거가 두 원인을 가르지 못하므로 detail에 둘을 함께 적어 정직하게 둔다 — 어느 쪽이든
+    사용자가 할 일은 같다(암호를 풀거나 최신 포맷으로 다시 저장).
+
+    **접근 자체가 막혔으면 그 `OSError`를 함께 돌려준다.** 호출자가 그것을 `from`에 실어
+    `PermissionError`가 `__cause__`에 남게 하기 위함이다 — `prepare_summary_input()`이
+    `permission_denied`와 `extraction_failed`를 가르는 판정이 거기에 의존한다 (§4.3.1).
+    이 반환값이 필요한 이유는 라이브러리마다 원인 보존이 다르기 때문이다: `openpyxl`은
+    `PermissionError`를 그대로 전파하지만, `python-pptx`는 `zipfile.is_zipfile()`로 읽기
+    가능 여부를 확인하며 그것을 **삼키고** `__cause__` 없는 `PackageNotFoundError`를 올린다.
+    그대로 두면 읽을 수 없는 `.pptx`만 `extraction_failed`로 분류돼 `docs/USAGE.md` §8이
+    약속한 「권한 거부」 라벨을 받지 못한다.
+
+    여기서 예외를 올리지는 않는다 — 이 함수는 이미 실패한 경로에서만 불리므로, 새 예외를
+    올리면 원래의 추출 실패가 뒤덮여 스킵 사유 자체가 바뀐다.
+    """
+    label = path.suffix.lower().lstrip(".") or "파일"
+    base = f"{label}를 열지 못했습니다: {path}"
+    try:
+        with path.open("rb") as stream:
+            head = stream.read(len(OLE_SIGNATURE))
+    except OSError as access_error:
+        return base, access_error
+    if head == OLE_SIGNATURE:
+        return f"{base} — 암호화되었거나 구형 이진 포맷입니다", None
+    return base, None
+
+
+
+def _join_truncated(parts: list[str], boundaries: set[int], max_chars: int) -> str:
+    """`max_chars` 이하로 줄을 이어 붙이되 **줄 한가운데를 자르지 않는다** (스펙 §4.2).
+
+    경계 줄(`[시트: …]`·`[슬라이드 N]`)은 구조 신호이므로 반토막 나면 모델이 읽는 구조가
+    깨진다 — 그냥 자르면 `"[시트: 아주긴시트"` 같은 조각이 요약 입력에 남는다.
+
+    **뒤에 내용이 남지 않은 경계 줄은 함께 뺀다.** 줄 경계로만 자르면 마지막에 경계 줄 하나가
+    홀로 남을 수 있는데, 그러면 §4.2 T1이 막으려던 상태 — 시트 이름만 든 입력이 호출자의
+    `text.strip()` 검사를 통과하는 것 — 가 절단을 통해 되살아난다. `boundaries`는 추출기가
+    「이 인덱스는 경계 줄」이라고 알려 준 것이며, 포맷 문법 지식은 추출기 안에 머문다.
+
+    상한이 너무 작아 온전히 못 담을 때는 **무엇이 들어갔는지에 따라 갈린다.** 경계 줄은
+    들어갔는데 뒤 내용 줄이 안 들어가면 경계 줄을 살리고 내용 줄을 잘라 넣는다(실제로 담을 수
+    있던 내용을 버리지 않는다). 경계 줄조차 안 들어가면 빈 문자열을 돌려준다 — 그 경우 그냥
+    자르면 반토막 마커만 남고 내용은 한 글자도 못 싣는다.
+    """
+    text = "\n".join(parts)
+    if len(text) <= max_chars:
+        return text
+
+    kept = 0
+    total = 0
+    for index, part in enumerate(parts):
+        length = len(part) + (1 if index else 0)  # 두 번째 줄부터 개행 1자
+        if total + length > max_chars:
+            break
+        total += length
+        kept = index + 1
+
+    if kept == 0:
+        # 첫 줄(= 경계 줄)조차 들어가지 않는다. 낼 수 있는 온전한 단위가 하나도 없으므로 빈
+        # 문자열을 돌려준다 — 여기서 그냥 자르면 `"[시트: 아주긴시"` 같은 **반토막 마커만**
+        # 남고 내용은 한 글자도 못 싣는다. 마커 하나가 상한을 넘는 것은 `--max-chars`를
+        # 수십 자로 준 경우뿐이다(엑셀 시트명은 31자 제한).
+        return ""
+
+    trimmed = kept
+    while trimmed and (trimmed - 1) in boundaries:
+        trimmed -= 1
+    if trimmed == 0:
+        # 들어간 것이 경계 줄뿐이다. 경계 줄은 온전하므로 그대로 두고 뒤 내용 줄을 잘라 넣는다 —
+        # 실제로 상한 안에 들어갈 수 있던 내용을 버리지 않기 위함이다.
+        return text[:max_chars]
+    return "\n".join(parts[:trimmed])
 
 
 def _extract_plaintext(path: Path, max_chars: int) -> str:
@@ -101,7 +194,7 @@ def _extract_docx(path: Path, max_chars: int) -> str:
     """`.docx` 문단을 순서대로 잇되 `max_chars`에 도달하면 누적을 멈춘다."""
     try:
         document = Document(str(path))
-    except (PackageNotFoundError, OSError, ValueError, KeyError) as exc:
+    except _EXTRACTOR_ERRORS as exc:
         raise ExtractionError(f"docx를 열지 못했습니다: {path}") from exc
 
     parts: list[str] = []
@@ -115,7 +208,9 @@ def _extract_docx(path: Path, max_chars: int) -> str:
             accumulated += len(text) + 1
             if accumulated >= max_chars:
                 break
-    except (OSError, ValueError, KeyError) as exc:
+    except ExtractionError:
+        raise
+    except _EXTRACTOR_ERRORS as exc:
         raise ExtractionError(f"docx 문단을 읽지 못했습니다: {path}") from exc
 
     return "\n".join(parts)[:max_chars]
@@ -132,7 +227,7 @@ def _extract_pdf(path: Path, max_chars: int) -> str:
     try:
         reader = PdfReader(str(path))
         encrypted = reader.is_encrypted
-    except (OSError, PyPdfError, ValueError) as exc:
+    except _EXTRACTOR_ERRORS as exc:
         raise ExtractionError(f"pdf를 열지 못했습니다: {path}") from exc
 
     if encrypted:
@@ -150,7 +245,270 @@ def _extract_pdf(path: Path, max_chars: int) -> str:
             accumulated += len(text) + 1
             if accumulated >= max_chars:
                 break
-    except (PyPdfError, ValueError, KeyError) as exc:
+    except ExtractionError:
+        raise
+    except _EXTRACTOR_ERRORS as exc:
         raise ExtractionError(f"pdf 텍스트를 읽지 못했습니다: {path}") from exc
 
     return "\n".join(parts)[:max_chars]
+
+
+#: **모든** 추출기가 흡수하는 예외 범위 — **열거하지 않고 `Exception` 전체를 받는다.**
+#:
+#: `.docx`·`.pdf`도 같은 상수를 쓴다 — 관용구가 갈리면 「왜 오피스만 다르지」에서 잘못된 쪽으로
+#: 통일될 위험이 있다. 실제로 **손상된 `.docx`가 같은 방식으로 새고 있었다**(zip은 열리는데
+#: `word/document.xml`이 깨진 파일 → `lxml.etree.XMLSyntaxError` 탈출, 2026-08-27 실측).
+#:
+#: 최초 구현은 `(InvalidFileException, BadZipFile, OSError, ValueError, KeyError)`를 열거했다.
+#: 그 목록은 «zip이 아닌 쓰레기 바이트»만 덮었고, 실사용에서 훨씬 흔한 손상 — 컨테이너는
+#: 열리는데 안쪽 XML이 잘린 경우 — 를 통째로 놓쳤다. 두 라이브러리는 그때 파싱 예외를
+#: 올리는데(`openpyxl` → `xml.etree.ElementTree.ParseError`, `python-pptx` →
+#: `lxml.etree.XMLSyntaxError`) 둘 다 **`SyntaxError` 하위**라 위 목록 어디에도 걸리지 않고
+#: 코어 밖으로 탈출했다. 그러면 그 파일 하나가 스캔 전체를 죽여, v0.1 §5의 「개별 파일 실패는
+#: 전체 실패로 위장하지 않는다」와 스펙 §4.3이 함께 무너진다.
+#:
+#: 열거를 늘리는 대신 범위를 넓힌 이유는, 이 경계가 **제3자 파서에게 신뢰할 수 없는 이진
+#: 입력을 먹이는 자리**여서 무엇이 올라올지 미리 셀 수 없기 때문이다. 실제로 손상되지도 않은
+#: 파일에서도 샌다 — 차트시트가 든 통합문서는 `openpyxl` 3.1.5 내부에서 `AttributeError`로
+#: 죽는다(실측). 사용자가 만든 평범한 엑셀 파일 하나에 스캔이 멈추는 셈이다.
+#:
+#: `BaseException`이 아니라 `Exception`이므로 `KeyboardInterrupt`·`SystemExit`은 그대로
+#: 통과한다 — 사용자의 중단 요청이 「추출 실패」로 둔갑하지 않는다.
+#:
+#: 순회 단계는 `except ExtractionError: raise`를 앞에 두어 **이미 우리 계약인 예외를 다시
+#: 감싸지 않는다.** 감싸면 원래 detail이 일반 문구로 덮여 사라진다.
+_EXTRACTOR_ERRORS = Exception
+
+
+def _cell_text(value: object) -> str:
+    """엑셀 셀 값 하나를 표기 문자열로 바꾼다 (스펙 §4.2 T2 표).
+
+    `openpyxl`이 돌려주는 것은 문자열이 아니라 파이썬 객체다. `str()`에 그대로 맡기면
+    `120000.0`·`2026-03-31 00:00:00` 같은 표기가 나오고, LLM이 요약문에 그대로 옮겨 적는다.
+
+    엑셀 표시 형식(`number_format`)은 해석하지 않는다 — `read_only` 모드에서 제한적이고,
+    통화·백분율까지 다루면 이번 슬라이스의 「텍스트 레이어만」 원칙을 넘어선다.
+    """
+    if value is None:
+        # 빈 셀. 이 값이 「내용 없음」 판정의 기준이다 (§4.2 T1).
+        return ""
+    if isinstance(value, bool):
+        # `bool`은 `int`의 하위 타입이므로 숫자 규칙보다 먼저 가른다.
+        return str(value)
+    if isinstance(value, datetime):
+        if (value.hour, value.minute, value.second, value.microsecond) == (0, 0, 0, 0):
+            return value.strftime("%Y-%m-%d")
+        return value.strftime("%Y-%m-%d %H:%M")
+    if isinstance(value, date):
+        return value.strftime("%Y-%m-%d")
+    if isinstance(value, time):
+        # 시각 서식 셀. `datetime` 규칙이 이미 분까지만 적으므로 초를 버려 표기를 맞춘다.
+        return value.strftime("%H:%M")
+    if isinstance(value, timedelta):
+        # 기간 서식 셀. `str()`은 `1 day, 2:00:00` 같은 파이썬 표기를 내는데, 그것이야말로
+        # 이 표가 없애려던 잡음이다. 엑셀이 `[h]:mm`으로 보여 주는 «총 시간:분»으로 적는다.
+        minutes = int(value.total_seconds() // 60)
+        sign = "-" if minutes < 0 else ""
+        minutes = abs(minutes)
+        return f"{sign}{minutes // 60}:{minutes % 60:02d}"
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
+
+
+def _tab_joined_row(row: Iterable[object]) -> str:
+    """표의 행 하나를 탭으로 이은 한 줄로 만든다. 전 셀이 비면 빈 문자열이다 (§4.2 T2).
+
+    행 **끝**의 빈 셀은 탭을 남기지 않는다(오른쪽 여백 탭 제거). 앞·중간의 빈 셀은 열 위치
+    정보이므로 탭으로 남긴다.
+
+    엑셀 시트와 PPTX 슬라이드 안의 표가 같은 함수를 쓴다 — 둘 다 「행 × 셀」 구조이고,
+    표기가 갈리면 같은 표를 담은 `.xlsx`와 `.pptx`가 서로 다른 요약 입력을 만든다.
+    """
+    cells = [_cell_text(value) for value in row]
+    while cells and not cells[-1]:
+        cells.pop()
+    return "\t".join(cells)
+
+
+def _extract_xlsx(path: Path, max_chars: int) -> str:
+    """`.xlsx`/`.xlsm`의 셀 값을 시트 순서로 잇되 `max_chars`에 도달하면 멈춘다 (스펙 §4.2).
+
+    `read_only=True`로 열어 통합문서를 통째로 메모리에 올리지 않는다. `data_only=True`는
+    수식 대신 **캐시된 계산값**을 읽는다 — 요약에 쓸모 있는 것은 `=SUM(B2:B10)`이 아니라 그
+    결과값이다. Excel이 저장하지 않은 파일에는 그 캐시가 없어 수식 셀이 비어 읽히며, 시트가
+    수식뿐이면 추출 결과가 빈 문자열이 되어 호출자가 `empty_document`로 스킵한다 (§5).
+
+    **경계 줄은 내용이 있는 시트에만 낸다** (§4.2 T1). 경계 줄은 「뒤에 내용이 온다」는
+    신호이므로 뒤가 비면 낼 것이 없다. 항상 내면 값이 전부 비는 파일의 추출 결과가 경계
+    줄만 남아 호출자의 `text.strip()` 검사를 통과해 버려, `empty_document`로 걸러져야 할
+    문서가 시트 이름만 든 입력으로 LLM까지 간다. 빈 판정 책임은 호출자 한 곳에 그대로 둔다.
+
+    **숨긴 시트는 제외하고 숨긴 행은 제외하지 않는다.** `sheet_state`는 읽기 전용 개봉에서도
+    판정되지만, `ReadOnlyWorksheet`에는 `row_dimensions` 속성이 아예 없어 「이 행이 숨겨졌는가」를
+    알 길이 없다 (2026-08-27 · `openpyxl` 3.1.5 실측 · 스펙 §4.2 T3). `read_only=False`로
+    바꾸는 선택지는 위의 「통째로 메모리에 올리지 않는다」와 정면으로 부딪쳐 택하지 않는다.
+    """
+    try:
+        workbook = load_workbook(str(path), read_only=True, data_only=True)
+    except _EXTRACTOR_ERRORS as exc:
+        detail, access_error = _diagnose_open_failure(path)
+        # 접근이 막혀 실패했다면 그 `OSError`를 원인으로 싣는다 — 라이브러리가 원인을
+        # 삼켰더라도 `permission_denied` 판정이 성립하게 한다 (§4.3.1).
+        raise ExtractionError(detail) from (access_error or exc)
+
+    parts: list[str] = []
+    boundaries: set[int] = set()
+    accumulated = 0
+    try:
+        for worksheet in workbook.worksheets:
+            if worksheet.sheet_state != "visible":
+                continue
+            # 첫 내용 줄을 만나기 전까지는 경계 줄을 내지 않고 들고만 있는다.
+            pending_boundary: str | None = f"[시트: {worksheet.title}]"
+            for row in worksheet.iter_rows(values_only=True):
+                line = _tab_joined_row(row)
+                if not line.strip():
+                    # 공백만 든 셀은 내용이 아니다. `_tab_joined_row()`는 **빈** 셀만 뒤에서
+                    # 떼어내므로 `" "` 같은 값이 살아남는데, 그것을 내용으로 세면 `[시트: …]`
+                    # 경계 줄까지 딸려 나와 호출자의 `text.strip()` 검사를 통과한다 — §4.2 T1이
+                    # 막으려던 실패가 `None`이 아니라 공백을 통해 그대로 재현된다.
+                    # PPTX 표 경로(`_pptx_shape_lines`)도 같은 판정을 쓴다.
+                    continue
+                if pending_boundary is not None:
+                    boundaries.add(len(parts))
+                    parts.append(pending_boundary)
+                    accumulated += len(pending_boundary) + 1
+                    pending_boundary = None
+                parts.append(line)
+                accumulated += len(line) + 1
+                if accumulated >= max_chars:
+                    break
+            if accumulated >= max_chars:
+                break
+    except ExtractionError:
+        raise
+    except _EXTRACTOR_ERRORS as exc:
+        raise ExtractionError(
+            f"{path.suffix.lstrip('.')} 시트를 읽지 못했습니다: {path}"
+        ) from exc
+    finally:
+        workbook.close()
+
+    return _join_truncated(parts, boundaries, max_chars)
+
+
+def _pptx_shape_lines(shapes: Iterable[object]) -> Iterator[str]:
+    """도형 트리를 **파일에 적힌 순서 그대로** 훑어 내용 줄을 낸다 (스펙 §4.2).
+
+    좌표 기반 시각 순서 재정렬을 하지 않는다 — 같은 높이의 도형에서 순서가 흔들려 tie-break를
+    또 정해야 하고, 결정성이 약해진다.
+
+    표(`GraphicFrame`)는 `text_frame`이 없어 따로 훑지 않으면 통째로 누락되고, 그룹 도형은
+    자식이 한 겹 아래에 있어 재귀하지 않으면 그룹째 누락된다.
+    """
+    for shape in shapes:
+        if isinstance(shape, GroupShape):
+            yield from _pptx_shape_lines(shape.shapes)
+            continue
+        if shape.has_table:
+            for row in shape.table.rows:
+                line = _tab_joined_row(cell.text for cell in row.cells)
+                if line.strip():
+                    yield line
+            continue
+        if shape.has_text_frame:
+            text = shape.text_frame.text
+            if text.strip():
+                yield text
+
+
+def _pptx_notes_lines(slide: object) -> Iterator[str]:
+    """발표자 노트를 `[노트]` 줄 뒤에 낸다 (스펙 §4.2).
+
+    슬라이드 본문이 키워드 나열뿐이고 실제 내용이 노트에 있는 경우가 흔하다.
+
+    **접근을 `has_notes_slide`로 가드한다** (T7). `slide.notes_slide`에 바로 접근하면 노트
+    슬라이드가 없는 슬라이드에 객체가 새로 만들어진다 — 파일에 쓰이지는 않으나 읽기 연산이
+    객체를 만드는 모양새다. 추출기는 전부 읽기 전용이며 그 성질이 코드에서 보이게 둔다.
+
+    노트가 있으나 공백뿐이면 `[노트]` 줄도 내지 않는다 — 경계 줄과 같은 규칙이다.
+    """
+    if not slide.has_notes_slide:
+        return
+    frame = slide.notes_slide.notes_text_frame
+    if frame is None:
+        return
+    text = frame.text
+    if not text.strip():
+        return
+    yield "[노트]"
+    yield text
+
+
+def _extract_pptx(path: Path, max_chars: int) -> str:
+    """`.pptx`의 슬라이드 텍스트를 순서대로 잇되 `max_chars`에 도달하면 멈춘다 (스펙 §4.2).
+
+    **경계 줄 `[슬라이드 N]`은 내용이 있는 슬라이드에만 낸다** (§4.2 T1 — 엑셀과 같은 규칙).
+    이미지만 있는 슬라이드는 경계 줄도 내지 않으며, 전 슬라이드가 그러면 추출 결과가 빈
+    문자열이 되어 호출자가 `empty_document`로 처리한다.
+
+    `N`은 **원본 슬라이드 번호**(1부터)이며 건너뛴 슬라이드가 있어도 다시 매기지 않는다 —
+    사용자가 파워포인트에서 보는 번호와 어긋나면 「몇 번째 슬라이드의 내용인가」를 짚을 수 없다.
+    """
+    try:
+        presentation = Presentation(str(path))
+    except _EXTRACTOR_ERRORS as exc:
+        detail, access_error = _diagnose_open_failure(path)
+        # 접근이 막혀 실패했다면 그 `OSError`를 원인으로 싣는다 — 라이브러리가 원인을
+        # 삼켰더라도 `permission_denied` 판정이 성립하게 한다 (§4.3.1).
+        raise ExtractionError(detail) from (access_error or exc)
+
+    parts: list[str] = []
+    boundaries: set[int] = set()
+    accumulated = 0
+    try:
+        for number, slide in enumerate(presentation.slides, start=1):
+            # 첫 내용 줄을 만나기 전까지는 경계 줄을 내지 않고 들고만 있는다. 노트만 있는
+            # 슬라이드에서도 노트가 내용이므로 경계 줄이 그 앞에 붙는다.
+            pending_boundary: str | None = f"[슬라이드 {number}]"
+            for line in (*_pptx_shape_lines(slide.shapes), *_pptx_notes_lines(slide)):
+                if pending_boundary is not None:
+                    boundaries.add(len(parts))
+                    parts.append(pending_boundary)
+                    accumulated += len(pending_boundary) + 1
+                    pending_boundary = None
+                parts.append(line)
+                accumulated += len(line) + 1
+                if accumulated >= max_chars:
+                    break
+            if accumulated >= max_chars:
+                break
+    except ExtractionError:
+        raise
+    except _EXTRACTOR_ERRORS as exc:
+        raise ExtractionError(f"pptx 슬라이드를 읽지 못했습니다: {path}") from exc
+
+    return _join_truncated(parts, boundaries, max_chars)
+
+
+#: 확장자 → 추출기 디스패치 (스펙 §4.2). **`extract.py`의 지원 포맷 목록은 이 매핑 하나뿐이다** —
+#: 확장자 상수를 따로 두지 않는다.
+#:
+#: `config.SUPPORTED_EXTENSIONS`와 **키 집합이 정확히 같아야 하며**, 그 정합성은
+#: `tests/unit/test_extract.py`의 단위테스트가 단언한다. 두 정의를 한쪽에서 다른 쪽을 참조해
+#: 파생시키지 않는 것은 의도적이다 — 파생시키면 단언이 공허해지고, 어긋남을 잡아낼 감시장치가
+#: 사라진다. 정본은 `config.SUPPORTED_EXTENSIONS`이고 이 매핑은 「그 목록을 실제로 처리할 수
+#: 있는가」를 독립적으로 진술한다.
+#:
+#: 값은 전부 `(path, max_chars) -> str` 시그니처를 공유한다. 포맷을 더할 때 손댈 곳은
+#: 추출기 함수 하나와 이 매핑 한 줄, 그리고 `config.SUPPORTED_EXTENSIONS` 한 값이다.
+EXTRACTORS: dict[str, Callable[[Path, int], str]] = {
+    ".txt": _extract_plaintext,
+    ".md": _extract_plaintext,
+    ".docx": _extract_docx,
+    ".pdf": _extract_pdf,
+    ".xlsx": _extract_xlsx,
+    ".xlsm": _extract_xlsx,
+    ".pptx": _extract_pptx,
+}

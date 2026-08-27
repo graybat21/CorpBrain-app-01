@@ -13,6 +13,9 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import pytest
+from openpyxl import Workbook
+from pptx import Presentation
+from pptx.util import Emu
 
 from corpbrain.core import gateway
 from corpbrain.core.config import DEFAULT_EMBED_MODEL, DEFAULT_MODEL, ScanConfig
@@ -96,6 +99,61 @@ def test_pipeline_makes_no_non_localhost_connections(
     assert watch_sockets.offenders(LOCALHOST_HOSTS) == []
     assert result.embedding_failures == []
     assert any(url.endswith("/api/embeddings") for url in calls)  # 임베딩 경로가 실제로 돎
+
+
+def _office_corpus(root: Path) -> None:
+    """`.xlsx`·`.xlsm`·`.pptx`를 인라인 생성한다 (v0.8 §3 — 픽스처 폴더를 확장하지 않는다).
+
+    두 오피스 추출기는 zip을 열고 XML을 파싱한다. 그 라이브러리들이 원격 스키마·DTD를 물어
+    오지 않는지는 코드를 읽어서가 아니라 **실행 중 소켓을 감시해** 확인해야 하는 종류의
+    성질이다 — 새 파싱 의존성을 둘 들이는 이번 슬라이스에서 이 케이스가 필요한 이유다.
+    """
+    workbook = Workbook()
+    workbook.active.append(["항목", "금액"])
+    workbook.save(str(root / "예산.xlsx"))
+    workbook.save(str(root / "매크로.xlsm"))
+
+    presentation = Presentation()
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    box = slide.shapes.add_textbox(Emu(0), Emu(0), Emu(3_000_000), Emu(500_000))
+    box.text_frame.text = "분기 실적"
+    presentation.save(str(root / "발표.pptx"))
+
+
+def test_office_formats_make_no_non_localhost_connections(
+    watch_sockets: SocketWatcher, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """v0.8 §3 항목10 — 신규 3종을 포함한 코퍼스의 `scan`에서 소켓 목적지가 localhost뿐이다.
+
+    새 파일로 분리하지 않는다 — 소켓 패치 관용구가 복제되고, 감시장치가 공허하게 통과하지
+    않음을 증명하는 `test_watcher_flags_a_gateway_bypass`의 보호를 받지 못한다
+    (v0.6·v0.7 결정 계승).
+
+    세 파일이 실제로 요약까지 갔음을 `calls`로 확인해, 이 테스트가 추출 단계에서 전부
+    스킵된 채 공허하게 통과하지 않도록 한다.
+    """
+    calls: list[str] = []
+
+    def _request_json(url: str, *, method: str = "GET", payload: Any = None, **_: Any) -> Any:
+        calls.append(url)
+        if url.endswith("/api/tags"):
+            return {"models": [{"name": DEFAULT_MODEL}, {"name": DEFAULT_EMBED_MODEL}]}
+        if url.endswith("/api/embeddings"):
+            return {"embedding": [0.1, 0.2, 0.3]}
+        return {"response": json.dumps(SUMMARY_JSON, ensure_ascii=False)}
+
+    monkeypatch.setattr(gateway, "request_json", _request_json)
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    _office_corpus(corpus)
+
+    result = run_scan(
+        ScanConfig(folder=corpus, out_dir=tmp_path / "wiki", force_gates=True)
+    )
+
+    assert watch_sockets.offenders(LOCALHOST_HOSTS) == []
+    assert result.skipped == []
+    assert len(result.generated) == 3  # 오피스 3종이 실제로 요약까지 갔다
 
 
 def test_graph_stage_makes_no_non_localhost_connections(

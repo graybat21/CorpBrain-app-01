@@ -40,7 +40,7 @@ def _make_fixture(root: Path) -> None:
     root/
       Notes.MD          지원 (대문자 확장자)
       a.txt             지원
-      b.xlsx            미지원 (비목표 포맷 — xls는 v0.2 비목표)
+      b.xls             미지원 (구형 BIFF — v0.8 §2 비목표. `.xlsx`는 v0.8부터 지원)
       sub/c.docx        지원 (하위폴더)
       sub/d.jpg         미지원
       sub/deep/e.md     지원 (2단계 하위폴더)
@@ -50,7 +50,7 @@ def _make_fixture(root: Path) -> None:
     (root / "empty_dir").mkdir()
     (root / "Notes.MD").write_text("notes", encoding="utf-8")
     (root / "a.txt").write_text("a", encoding="utf-8")
-    (root / "b.xlsx").write_bytes(b"PK\x03\x04")
+    (root / "b.xls").write_bytes(b"PK\x03\x04")
     (root / "sub" / "c.docx").write_bytes(b"PK\x03\x04")
     (root / "sub" / "d.jpg").write_bytes(b"\xff\xd8\xff")
     (root / "sub" / "deep" / "e.md").write_text("# e", encoding="utf-8")
@@ -117,7 +117,7 @@ def test_iter_files_yields_every_file_in_deterministic_order(tmp_path: Path) -> 
     assert list(iter_files(tmp_path)) == [
         root / "Notes.MD",
         root / "a.txt",
-        root / "b.xlsx",
+        root / "b.xls",
         root / "sub" / "c.docx",
         root / "sub" / "d.jpg",
         root / "sub" / "deep" / "e.md",
@@ -223,7 +223,7 @@ def test_scan_folder_classifies_unsupported_extensions_as_skipped(
 
     root = tmp_path.resolve()
     assert [(item.path, item.reason) for item in findings.skipped] == [
-        (root / "b.xlsx", SkipReason.UNSUPPORTED_EXTENSION),
+        (root / "b.xls", SkipReason.UNSUPPORTED_EXTENSION),
         (root / "sub" / "d.jpg", SkipReason.UNSUPPORTED_EXTENSION),
     ]
     assert all(item.reason == "unsupported_extension" for item in findings.skipped)
@@ -263,16 +263,40 @@ def test_is_supported_ignores_extension_case(name: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "name", ["sheet.xlsx", "old.doc", "photo.JPG", "README", "a.mdx"]
+    "name",
+    [
+        "sheet.xls",  # 구형 BIFF — `openpyxl`이 열지 못한다 (v0.8 §2)
+        "deck.ppt",  # 구형 OLE — 순수 파이썬 경로가 없다 (v0.8 §2)
+        "macro.pptm",  # 매크로 포함 PPT (v0.8 §2)
+        "old.doc",
+        "photo.JPG",
+        "README",
+        "a.mdx",
+    ],
 )
 def test_is_supported_rejects_unsupported_extensions(name: str) -> None:
+    """v0.8 비목표 확장자 3종이 여기 포함된 이유 — 방어선이 이 상수 하나뿐이기 때문이다.
+
+    `.pptm`은 U1 실측에서 **`python-pptx`가 거부하지 않음**이 확인됐다(확장자만 바꾼 파일도,
+    메인 파트 content type을 macroEnabled로 바꾼 파일도 열렸다). 즉 이 확장자를 막는 것은
+    라이브러리가 아니라 `SUPPORTED_EXTENSIONS`뿐이며, 누군가 매핑에 한 줄을 더하면 아무
+    저항 없이 지원 포맷이 된다. `.ppt`도 같은 이유로 함께 못박는다.
+    """
     assert is_supported(Path(name)) is False
 
 
 def test_supported_extensions_is_the_shared_core_constant() -> None:
     """확장자 집합을 새로 만들지 않고 코어 설정(스펙 §4.2·§4.1)을 re-export 한다."""
     assert SUPPORTED_EXTENSIONS is config.SUPPORTED_EXTENSIONS
-    assert SUPPORTED_EXTENSIONS == {".docx", ".txt", ".md", ".pdf"}
+    assert SUPPORTED_EXTENSIONS == {
+        ".docx",
+        ".txt",
+        ".md",
+        ".pdf",
+        ".xlsx",
+        ".xlsm",
+        ".pptx",
+    }
 
 
 # --- 경로만 다룬다 --------------------------------------------------------------

@@ -22,8 +22,13 @@ from corpbrain.core.scanner import ScanFindings, safe_size, scan_folder, validat
 __all__ = ["detect_hardware", "plan_scan"]
 
 # --- 중요도 휴리스틱 (스펙 §4.2 · 결정적, 파일 내용 무읽기) ------------------------
-#: 확장자 기본 점수. plan 대상은 지원 4종뿐이다.
-BASE_EXT_SCORE: dict[str, int] = {".pdf": 40, ".docx": 40, ".md": 30, ".txt": 25}
+#: 확장자 기본 점수. plan 대상은 `SUPPORTED_EXTENSIONS`뿐이다. 여기에 없는 확장자는
+#: fallback 0점을 받으므로, 지원 포맷을 늘릴 때 이 dict를 함께 늘린다 (v0.8 §4.4).
+#: 오피스 3종의 40은 `.docx`/`.pdf`와 같은 「정식 산출물」 취급이다 — 근거 없이 차등을 두지 않는다.
+BASE_EXT_SCORE: dict[str, int] = {
+    ".pdf": 40, ".docx": 40, ".xlsx": 40, ".xlsm": 40, ".pptx": 40,
+    ".md": 30, ".txt": 25,
+}
 #: 신호 키워드 (부분일치·소문자). 매칭된 서로 다른 개수 × 8, 최대 30 가산.
 SIGNAL_KEYWORDS: tuple[str, ...] = (
     "계약", "보고서", "report", "spec", "제안", "계획", "최종", "final", "정책",
@@ -38,7 +43,17 @@ BONUS_CAP = 30
 
 # --- 예상 토큰 (스펙 §4.2 · size_bytes와 확장자만, 내용 무읽기, 근사) --------------
 #: 확장자별 bytes→chars 근사 비율 (한글 편중 UTF-8·zip 압축/마크업 오버헤드 가정).
-CHARS_PER_BYTE: dict[str, float] = {".txt": 0.5, ".md": 0.5, ".docx": 0.06, ".pdf": 0.12}
+#:
+#: **오피스 3종(`.xlsx`·`.xlsm`·`.pptx`)의 값은 잠정값이다** (v0.8 §4.5). 근거는 「OOXML zip
+#: 구조가 `.docx`와 닮았다」뿐이며 실측이 아니다 — `.xlsx`/`.xlsm`은 `.docx`와 같은 0.06,
+#: `.pptx`는 이미지·레이아웃 XML이 바이트 대부분을 차지하므로 그 절반인 0.03으로 둔다.
+#: 실물 코퍼스로 `추출 문자수 ÷ 파일 바이트`를 재어 확정하는 것은 후속 이슈 #48이다.
+#: 등록을 빠뜨려 fallback 0.5가 적용되면 zip 압축 포맷의 토큰량을 10배 가까이 과대추정해
+#: `plan`의 소요시간 추정이 틀어지고 총 토큰 예산 게이트가 엉뚱하게 발동한다.
+CHARS_PER_BYTE: dict[str, float] = {
+    ".txt": 0.5, ".md": 0.5, ".docx": 0.06, ".pdf": 0.12,
+    ".xlsx": 0.06, ".xlsm": 0.06, ".pptx": 0.03,
+}
 #: chars→tokens 근사 비율 (한/영 혼합).
 CHARS_PER_TOKEN = 2.5
 

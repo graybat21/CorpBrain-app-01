@@ -3,13 +3,25 @@
 from __future__ import annotations
 
 import os
+import zipfile
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
 import pytest
 from docx import Document
+from openpyxl import Workbook
+from pptx import Presentation
+from pptx.util import Emu
 from pypdf import PdfReader, PdfWriter
 
-from corpbrain.core.extract import ExtractionError, extract_text, prepare_summary_input
+from corpbrain.core.config import SUPPORTED_EXTENSIONS
+from corpbrain.core.extract import (
+    EXTRACTORS,
+    ExtractionError,
+    _diagnose_open_failure,
+    extract_text,
+    prepare_summary_input,
+)
 from corpbrain.core.models import SkipReason
 
 MAX_CHARS = 12000
@@ -80,6 +92,144 @@ def _write_blank_pdf(path: Path) -> None:
         writer.write(stream)
 
 
+#: OLE 복합문서(CFBF) 매직 넘버 — 암호화된 OOXML 파일과 구형 `.xls`/`.ppt`가 공유한다.
+OLE_SIGNATURE_BYTES = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+
+
+def test_ole_signature_yields_encrypted_or_legacy_detail(tmp_path: Path) -> None:
+    """OLE 시그니처로 시작하는 파일은 「암호화되었거나 구형 이진 포맷」 detail을 받는다 (스펙 §4.3.1).
+
+    암호화된 `.xlsx`/`.pptx`는 zip이 아니라 OLE 복합문서로 감싸져 라이브러리가 「zip을 열지
+    못했다」는 예외만 던진다 — 손상된 파일과 예외 종류가 같아 구분되지 않는다. 판정은 예외
+    메시지 문자열이 아니라 파일 시그니처로 한다.
+    """
+    source = tmp_path / "locked.xlsx"
+    source.write_bytes(OLE_SIGNATURE_BYTES + b"\x00" * 32)
+
+    detail, _ = _diagnose_open_failure(source)
+
+    assert "암호화되었거나 구형 이진 포맷" in detail
+    assert str(source) in detail
+
+
+def test_non_ole_file_yields_plain_open_failure_detail(tmp_path: Path) -> None:
+    """OLE 시그니처가 아니면 손상·파싱 실패 문구를 그대로 쓴다 — 두 원인이 다른 detail을 받는다."""
+    source = tmp_path / "broken.xlsx"
+    source.write_bytes(b"PK\x03\x04not-a-real-zip")
+
+    detail, _ = _diagnose_open_failure(source)
+
+    assert "암호화되었거나 구형 이진 포맷" not in detail
+    assert str(source) in detail
+
+
+def test_ole_detail_names_the_actual_extension(tmp_path: Path) -> None:
+    """문구의 포맷 이름은 실제 확장자에서 온다 — `.xlsm`이 「xlsx」로 보고되지 않는다."""
+    source = tmp_path / "macro.xlsm"
+    source.write_bytes(OLE_SIGNATURE_BYTES)
+
+    assert "xlsm" in _diagnose_open_failure(source)[0]
+
+
+def test_ole_probe_survives_an_unreadable_file(tmp_path: Path) -> None:
+    """시그니처를 읽지 못해도(파일 소실·권한) 예외 없이 기본 문구로 떨어진다.
+
+    이 헬퍼는 **이미 실패한 경로**에서만 불린다. 여기서 새 예외를 올리면 원래의 추출 실패가
+    다른 예외로 뒤덮여 스킵 사유가 바뀐다.
+    """
+    missing = tmp_path / "gone.xlsx"
+
+    detail, access_error = _diagnose_open_failure(missing)
+
+    assert "암호화되었거나 구형 이진 포맷" not in detail
+    # 접근 실패는 삼켜지지 않고 호출자에게 원인으로 넘겨진다 — 그래야 `permission_denied`가 산다.
+    assert isinstance(access_error, OSError)
+
+
+def test_office_formats_add_no_new_skip_reasons() -> None:
+    """`SkipReason`의 원소 집합이 v0.7과 동일하다 — 증설이 없다 (스펙 §3 항목6 · §4.3).
+
+    오피스 포맷의 실패는 전부 기존 두 값에 매핑된다 — 손상·암호화는 `extraction_failed`,
+    빈 통합문서·이미지만 있는 프레젠테이션은 `empty_document`. 세부는 `detail` 문자열이
+    가른다. 사유를 늘리면 리포트·CLI·문서의 라벨 표가 함께 늘어나고, 「암호화」처럼 근거가
+    불확실한 판정이 사유 이름으로 굳어 사용자에게 단정으로 읽힌다.
+    """
+    assert {reason.value for reason in SkipReason} == {
+        "unsupported_extension",
+        "empty_document",
+        "extraction_failed",
+        "permission_denied",
+        "path_too_long",
+        "up_to_date",
+        "file_too_large",
+        "summary_failed",
+        "cloud_api_error",
+        "cloud_rate_limited",
+    }
+
+
+def test_dispatch_table_keys_match_supported_extensions() -> None:
+    """확장자 디스패치 매핑의 키 집합이 `SUPPORTED_EXTENSIONS`와 정확히 같다 (스펙 §3 항목7).
+
+    지원 포맷 목록이 `config.SUPPORTED_EXTENSIONS`와 `extract.py`에 따로 정의돼 있어 둘이
+    어긋나도 아무도 검증하지 않던 구멍을 닫는다 — 지금까지의 유일한 방어는 `test_scanner.py`의
+    리터럴 단언뿐이었고, 그것은 상수 쪽만 본다. 한쪽에만 확장자를 더하면 스캐너가 통과시킨
+    파일을 추출기가 「지원하지 않는 확장자」로 되던지거나(추출 실패로 위장된 미지원), 추출기는
+    아는데 스캐너가 걸러 영원히 불리지 않는 죽은 코드가 된다.
+    """
+    assert set(EXTRACTORS) == set(SUPPORTED_EXTENSIONS)
+
+
+def test_dispatch_table_maps_every_extension_to_a_callable() -> None:
+    """매핑 값은 모두 호출 가능해야 한다 — 키만 맞고 값이 비면 위 단언이 공허해진다."""
+    assert all(callable(extractor) for extractor in EXTRACTORS.values())
+
+
+def _write_xlsx(path: Path, sheets: dict[str, list[list[object]]], *, hidden: tuple[str, ...] = ()) -> None:
+    """시트 이름 → 행 목록으로 `.xlsx`/`.xlsm`을 인라인 생성한다 (스펙 §3 픽스처 구성).
+
+    픽스처 생성 헬퍼는 `tests/conftest.py`나 공유 모듈로 빼지 않고 단위·통합 테스트 파일에
+    각각 둔다 — `.pdf`가 이미 같은 선택을 했고(위 `_write_text_pdf` 참조), 공유 인프라를 새로
+    들이면 `.pdf`는 복제, 오피스는 공유가 되어 관용구가 둘로 갈린다 (스펙 §3 「헬퍼 배치」).
+    """
+    workbook = Workbook()
+    workbook.remove(workbook.active)
+    for title, rows in sheets.items():
+        worksheet = workbook.create_sheet(title)
+        for row in rows:
+            worksheet.append(row)
+        if title in hidden:
+            worksheet.sheet_state = "hidden"
+    workbook.save(str(path))
+
+
+
+def _blank_slide(presentation: Presentation) -> object:
+    """도형이 하나도 없는 빈 레이아웃 슬라이드를 더한다 (레이아웃 6 = Blank)."""
+    return presentation.slides.add_slide(presentation.slide_layouts[6])
+
+
+def _add_textbox(slide: object, text: str, *, top: int = 0) -> object:
+    box = slide.shapes.add_textbox(Emu(0), Emu(top), Emu(1_000_000), Emu(500_000))
+    box.text_frame.text = text
+    return box
+
+
+
+def _corrupt_ooxml_part(source: Path, target: Path, member: str, payload: bytes) -> None:
+    """zip 구조는 멀쩡한 채 **내부 XML 파트 하나만** 깨뜨린다.
+
+    기존 손상 픽스처(`b"PK\\x03\\x04 not really a zip"`)는 zip 개봉 자체를 실패시켜
+    `BadZipFile` 경로만 밟는다. 실사용에서 훨씬 흔한 손상은 컨테이너는 열리는데 안쪽
+    XML이 잘린 경우이고, 그때 라이브러리는 전혀 다른 예외를 올린다.
+    """
+    with zipfile.ZipFile(source) as archive, zipfile.ZipFile(target, "w") as out:
+        for item in archive.infolist():
+            data = payload if item.filename == member else archive.read(item.filename)
+            out.writestr(item, data)
+
+
+
 def test_txt_extraction_returns_plain_text(tmp_path: Path) -> None:
     source = tmp_path / "note.txt"
     source.write_text("첫 줄\n둘째 줄\n", encoding="utf-8")
@@ -121,7 +271,8 @@ def test_broken_encoding_does_not_crash(tmp_path: Path) -> None:
 
 
 def test_unsupported_extension_raises_extraction_error(tmp_path: Path) -> None:
-    source = tmp_path / "sheet.xlsx"  # xls는 v0.2 비목표 — 여전히 미지원
+    # `.xlsx`는 v0.8에서 지원 포맷이 되었다. 구형 `.xls`(BIFF)는 여전히 비목표다 (v0.8 §2).
+    source = tmp_path / "sheet.xls"
     source.write_bytes(b"PK\x03\x04")
 
     with pytest.raises(ExtractionError):
@@ -350,3 +501,706 @@ def test_fixture_empty_document_is_skipped() -> None:
 def test_fixture_unsupported_extension_is_rejected() -> None:
     with pytest.raises(ExtractionError):
         extract_text(FIXTURE_CORPUS / "photo.jpg", MAX_CHARS)
+
+
+# --- 엑셀 `.xlsx`/`.xlsm` (v0.8 §4.2) --------------------------------------------
+
+
+def test_xlsx_sheets_are_bounded_and_rows_are_tab_separated(tmp_path: Path) -> None:
+    """내용이 있는 시트마다 경계 줄이 정확히 1회 나오고, 셀은 탭으로 구분된다 (§3 항목2).
+
+    경계가 없으면 서로 다른 표의 행이 이어 붙어 한 표로 읽힌다. 시트명 자체도 요약에 쓸모
+    있는 신호다.
+    """
+    source = tmp_path / "book.xlsx"
+    _write_xlsx(
+        source,
+        {
+            "인사": [["이름", "부서"], ["김철수", "인사팀"]],
+            "예산": [["항목", "금액"]],
+        },
+    )
+
+    extracted = extract_text(source, MAX_CHARS)
+
+    assert extracted == "[시트: 인사]\n이름\t부서\n김철수\t인사팀\n[시트: 예산]\n항목\t금액"
+    assert extracted.count("[시트: 인사]") == 1
+
+
+def test_xlsx_sheet_without_content_gets_no_boundary_line(tmp_path: Path) -> None:
+    """값이 없는 시트에는 경계 줄도 내지 않는다 (스펙 §4.2 T1).
+
+    경계 줄은 「뒤에 내용이 온다」는 신호이므로 뒤가 비면 낼 것이 없다. 항상 내면 값이 전부
+    비는 파일의 추출 결과가 경계 줄만 남아 호출자의 `text.strip()` 검사를 통과해 버린다.
+    """
+    source = tmp_path / "book.xlsx"
+    _write_xlsx(source, {"빈시트": [[None, None]], "내용": [["값"]]})
+
+    extracted = extract_text(source, MAX_CHARS)
+
+    assert extracted == "[시트: 내용]\n값"
+    assert "빈시트" not in extracted
+
+
+def test_xlsx_hidden_sheet_content_is_excluded(tmp_path: Path) -> None:
+    """숨긴 시트는 내용도 경계 줄도 나오지 않는다 — `sheet_state`는 읽기 전용 개봉에서도 판정된다."""
+    source = tmp_path / "book.xlsx"
+    _write_xlsx(source, {"보이는": [["공개"]], "숨긴": [["기밀"]]}, hidden=("숨긴",))
+
+    extracted = extract_text(source, MAX_CHARS)
+
+    assert extracted == "[시트: 보이는]\n공개"
+    assert "기밀" not in extracted
+
+
+def test_xlsx_hidden_row_content_is_included(tmp_path: Path) -> None:
+    """숨긴 **행**은 제외되지 않는다 — `read_only` 개봉에서 판별할 수 없기 때문이다.
+
+    `openpyxl` 3.1.5가 돌려주는 `ReadOnlyWorksheet`에는 `row_dimensions` 속성이 아예 없다
+    (2026-08-27 U1 확인). 스펙 §4.2 T3의 조건부 표가 「얻을 수 없다」 행으로 확정된 결과이며,
+    `read_only=False`로 바꾸는 선택지는 「파일을 통째로 메모리에 올리지 않는다」와 정면으로
+    부딪쳐 택하지 않는다. 알려진 한계를 테스트로 고정해 둔다.
+    """
+    source = tmp_path / "book.xlsx"
+    _write_xlsx(source, {"시트": [["보임1"], ["숨김"], ["보임2"]]})
+
+    workbook = Workbook()  # 위에서 만든 파일에 행 숨김만 덧입힌다
+    del workbook
+    from openpyxl import load_workbook
+
+    editable = load_workbook(str(source))
+    editable["시트"].row_dimensions[2].hidden = True
+    editable.save(str(source))
+
+    extracted = extract_text(source, MAX_CHARS)
+
+    assert "숨김" in extracted
+
+
+def test_xlsx_cell_values_are_normalised(tmp_path: Path) -> None:
+    """셀 값의 문자열화 4규칙 (스펙 §4.2 T2 표).
+
+    `openpyxl`이 돌려주는 것은 문자열이 아니라 파이썬 객체다. `120000.0`·
+    `2026-03-31 00:00:00` 같은 표기는 LLM이 요약문에 그대로 옮겨 적는 종류의 잡음이다.
+    """
+    source = tmp_path / "book.xlsx"
+    _write_xlsx(
+        source,
+        {
+            # 엑셀 셀의 날짜는 tz 정보가 없다 — `openpyxl`은 tz-aware `datetime` 저장을 거부하므로
+            # 여기서 naive 를 쓰는 것이 실제 셀 값의 모습이다 (DTZ001 을 그래서 끈다).
+            "값": [
+                [date(2026, 3, 31), datetime(2026, 3, 31, 14, 30)],  # noqa: DTZ001
+                [datetime(2026, 3, 31, 0, 0), 120000.0],  # noqa: DTZ001
+                [1.5, True],
+            ]
+        },
+    )
+
+    extracted = extract_text(source, MAX_CHARS)
+
+    assert extracted == (
+        "[시트: 값]\n"
+        "2026-03-31\t2026-03-31 14:30\n"
+        "2026-03-31\t120000\n"
+        "1.5\tTrue"
+    )
+
+
+def test_xlsx_blank_rows_are_skipped_and_trailing_empty_cells_leave_no_tab(
+    tmp_path: Path,
+) -> None:
+    """전 셀이 빈 행은 건너뛰고, 행 끝의 빈 셀은 탭을 남기지 않는다 (스펙 §4.2 T2).
+
+    앞쪽·중간의 빈 셀은 열 위치 정보이므로 탭으로 남긴다.
+    """
+    source = tmp_path / "book.xlsx"
+    _write_xlsx(
+        source,
+        {"시트": [["a", "b", None], [None, None, None], [None, "c", None], ["d"]]},
+    )
+
+    extracted = extract_text(source, MAX_CHARS)
+
+    assert extracted == "[시트: 시트]\na\tb\n\tc\nd"
+
+
+def test_xlsx_formula_without_cached_value_yields_empty_string(tmp_path: Path) -> None:
+    """수식만 있고 계산값 캐시가 없는 통합문서는 빈 문자열이 된다 (스펙 §3 항목3·§5).
+
+    Excel이 저장하지 않은 `.xlsx`(스크립트·LibreOffice 생성)에는 `data_only=True`가 읽을
+    캐시가 없다. 값을 수식 문자열로 대체하려고 파일을 두 번 열지 않는다.
+    """
+    source = tmp_path / "formula.xlsx"
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "계산"
+    worksheet["A1"] = "=SUM(B1:B9)"
+    worksheet["A2"] = "=A1*2"
+    workbook.save(str(source))
+
+    assert extract_text(source, MAX_CHARS) == ""
+
+
+def test_xlsx_formula_only_workbook_is_skipped_as_empty(tmp_path: Path) -> None:
+    """그 빈 문자열이 호출자에게서 `empty_document`가 된다 — 빈 판정 책임은 호출자에 남는다."""
+    source = tmp_path / "formula.xlsx"
+    workbook = Workbook()
+    workbook.active["A1"] = "=SUM(B1:B9)"
+    workbook.save(str(source))
+
+    prepared = prepare_summary_input(source, MAX_CHARS)
+
+    assert prepared.text is None
+    assert prepared.skipped is not None
+    assert prepared.skipped.reason is SkipReason.EMPTY_DOCUMENT
+
+
+def test_xlsx_extraction_stops_at_max_chars(tmp_path: Path) -> None:
+    """상한에 닿으면 즉시 멈춘다 — 통합문서를 끝까지 훑지 않는다 (§3 항목9)."""
+    source = tmp_path / "big.xlsx"
+    _write_xlsx(source, {"시트": [["가" * 200] for _ in range(50)]})
+
+    extracted = extract_text(source, 500)
+
+    assert len(extracted) <= 500
+
+
+def test_xlsm_is_extracted_by_the_same_extractor(tmp_path: Path) -> None:
+    """`.xlsm`은 `openpyxl`이 공식 지원하므로 확장자 한 줄 추가로 끝난다 (스펙 §4.1)."""
+    source = tmp_path / "macro.xlsm"
+    _write_xlsx(source, {"시트": [["매크로 통합문서"]]})
+
+    assert extract_text(source, MAX_CHARS) == "[시트: 시트]\n매크로 통합문서"
+
+
+def test_ole_xlsx_and_corrupted_xlsx_get_different_details(tmp_path: Path) -> None:
+    """암호화(OLE)와 손상이 **서로 다른 detail**을 받는다 (스펙 §3 항목5·§4.3.1)."""
+    encrypted = tmp_path / "locked.xlsx"
+    encrypted.write_bytes(OLE_SIGNATURE_BYTES + b"\x00" * 64)
+    corrupted = tmp_path / "broken.xlsx"
+    corrupted.write_bytes(b"PK\x03\x04 not really a zip")
+
+    with pytest.raises(ExtractionError) as encrypted_error:
+        extract_text(encrypted, MAX_CHARS)
+    with pytest.raises(ExtractionError) as corrupted_error:
+        extract_text(corrupted, MAX_CHARS)
+
+    assert "암호화되었거나 구형 이진 포맷" in str(encrypted_error.value)
+    assert "암호화되었거나 구형 이진 포맷" not in str(corrupted_error.value)
+    assert str(encrypted_error.value) != str(corrupted_error.value)
+
+
+def test_broken_xlsx_is_skipped_as_extraction_failed(tmp_path: Path) -> None:
+    """손상된 통합문서는 새 스킵 사유가 아니라 기존 `extraction_failed`로 흡수된다 (스펙 §4.3)."""
+    source = tmp_path / "broken.xlsx"
+    source.write_bytes(b"PK\x03\x04 not really a zip")
+
+    prepared = prepare_summary_input(source, MAX_CHARS)
+
+    assert prepared.skipped is not None
+    assert prepared.skipped.reason is SkipReason.EXTRACTION_FAILED
+    assert prepared.skipped.detail
+
+
+# --- PPTX (v0.8 §4.2) -------------------------------------------------------------
+
+
+def test_pptx_slides_are_bounded_and_shapes_keep_file_order(tmp_path: Path) -> None:
+    """내용이 있는 슬라이드마다 `[슬라이드 N]` 경계 줄이 나오고, 도형은 파일 순서 그대로다.
+
+    좌표 기반 시각 순서 재정렬을 하지 않는다 — 같은 높이의 도형에서 순서가 흔들려 tie-break를
+    또 정해야 하고 결정성이 약해진다. 아래 픽스처는 **나중에 추가한 도형을 위쪽에 두어** 좌표
+    순서와 파일 순서가 어긋나게 만든다.
+    """
+    source = tmp_path / "deck.pptx"
+    presentation = Presentation()
+    slide = _blank_slide(presentation)
+    _add_textbox(slide, "먼저 추가한 아래쪽 도형", top=5_000_000)
+    _add_textbox(slide, "나중에 추가한 위쪽 도형", top=0)
+    second = _blank_slide(presentation)
+    _add_textbox(second, "둘째 슬라이드")
+    presentation.save(str(source))
+
+    extracted = extract_text(source, MAX_CHARS)
+
+    assert extracted == (
+        "[슬라이드 1]\n먼저 추가한 아래쪽 도형\n나중에 추가한 위쪽 도형\n"
+        "[슬라이드 2]\n둘째 슬라이드"
+    )
+
+
+def test_pptx_empty_slide_gets_no_boundary_and_numbering_is_not_reset(
+    tmp_path: Path,
+) -> None:
+    """이미지만 있는 슬라이드는 경계 줄도 내지 않고, 남은 슬라이드는 원본 번호를 유지한다.
+
+    건너뛴 슬라이드가 있어도 번호를 다시 매기지 않는다 — 사용자가 파워포인트에서 보는 번호와
+    어긋나면 「몇 번째 슬라이드에 있던 내용인가」를 짚을 수 없다.
+    """
+    source = tmp_path / "deck.pptx"
+    presentation = Presentation()
+    _blank_slide(presentation)  # 1번: 도형 없음
+    third_carrier = _blank_slide(presentation)  # 2번: 도형 없음
+    del third_carrier
+    slide = _blank_slide(presentation)  # 3번: 내용 있음
+    _add_textbox(slide, "세 번째 슬라이드의 내용")
+    presentation.save(str(source))
+
+    extracted = extract_text(source, MAX_CHARS)
+
+    assert extracted == "[슬라이드 3]\n세 번째 슬라이드의 내용"
+
+
+def test_pptx_empty_deck_is_skipped_as_empty(tmp_path: Path) -> None:
+    """전 슬라이드가 비면 추출 결과가 빈 문자열이 되어 호출자가 `empty_document`로 스킵한다."""
+    source = tmp_path / "images_only.pptx"
+    presentation = Presentation()
+    _blank_slide(presentation)
+    _blank_slide(presentation)
+    presentation.save(str(source))
+
+    prepared = prepare_summary_input(source, MAX_CHARS)
+
+    assert prepared.skipped is not None
+    assert prepared.skipped.reason is SkipReason.EMPTY_DOCUMENT
+
+
+def test_pptx_table_cells_are_extracted(tmp_path: Path) -> None:
+    """표는 `text_frame`이 없어 따로 훑지 않으면 통째로 누락된다 — 행은 탭으로 잇는다."""
+    source = tmp_path / "deck.pptx"
+    presentation = Presentation()
+    slide = _blank_slide(presentation)
+    frame = slide.shapes.add_table(2, 2, Emu(0), Emu(0), Emu(2_000_000), Emu(1_000_000))
+    table = frame.table
+    table.cell(0, 0).text = "항목"
+    table.cell(0, 1).text = "금액"
+    table.cell(1, 0).text = "인건비"
+    table.cell(1, 1).text = "1200"
+    presentation.save(str(source))
+
+    extracted = extract_text(source, MAX_CHARS)
+
+    assert extracted == "[슬라이드 1]\n항목\t금액\n인건비\t1200"
+
+
+def test_pptx_group_shape_text_is_extracted_recursively(tmp_path: Path) -> None:
+    """그룹 도형 내부 텍스트도 재귀로 훑는다 — 그러지 않으면 그룹째 누락된다."""
+    source = tmp_path / "deck.pptx"
+    presentation = Presentation()
+    slide = _blank_slide(presentation)
+    first = _add_textbox(slide, "그룹 안 첫째")
+    second = _add_textbox(slide, "그룹 안 둘째", top=1_000_000)
+    slide.shapes.add_group_shape([first, second])
+    presentation.save(str(source))
+
+    extracted = extract_text(source, MAX_CHARS)
+
+    assert "그룹 안 첫째" in extracted
+    assert "그룹 안 둘째" in extracted
+
+
+def test_pptx_speaker_notes_follow_a_notes_marker(tmp_path: Path) -> None:
+    """발표자 노트를 `[노트]` 줄 뒤에 덧붙인다 — 본문이 키워드뿐이고 내용이 노트에 있는 경우가 흔하다."""
+    source = tmp_path / "deck.pptx"
+    presentation = Presentation()
+    slide = _blank_slide(presentation)
+    _add_textbox(slide, "키워드")
+    slide.notes_slide.notes_text_frame.text = "실제 설명은 여기 있다"
+    presentation.save(str(source))
+
+    extracted = extract_text(source, MAX_CHARS)
+
+    assert extracted == "[슬라이드 1]\n키워드\n[노트]\n실제 설명은 여기 있다"
+
+
+def test_pptx_blank_notes_produce_no_notes_marker(tmp_path: Path) -> None:
+    """노트가 있으나 공백뿐이면 `[노트]` 줄도 내지 않는다 — 경계 줄 규칙과 같다."""
+    source = tmp_path / "deck.pptx"
+    presentation = Presentation()
+    slide = _blank_slide(presentation)
+    _add_textbox(slide, "본문")
+    slide.notes_slide.notes_text_frame.text = "   \n  "
+    presentation.save(str(source))
+
+    assert extract_text(source, MAX_CHARS) == "[슬라이드 1]\n본문"
+
+
+def test_pptx_extraction_does_not_create_notes_slides(tmp_path: Path) -> None:
+    """노트 접근을 `has_notes_slide`로 가드한다 (스펙 §4.2 T7).
+
+    `slide.notes_slide`에 바로 접근하면 노트 슬라이드가 없는 슬라이드에 객체가 **새로
+    만들어진다**. 추출기는 전부 읽기 전용이며 그 성질이 코드에서 보여야 한다. 추출 뒤에
+    다시 열어 노트 슬라이드가 생기지 않았음을 확인한다.
+    """
+    source = tmp_path / "deck.pptx"
+    presentation = Presentation()
+    slide = _blank_slide(presentation)
+    _add_textbox(slide, "노트 없는 슬라이드")
+    presentation.save(str(source))
+
+    extract_text(source, MAX_CHARS)
+
+    assert Presentation(str(source)).slides[0].has_notes_slide is False
+
+
+def test_pptx_extraction_stops_at_max_chars(tmp_path: Path) -> None:
+    """상한에 닿으면 즉시 멈춘다 — 프레젠테이션을 끝까지 훑지 않는다 (§3 항목9)."""
+    source = tmp_path / "big.pptx"
+    presentation = Presentation()
+    for _ in range(20):
+        slide = _blank_slide(presentation)
+        _add_textbox(slide, "가" * 200)
+    presentation.save(str(source))
+
+    assert len(extract_text(source, 500)) <= 500
+
+
+def test_ole_pptx_and_corrupted_pptx_get_different_details(tmp_path: Path) -> None:
+    """암호화(OLE)와 손상이 서로 다른 detail을 받는다 — 엑셀과 같은 판정을 공유한다 (§4.3.1)."""
+    encrypted = tmp_path / "locked.pptx"
+    encrypted.write_bytes(OLE_SIGNATURE_BYTES + b"\x00" * 64)
+    corrupted = tmp_path / "broken.pptx"
+    corrupted.write_bytes(b"PK\x03\x04 not really a zip")
+
+    with pytest.raises(ExtractionError) as encrypted_error:
+        extract_text(encrypted, MAX_CHARS)
+    with pytest.raises(ExtractionError) as corrupted_error:
+        extract_text(corrupted, MAX_CHARS)
+
+    assert "암호화되었거나 구형 이진 포맷" in str(encrypted_error.value)
+    assert "암호화되었거나 구형 이진 포맷" not in str(corrupted_error.value)
+
+
+def test_broken_pptx_is_skipped_as_extraction_failed(tmp_path: Path) -> None:
+    """손상된 프레젠테이션도 기존 `extraction_failed`로 흡수된다 — 새 스킵 사유를 만들지 않는다."""
+    source = tmp_path / "broken.pptx"
+    source.write_bytes(b"PK\x03\x04 not really a zip")
+
+    prepared = prepare_summary_input(source, MAX_CHARS)
+
+    assert prepared.skipped is not None
+    assert prepared.skipped.reason is SkipReason.EXTRACTION_FAILED
+
+
+def test_pptx_one_deck_carries_all_four_elements_in_order(tmp_path: Path) -> None:
+    """스펙 §3 항목4가 명시한 검증 방법 — **네 요소를 모두 담은 픽스처 하나**로 단언한다.
+
+    요소별로 픽스처를 갈라 두면 각 요소가 뽑힌다는 사실은 증명되지만 **요소 사이의 관계**가
+    미검증으로 남는다. 이 테스트가 고정하는 것은 그 관계다.
+
+    - 슬라이드 안에서 도형 → 표 → 그룹은 **파일에 적힌 순서**로 나오고, **발표자 노트는 그
+      전부보다 뒤**에 온다. 노트를 도형 사이에 끼우거나 슬라이드 앞에 두는 구현도 요소별
+      테스트는 전부 통과한다.
+    - 표가 **그룹 안에 중첩**돼 있어도 뽑힌다 — 재귀가 표 분기보다 먼저 끊기면 여기서만 걸린다.
+    - `[슬라이드 N]` 경계 줄은 그 모든 것 **앞에 정확히 한 번** 나온다.
+    """
+    source = tmp_path / "deck.pptx"
+    presentation = Presentation()
+    slide = _blank_slide(presentation)
+    _add_textbox(slide, "표지 문구")
+
+    frame = slide.shapes.add_table(2, 2, Emu(0), Emu(1_000_000), Emu(2_000_000), Emu(1_000_000))
+    frame.table.cell(0, 0).text = "항목"
+    frame.table.cell(0, 1).text = "금액"
+    frame.table.cell(1, 0).text = "인건비"
+    frame.table.cell(1, 1).text = "1200"
+
+    grouped_text = _add_textbox(slide, "그룹 안 문구", top=3_000_000)
+    grouped_table = slide.shapes.add_table(
+        1, 2, Emu(0), Emu(4_000_000), Emu(2_000_000), Emu(500_000)
+    )
+    grouped_table.table.cell(0, 0).text = "그룹표A"
+    grouped_table.table.cell(0, 1).text = "그룹표B"
+    slide.shapes.add_group_shape([grouped_text, grouped_table])
+
+    slide.notes_slide.notes_text_frame.text = "발표자 노트 본문"
+    presentation.save(str(source))
+
+    extracted = extract_text(source, MAX_CHARS)
+
+    assert extracted == (
+        "[슬라이드 1]\n"
+        "표지 문구\n"
+        "항목\t금액\n"
+        "인건비\t1200\n"
+        "그룹 안 문구\n"
+        "그룹표A\t그룹표B\n"
+        "[노트]\n"
+        "발표자 노트 본문"
+    )
+
+
+def test_pptx_notes_only_slide_still_gets_its_boundary_line(tmp_path: Path) -> None:
+    """도형은 없고 노트만 있는 슬라이드도 `[슬라이드 N]` 경계 줄을 받는다.
+
+    경계 줄의 의미가 「뒤에 내용이 온다」이므로 뒤에 노트가 오면 신호가 필요하다. 내지 않으면
+    `[노트]` 블록이 어느 슬라이드 것인지 알 수 없는 채로 놓인다. 「도형이 없으면 생략」은
+    이미지만 있는 슬라이드를 겨냥한 규칙이지 노트를 버리라는 규칙이 아니다.
+
+    스펙 §4.2는 이 경계 사례를 명시하지 않는다 — `docs/loop/DECISION_CHECKPOINT-v0.8.md`의
+    M3이 결정과 근거를 기록했고, 이 테스트가 그 결정을 코드에 고정한다.
+    """
+    source = tmp_path / "deck.pptx"
+    presentation = Presentation()
+    first = _blank_slide(presentation)
+    _add_textbox(first, "본문 있는 슬라이드")
+    notes_only = _blank_slide(presentation)
+    notes_only.notes_slide.notes_text_frame.text = "노트만 있다"
+    presentation.save(str(source))
+
+    extracted = extract_text(source, MAX_CHARS)
+
+    assert extracted == (
+        "[슬라이드 1]\n본문 있는 슬라이드\n[슬라이드 2]\n[노트]\n노트만 있다"
+    )
+
+
+@needs_posix_permissions
+def test_unreadable_xlsx_is_skipped_as_permission_denied(tmp_path: Path) -> None:
+    """읽을 수 없는 오피스 파일이 `extraction_failed`가 아니라 `permission_denied`가 된다.
+
+    이 경로에는 **실패가 두 번** 일어난다 — 개봉이 권한으로 실패하고, 그 뒤 원인을 가르려는
+    `_open_failure_detail()`이 같은 파일을 다시 열다 또 실패한다. 헬퍼가 그 두 번째
+    `OSError`를 삼키지 않고 올리거나 `from exc`가 빠지면, `prepare_summary_input()`의
+    `__cause__` 판정이 원래의 `PermissionError`를 보지 못해 스킵 사유가 조용히 바뀐다.
+    기존 권한 테스트 2건은 `.txt`만 보므로 이 이중 실패 경로를 지나지 않는다.
+    """
+    source = tmp_path / "secret.xlsx"
+    _write_xlsx(source, {"시트": [["기밀"]]})
+    source.chmod(0o000)
+
+    try:
+        prepared = prepare_summary_input(source, MAX_CHARS)
+    finally:
+        source.chmod(0o600)
+
+    assert prepared.skipped is not None
+    assert prepared.skipped.reason is SkipReason.PERMISSION_DENIED
+
+
+# --- 제3자 파서가 올리는 «열거되지 않은» 예외 (코드리뷰 지적) ------------------------
+
+
+def test_corrupted_xlsx_xml_is_an_extraction_error_not_a_crash(tmp_path: Path) -> None:
+    """zip은 열리는데 시트 XML이 깨진 `.xlsx`도 `ExtractionError`로 흡수된다.
+
+    `openpyxl`은 이때 `xml.etree.ElementTree.ParseError`를 올린다. 그것은 `SyntaxError`
+    하위라 `ValueError`·`OSError`·`BadZipFile` 어디에도 걸리지 않는다 — 열거해 둔 예외
+    목록을 그대로 통과해 코어 밖으로 탈출하면 **그 파일 하나가 스캔 전체를 죽인다.**
+    """
+    healthy = tmp_path / "ok.xlsx"
+    _write_xlsx(healthy, {"시트": [["값"]]})
+    broken = tmp_path / "broken.xlsx"
+    _corrupt_ooxml_part(healthy, broken, "xl/worksheets/sheet1.xml", b"<worksheet><BROKEN")
+
+    with pytest.raises(ExtractionError):
+        extract_text(broken, MAX_CHARS)
+
+
+def test_corrupted_pptx_xml_is_an_extraction_error_not_a_crash(tmp_path: Path) -> None:
+    """슬라이드 파트가 깨진 `.pptx`도 마찬가지다 — `python-pptx`는 `lxml.etree.XMLSyntaxError`를 올린다."""
+    healthy = tmp_path / "ok.pptx"
+    presentation = Presentation()
+    _add_textbox(_blank_slide(presentation), "본문")
+    presentation.save(str(healthy))
+    broken = tmp_path / "broken.pptx"
+    _corrupt_ooxml_part(healthy, broken, "ppt/slides/slide1.xml", b"<p:sld><BROKEN")
+
+    with pytest.raises(ExtractionError):
+        extract_text(broken, MAX_CHARS)
+
+
+def test_chartsheet_workbook_is_an_extraction_error_not_a_crash(tmp_path: Path) -> None:
+    """차트시트가 든 통합문서도 흡수된다 — **손상 파일이 아니라 정상 엑셀 기능**이다.
+
+    `openpyxl` 3.1.5는 `read_only=True`로 차트시트를 열 때 라이브러리 내부에서
+    `AttributeError: 'list' object has no attribute 'find'`로 죽는다(실측). 열거 전략이
+    왜 부족한지 보여 주는 사례라 회귀 테스트로 남긴다 — 사용자가 만든 평범한 파일 하나에
+    스캔 전체가 멈추면 안 된다.
+    """
+    source = tmp_path / "chart.xlsx"
+    workbook = Workbook()
+    workbook.active["A1"] = "값"
+    workbook.create_chartsheet("차트")
+    workbook.save(str(source))
+
+    with pytest.raises(ExtractionError):
+        extract_text(source, MAX_CHARS)
+
+
+@needs_posix_permissions
+def test_unreadable_pptx_is_skipped_as_permission_denied(tmp_path: Path) -> None:
+    """읽을 수 없는 `.pptx`가 `extraction_failed`가 아니라 `permission_denied`가 된다.
+
+    `python-pptx`는 `zipfile.is_zipfile()`로 읽기 가능 여부를 확인하면서 `PermissionError`를
+    **삼키고** `__cause__`가 없는 `PackageNotFoundError`를 올린다. 그것을 그대로 `from exc`에
+    실으면 `prepare_summary_input()`의 `__cause__` 판정이 원인을 보지 못해 스킵 사유가
+    조용히 바뀐다. 같은 조건의 `.xlsx`·`.docx`·`.pdf`·`.txt`는 전부 `permission_denied`다.
+    """
+    source = tmp_path / "secret.pptx"
+    presentation = Presentation()
+    _add_textbox(_blank_slide(presentation), "기밀")
+    presentation.save(str(source))
+    source.chmod(0o000)
+
+    try:
+        prepared = prepare_summary_input(source, MAX_CHARS)
+    finally:
+        source.chmod(0o600)
+
+    assert prepared.skipped is not None
+    assert prepared.skipped.reason is SkipReason.PERMISSION_DENIED
+
+
+def test_xlsx_whitespace_only_cells_count_as_no_content(tmp_path: Path) -> None:
+    """공백만 든 셀은 내용이 아니다 — 경계 줄도 나오지 않는다.
+
+    `_tab_joined_row()`는 **빈** 셀만 뒤에서 떼어내므로 `" "` 같은 값은 살아남는다. 행 필터가
+    `if not line`이면 그 행이 내용으로 통과해 `[시트: …]` 경계 줄까지 딸려 나오고, 결과 문자열이
+    `text.strip()` 검사를 통과해 **시트 이름만 든 입력이 LLM까지 간다** — §4.2 T1이 막으려던
+    바로 그 실패가 `None`이 아니라 공백을 통해 재현된다. PPTX 표 경로는 이미 `.strip()`을 쓴다.
+    """
+    source = tmp_path / "서식만.xlsx"
+    _write_xlsx(source, {"서식만": [[" ", "  "], ["\t"]]})
+
+    assert extract_text(source, MAX_CHARS) == ""
+    assert prepare_summary_input(source, MAX_CHARS).skipped.reason is SkipReason.EMPTY_DOCUMENT
+
+
+def test_whitespace_cells_do_not_hide_real_content(tmp_path: Path) -> None:
+    """다만 같은 행에 실제 값이 있으면 공백 셀은 열 위치로 그대로 남는다."""
+    source = tmp_path / "혼합.xlsx"
+    _write_xlsx(source, {"시트": [[" ", "값"], [" ", "  "], ["끝"]]})
+
+    assert extract_text(source, MAX_CHARS) == "[시트: 시트]\n \t값\n끝"
+
+
+# --- 코드리뷰 후속: 표기 규칙의 빈틈 · 절단 · 예외 관용구 통일 ------------------------
+
+
+def test_xlsx_time_and_duration_cells_are_normalised(tmp_path: Path) -> None:
+    """시각·기간 서식 셀도 T2 규칙을 받는다 — `str()` 폴백이 파이썬 표기를 흘리지 않는다.
+
+    `openpyxl`은 시각 서식 셀을 `datetime.time`, 기간 서식 셀을 `timedelta`로 돌려준다.
+    T2 표가 이 둘을 다루지 않던 동안 `str()` 폴백이 걸려 `14:30:00`·`1 day, 2:00:00`이
+    그대로 요약 입력에 들어갔다 — `120000.0`을 없애려고 T2를 만든 취지와 같은 잡음이다.
+
+    시각은 `datetime` 규칙이 이미 분까지만 적으므로 초를 버려 표기를 맞추고, 기간은 엑셀이
+    `[h]:mm`으로 보여 주는 「총 시간:분」으로 적는다(하루를 넘겨도 일수로 쪼개지 않는다).
+    """
+    source = tmp_path / "서식.xlsx"
+    _write_xlsx(
+        source,
+        {"서식": [[time(14, 30), timedelta(hours=26)], [time(9, 5, 30), timedelta(minutes=-90)]]},
+    )
+
+    extracted = extract_text(source, MAX_CHARS)
+
+    assert extracted == "[시트: 서식]\n14:30\t26:00\n09:05\t-1:30"
+
+
+def test_xlsx_truncation_never_splits_a_boundary_line(tmp_path: Path) -> None:
+    """`max_chars` 절단이 경계 줄을 반토막 내지 않는다.
+
+    경계 줄은 구조 신호라 `"[시트: 아주긴시트"` 같은 조각이 남으면 모델이 읽는 구조가 깨진다.
+    줄 경계로만 자르되, **뒤에 내용이 남지 않은 경계 줄은 함께 뺀다** — 그러지 않으면 시트
+    이름만 든 입력이 호출자의 `text.strip()` 검사를 통과해 §4.2 T1이 막으려던 상태가
+    절단을 통해 되살아난다.
+    """
+    source = tmp_path / "긴표.xlsx"
+    _write_xlsx(source, {"매출": [["가" * 60], ["나" * 60]]})
+
+    # 첫 줄까지 온전히 들어가는 상한 — 둘째 줄은 통째로 빠진다(반토막이 남지 않는다).
+    kept = extract_text(source, 80)
+    assert kept == "[시트: 매출]\n" + "가" * 60
+    assert len(kept) <= 80
+
+    # 경계 줄은 들어가지만 첫 내용 줄이 안 들어가는 상한. 경계 줄은 **온전하고**, 내용 줄만
+    # 잘린다 — 여기서 경계 줄까지 버리면 실제로 들어갈 수 있던 내용을 통째로 잃는다.
+    tight = extract_text(source, 30)
+    assert tight.startswith("[시트: 매출]\n")
+    assert len(tight) <= 30
+
+
+def test_pptx_truncation_never_splits_a_boundary_line(tmp_path: Path) -> None:
+    """PPTX도 같은 규칙을 쓴다 — 두 추출기가 같은 절단 함수를 공유한다."""
+    source = tmp_path / "deck.pptx"
+    presentation = Presentation()
+    first = _blank_slide(presentation)
+    _add_textbox(first, "짧은 본문")
+    second = _blank_slide(presentation)
+    _add_textbox(second, "다" * 60)
+    presentation.save(str(source))
+
+    trimmed = extract_text(source, 30)
+
+    assert trimmed == "[슬라이드 1]\n짧은 본문"  # 2번 경계 줄은 뒤가 잘려 함께 빠졌다
+    assert len(trimmed) <= 30
+
+
+def test_truncation_keeps_the_boundary_and_cuts_the_content_line(tmp_path: Path) -> None:
+    """경계 줄은 들어가고 내용 줄이 안 들어가면 — 경계 줄을 살리고 내용 줄을 잘라 넣는다.
+
+    여기서 경계 줄까지 버리면 상한 안에 실제로 담을 수 있던 내용을 통째로 잃는다.
+    """
+    source = tmp_path / "한줄.xlsx"
+    _write_xlsx(source, {"S": [["라" * 200]]})
+
+    extracted = extract_text(source, 20)
+
+    assert extracted.startswith("[시트: S]\n")  # 마커가 온전하다
+    assert len(extracted) == 20
+    assert extracted.strip()  # `empty_document`로 오분류되지 않는다
+
+
+def test_truncation_yields_nothing_when_even_the_boundary_does_not_fit(
+    tmp_path: Path,
+) -> None:
+    """경계 줄조차 안 들어가면 빈 문자열이다 — **반토막 마커를 내지 않는다.**
+
+    그냥 잘랐다면 `"[시트: 아주긴시"` 같은 조각만 남고 내용은 한 글자도 못 실린다. 낼 수 있는
+    온전한 단위가 하나도 없으므로 「내용 없음」으로 보고 호출자가 `empty_document`로 처리한다.
+    마커 하나가 상한을 넘는 것은 `--max-chars`를 수십 자로 준 경우뿐이다(엑셀 시트명은 31자
+    제한이라 마커는 길어야 40자 안팎이다).
+    """
+    source = tmp_path / "긴이름.xlsx"
+    _write_xlsx(source, {"아주긴시트이름입니다이것은": [["값" * 50]]})
+
+    for limit in (5, 10, 14):
+        assert extract_text(source, limit) == ""
+    assert prepare_summary_input(source, 10).skipped.reason is SkipReason.EMPTY_DOCUMENT
+
+    # 경계 줄이 들어가는 상한부터는 정상적으로 내용이 실린다.
+    assert extract_text(source, 30).startswith("[시트: 아주긴시트이름입니다이것은]\n")
+
+
+def test_xlsx_ideographic_space_counts_as_no_content(tmp_path: Path) -> None:
+    """「공백」은 `str.strip()` 기준이라 전각 공백(U+3000)·NBSP도 내용이 아니다.
+
+    한국어·일본어 문서에서 서식 목적으로 넣는 전각 공백을 내용으로 세면, 값이 없는 시트가
+    경계 줄을 달고 살아남는다.
+    """
+    source = tmp_path / "전각.xlsx"
+    _write_xlsx(source, {"서식만": [["\u3000", "\u00a0"]]})
+
+    assert extract_text(source, MAX_CHARS) == ""
+
+
+def test_corrupted_docx_xml_is_an_extraction_error_not_a_crash(tmp_path: Path) -> None:
+    """`.docx`도 오피스와 같은 예외 관용구를 쓴다 — 손상 XML이 스캔 전체를 죽이지 않는다.
+
+    이 결함은 오피스 슬라이스가 만든 것이 아니라 **원래 있던 것**이다(zip은 열리는데
+    `word/document.xml`이 깨진 파일 → `lxml.etree.XMLSyntaxError` 탈출, 실측 확인).
+    오피스만 고치고 두면 같은 저장소 안에서 `.xlsx`는 안전하고 `.docx`는 안 안전한 상태가
+    굳고, 다음 사람이 「왜 오피스만 다르지」에서 잘못된 쪽으로 통일할 위험이 있다.
+    """
+    healthy = tmp_path / "ok.docx"
+    _write_docx(healthy, ["정상 문단"])
+    broken = tmp_path / "broken.docx"
+    _corrupt_ooxml_part(healthy, broken, "word/document.xml", b"<w:document><BROKEN")
+
+    with pytest.raises(ExtractionError):
+        extract_text(broken, MAX_CHARS)
+
+    assert prepare_summary_input(broken, MAX_CHARS).skipped.reason is SkipReason.EXTRACTION_FAILED
