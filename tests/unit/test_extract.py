@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import zipfile
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
 import pytest
@@ -1074,3 +1074,133 @@ def test_whitespace_cells_do_not_hide_real_content(tmp_path: Path) -> None:
     _write_xlsx(source, {"시트": [[" ", "값"], [" ", "  "], ["끝"]]})
 
     assert extract_text(source, MAX_CHARS) == "[시트: 시트]\n \t값\n끝"
+
+
+# --- 코드리뷰 후속: 표기 규칙의 빈틈 · 절단 · 예외 관용구 통일 ------------------------
+
+
+def test_xlsx_time_and_duration_cells_are_normalised(tmp_path: Path) -> None:
+    """시각·기간 서식 셀도 T2 규칙을 받는다 — `str()` 폴백이 파이썬 표기를 흘리지 않는다.
+
+    `openpyxl`은 시각 서식 셀을 `datetime.time`, 기간 서식 셀을 `timedelta`로 돌려준다.
+    T2 표가 이 둘을 다루지 않던 동안 `str()` 폴백이 걸려 `14:30:00`·`1 day, 2:00:00`이
+    그대로 요약 입력에 들어갔다 — `120000.0`을 없애려고 T2를 만든 취지와 같은 잡음이다.
+
+    시각은 `datetime` 규칙이 이미 분까지만 적으므로 초를 버려 표기를 맞추고, 기간은 엑셀이
+    `[h]:mm`으로 보여 주는 「총 시간:분」으로 적는다(하루를 넘겨도 일수로 쪼개지 않는다).
+    """
+    source = tmp_path / "서식.xlsx"
+    _write_xlsx(
+        source,
+        {"서식": [[time(14, 30), timedelta(hours=26)], [time(9, 5, 30), timedelta(minutes=-90)]]},
+    )
+
+    extracted = extract_text(source, MAX_CHARS)
+
+    assert extracted == "[시트: 서식]\n14:30\t26:00\n09:05\t-1:30"
+
+
+def test_xlsx_truncation_never_splits_a_boundary_line(tmp_path: Path) -> None:
+    """`max_chars` 절단이 경계 줄을 반토막 내지 않는다.
+
+    경계 줄은 구조 신호라 `"[시트: 아주긴시트"` 같은 조각이 남으면 모델이 읽는 구조가 깨진다.
+    줄 경계로만 자르되, **뒤에 내용이 남지 않은 경계 줄은 함께 뺀다** — 그러지 않으면 시트
+    이름만 든 입력이 호출자의 `text.strip()` 검사를 통과해 §4.2 T1이 막으려던 상태가
+    절단을 통해 되살아난다.
+    """
+    source = tmp_path / "긴표.xlsx"
+    _write_xlsx(source, {"매출": [["가" * 60], ["나" * 60]]})
+
+    # 첫 줄까지 온전히 들어가는 상한 — 둘째 줄은 통째로 빠진다(반토막이 남지 않는다).
+    kept = extract_text(source, 80)
+    assert kept == "[시트: 매출]\n" + "가" * 60
+    assert len(kept) <= 80
+
+    # 경계 줄은 들어가지만 첫 내용 줄이 안 들어가는 상한. 경계 줄은 **온전하고**, 내용 줄만
+    # 잘린다 — 여기서 경계 줄까지 버리면 실제로 들어갈 수 있던 내용을 통째로 잃는다.
+    tight = extract_text(source, 30)
+    assert tight.startswith("[시트: 매출]\n")
+    assert len(tight) <= 30
+
+
+def test_pptx_truncation_never_splits_a_boundary_line(tmp_path: Path) -> None:
+    """PPTX도 같은 규칙을 쓴다 — 두 추출기가 같은 절단 함수를 공유한다."""
+    source = tmp_path / "deck.pptx"
+    presentation = Presentation()
+    first = _blank_slide(presentation)
+    _add_textbox(first, "짧은 본문")
+    second = _blank_slide(presentation)
+    _add_textbox(second, "다" * 60)
+    presentation.save(str(source))
+
+    trimmed = extract_text(source, 30)
+
+    assert trimmed == "[슬라이드 1]\n짧은 본문"  # 2번 경계 줄은 뒤가 잘려 함께 빠졌다
+    assert len(trimmed) <= 30
+
+
+def test_truncation_keeps_the_boundary_and_cuts_the_content_line(tmp_path: Path) -> None:
+    """경계 줄은 들어가고 내용 줄이 안 들어가면 — 경계 줄을 살리고 내용 줄을 잘라 넣는다.
+
+    여기서 경계 줄까지 버리면 상한 안에 실제로 담을 수 있던 내용을 통째로 잃는다.
+    """
+    source = tmp_path / "한줄.xlsx"
+    _write_xlsx(source, {"S": [["라" * 200]]})
+
+    extracted = extract_text(source, 20)
+
+    assert extracted.startswith("[시트: S]\n")  # 마커가 온전하다
+    assert len(extracted) == 20
+    assert extracted.strip()  # `empty_document`로 오분류되지 않는다
+
+
+def test_truncation_yields_nothing_when_even_the_boundary_does_not_fit(
+    tmp_path: Path,
+) -> None:
+    """경계 줄조차 안 들어가면 빈 문자열이다 — **반토막 마커를 내지 않는다.**
+
+    그냥 잘랐다면 `"[시트: 아주긴시"` 같은 조각만 남고 내용은 한 글자도 못 실린다. 낼 수 있는
+    온전한 단위가 하나도 없으므로 「내용 없음」으로 보고 호출자가 `empty_document`로 처리한다.
+    마커 하나가 상한을 넘는 것은 `--max-chars`를 수십 자로 준 경우뿐이다(엑셀 시트명은 31자
+    제한이라 마커는 길어야 40자 안팎이다).
+    """
+    source = tmp_path / "긴이름.xlsx"
+    _write_xlsx(source, {"아주긴시트이름입니다이것은": [["값" * 50]]})
+
+    for limit in (5, 10, 14):
+        assert extract_text(source, limit) == ""
+    assert prepare_summary_input(source, 10).skipped.reason is SkipReason.EMPTY_DOCUMENT
+
+    # 경계 줄이 들어가는 상한부터는 정상적으로 내용이 실린다.
+    assert extract_text(source, 30).startswith("[시트: 아주긴시트이름입니다이것은]\n")
+
+
+def test_xlsx_ideographic_space_counts_as_no_content(tmp_path: Path) -> None:
+    """「공백」은 `str.strip()` 기준이라 전각 공백(U+3000)·NBSP도 내용이 아니다.
+
+    한국어·일본어 문서에서 서식 목적으로 넣는 전각 공백을 내용으로 세면, 값이 없는 시트가
+    경계 줄을 달고 살아남는다.
+    """
+    source = tmp_path / "전각.xlsx"
+    _write_xlsx(source, {"서식만": [["\u3000", "\u00a0"]]})
+
+    assert extract_text(source, MAX_CHARS) == ""
+
+
+def test_corrupted_docx_xml_is_an_extraction_error_not_a_crash(tmp_path: Path) -> None:
+    """`.docx`도 오피스와 같은 예외 관용구를 쓴다 — 손상 XML이 스캔 전체를 죽이지 않는다.
+
+    이 결함은 오피스 슬라이스가 만든 것이 아니라 **원래 있던 것**이다(zip은 열리는데
+    `word/document.xml`이 깨진 파일 → `lxml.etree.XMLSyntaxError` 탈출, 실측 확인).
+    오피스만 고치고 두면 같은 저장소 안에서 `.xlsx`는 안전하고 `.docx`는 안 안전한 상태가
+    굳고, 다음 사람이 「왜 오피스만 다르지」에서 잘못된 쪽으로 통일할 위험이 있다.
+    """
+    healthy = tmp_path / "ok.docx"
+    _write_docx(healthy, ["정상 문단"])
+    broken = tmp_path / "broken.docx"
+    _corrupt_ooxml_part(healthy, broken, "word/document.xml", b"<w:document><BROKEN")
+
+    with pytest.raises(ExtractionError):
+        extract_text(broken, MAX_CHARS)
+
+    assert prepare_summary_input(broken, MAX_CHARS).skipped.reason is SkipReason.EXTRACTION_FAILED

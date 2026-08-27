@@ -23,16 +23,14 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
 from docx import Document
-from docx.opc.exceptions import PackageNotFoundError
 from openpyxl import load_workbook
 from pptx import Presentation
 from pptx.shapes.group import GroupShape
 from pypdf import PdfReader
-from pypdf.errors import PyPdfError
 
 from corpbrain.core.errors import CorpBrainError
 from corpbrain.core.models import SkippedFile, SkipReason
@@ -137,6 +135,52 @@ def _diagnose_open_failure(path: Path) -> tuple[str, OSError | None]:
 
 
 
+def _join_truncated(parts: list[str], boundaries: set[int], max_chars: int) -> str:
+    """`max_chars` 이하로 줄을 이어 붙이되 **줄 한가운데를 자르지 않는다** (스펙 §4.2).
+
+    경계 줄(`[시트: …]`·`[슬라이드 N]`)은 구조 신호이므로 반토막 나면 모델이 읽는 구조가
+    깨진다 — 그냥 자르면 `"[시트: 아주긴시트"` 같은 조각이 요약 입력에 남는다.
+
+    **뒤에 내용이 남지 않은 경계 줄은 함께 뺀다.** 줄 경계로만 자르면 마지막에 경계 줄 하나가
+    홀로 남을 수 있는데, 그러면 §4.2 T1이 막으려던 상태 — 시트 이름만 든 입력이 호출자의
+    `text.strip()` 검사를 통과하는 것 — 가 절단을 통해 되살아난다. `boundaries`는 추출기가
+    「이 인덱스는 경계 줄」이라고 알려 준 것이며, 포맷 문법 지식은 추출기 안에 머문다.
+
+    상한이 너무 작아 온전히 못 담을 때는 **무엇이 들어갔는지에 따라 갈린다.** 경계 줄은
+    들어갔는데 뒤 내용 줄이 안 들어가면 경계 줄을 살리고 내용 줄을 잘라 넣는다(실제로 담을 수
+    있던 내용을 버리지 않는다). 경계 줄조차 안 들어가면 빈 문자열을 돌려준다 — 그 경우 그냥
+    자르면 반토막 마커만 남고 내용은 한 글자도 못 싣는다.
+    """
+    text = "\n".join(parts)
+    if len(text) <= max_chars:
+        return text
+
+    kept = 0
+    total = 0
+    for index, part in enumerate(parts):
+        length = len(part) + (1 if index else 0)  # 두 번째 줄부터 개행 1자
+        if total + length > max_chars:
+            break
+        total += length
+        kept = index + 1
+
+    if kept == 0:
+        # 첫 줄(= 경계 줄)조차 들어가지 않는다. 낼 수 있는 온전한 단위가 하나도 없으므로 빈
+        # 문자열을 돌려준다 — 여기서 그냥 자르면 `"[시트: 아주긴시"` 같은 **반토막 마커만**
+        # 남고 내용은 한 글자도 못 싣는다. 마커 하나가 상한을 넘는 것은 `--max-chars`를
+        # 수십 자로 준 경우뿐이다(엑셀 시트명은 31자 제한).
+        return ""
+
+    trimmed = kept
+    while trimmed and (trimmed - 1) in boundaries:
+        trimmed -= 1
+    if trimmed == 0:
+        # 들어간 것이 경계 줄뿐이다. 경계 줄은 온전하므로 그대로 두고 뒤 내용 줄을 잘라 넣는다 —
+        # 실제로 상한 안에 들어갈 수 있던 내용을 버리지 않기 위함이다.
+        return text[:max_chars]
+    return "\n".join(parts[:trimmed])
+
+
 def _extract_plaintext(path: Path, max_chars: int) -> str:
     """`.txt`/`.md`를 UTF-8로 읽되 디코딩 오류는 대체 문자로 흡수한다."""
     try:
@@ -150,7 +194,7 @@ def _extract_docx(path: Path, max_chars: int) -> str:
     """`.docx` 문단을 순서대로 잇되 `max_chars`에 도달하면 누적을 멈춘다."""
     try:
         document = Document(str(path))
-    except (PackageNotFoundError, OSError, ValueError, KeyError) as exc:
+    except _EXTRACTOR_ERRORS as exc:
         raise ExtractionError(f"docx를 열지 못했습니다: {path}") from exc
 
     parts: list[str] = []
@@ -164,7 +208,9 @@ def _extract_docx(path: Path, max_chars: int) -> str:
             accumulated += len(text) + 1
             if accumulated >= max_chars:
                 break
-    except (OSError, ValueError, KeyError) as exc:
+    except ExtractionError:
+        raise
+    except _EXTRACTOR_ERRORS as exc:
         raise ExtractionError(f"docx 문단을 읽지 못했습니다: {path}") from exc
 
     return "\n".join(parts)[:max_chars]
@@ -181,7 +227,7 @@ def _extract_pdf(path: Path, max_chars: int) -> str:
     try:
         reader = PdfReader(str(path))
         encrypted = reader.is_encrypted
-    except (OSError, PyPdfError, ValueError) as exc:
+    except _EXTRACTOR_ERRORS as exc:
         raise ExtractionError(f"pdf를 열지 못했습니다: {path}") from exc
 
     if encrypted:
@@ -199,13 +245,19 @@ def _extract_pdf(path: Path, max_chars: int) -> str:
             accumulated += len(text) + 1
             if accumulated >= max_chars:
                 break
-    except (PyPdfError, ValueError, KeyError) as exc:
+    except ExtractionError:
+        raise
+    except _EXTRACTOR_ERRORS as exc:
         raise ExtractionError(f"pdf 텍스트를 읽지 못했습니다: {path}") from exc
 
     return "\n".join(parts)[:max_chars]
 
 
-#: 오피스 추출기가 흡수하는 예외 범위 — **열거하지 않고 `Exception` 전체를 받는다.**
+#: **모든** 추출기가 흡수하는 예외 범위 — **열거하지 않고 `Exception` 전체를 받는다.**
+#:
+#: `.docx`·`.pdf`도 같은 상수를 쓴다 — 관용구가 갈리면 「왜 오피스만 다르지」에서 잘못된 쪽으로
+#: 통일될 위험이 있다. 실제로 **손상된 `.docx`가 같은 방식으로 새고 있었다**(zip은 열리는데
+#: `word/document.xml`이 깨진 파일 → `lxml.etree.XMLSyntaxError` 탈출, 2026-08-27 실측).
 #:
 #: 최초 구현은 `(InvalidFileException, BadZipFile, OSError, ValueError, KeyError)`를 열거했다.
 #: 그 목록은 «zip이 아닌 쓰레기 바이트»만 덮었고, 실사용에서 훨씬 흔한 손상 — 컨테이너는
@@ -222,7 +274,10 @@ def _extract_pdf(path: Path, max_chars: int) -> str:
 #:
 #: `BaseException`이 아니라 `Exception`이므로 `KeyboardInterrupt`·`SystemExit`은 그대로
 #: 통과한다 — 사용자의 중단 요청이 「추출 실패」로 둔갑하지 않는다.
-_OFFICE_ERRORS = Exception
+#:
+#: 순회 단계는 `except ExtractionError: raise`를 앞에 두어 **이미 우리 계약인 예외를 다시
+#: 감싸지 않는다.** 감싸면 원래 detail이 일반 문구로 덮여 사라진다.
+_EXTRACTOR_ERRORS = Exception
 
 
 def _cell_text(value: object) -> str:
@@ -246,6 +301,16 @@ def _cell_text(value: object) -> str:
         return value.strftime("%Y-%m-%d %H:%M")
     if isinstance(value, date):
         return value.strftime("%Y-%m-%d")
+    if isinstance(value, time):
+        # 시각 서식 셀. `datetime` 규칙이 이미 분까지만 적으므로 초를 버려 표기를 맞춘다.
+        return value.strftime("%H:%M")
+    if isinstance(value, timedelta):
+        # 기간 서식 셀. `str()`은 `1 day, 2:00:00` 같은 파이썬 표기를 내는데, 그것이야말로
+        # 이 표가 없애려던 잡음이다. 엑셀이 `[h]:mm`으로 보여 주는 «총 시간:분»으로 적는다.
+        minutes = int(value.total_seconds() // 60)
+        sign = "-" if minutes < 0 else ""
+        minutes = abs(minutes)
+        return f"{sign}{minutes // 60}:{minutes % 60:02d}"
     if isinstance(value, float) and value.is_integer():
         return str(int(value))
     return str(value)
@@ -286,13 +351,14 @@ def _extract_xlsx(path: Path, max_chars: int) -> str:
     """
     try:
         workbook = load_workbook(str(path), read_only=True, data_only=True)
-    except _OFFICE_ERRORS as exc:
+    except _EXTRACTOR_ERRORS as exc:
         detail, access_error = _diagnose_open_failure(path)
         # 접근이 막혀 실패했다면 그 `OSError`를 원인으로 싣는다 — 라이브러리가 원인을
         # 삼켰더라도 `permission_denied` 판정이 성립하게 한다 (§4.3.1).
         raise ExtractionError(detail) from (access_error or exc)
 
     parts: list[str] = []
+    boundaries: set[int] = set()
     accumulated = 0
     try:
         for worksheet in workbook.worksheets:
@@ -310,6 +376,7 @@ def _extract_xlsx(path: Path, max_chars: int) -> str:
                     # PPTX 표 경로(`_pptx_shape_lines`)도 같은 판정을 쓴다.
                     continue
                 if pending_boundary is not None:
+                    boundaries.add(len(parts))
                     parts.append(pending_boundary)
                     accumulated += len(pending_boundary) + 1
                     pending_boundary = None
@@ -319,14 +386,16 @@ def _extract_xlsx(path: Path, max_chars: int) -> str:
                     break
             if accumulated >= max_chars:
                 break
-    except _OFFICE_ERRORS as exc:
+    except ExtractionError:
+        raise
+    except _EXTRACTOR_ERRORS as exc:
         raise ExtractionError(
             f"{path.suffix.lstrip('.')} 시트를 읽지 못했습니다: {path}"
         ) from exc
     finally:
         workbook.close()
 
-    return "\n".join(parts)[:max_chars]
+    return _join_truncated(parts, boundaries, max_chars)
 
 
 def _pptx_shape_lines(shapes: Iterable[object]) -> Iterator[str]:
@@ -389,13 +458,14 @@ def _extract_pptx(path: Path, max_chars: int) -> str:
     """
     try:
         presentation = Presentation(str(path))
-    except _OFFICE_ERRORS as exc:
+    except _EXTRACTOR_ERRORS as exc:
         detail, access_error = _diagnose_open_failure(path)
         # 접근이 막혀 실패했다면 그 `OSError`를 원인으로 싣는다 — 라이브러리가 원인을
         # 삼켰더라도 `permission_denied` 판정이 성립하게 한다 (§4.3.1).
         raise ExtractionError(detail) from (access_error or exc)
 
     parts: list[str] = []
+    boundaries: set[int] = set()
     accumulated = 0
     try:
         for number, slide in enumerate(presentation.slides, start=1):
@@ -404,6 +474,7 @@ def _extract_pptx(path: Path, max_chars: int) -> str:
             pending_boundary: str | None = f"[슬라이드 {number}]"
             for line in (*_pptx_shape_lines(slide.shapes), *_pptx_notes_lines(slide)):
                 if pending_boundary is not None:
+                    boundaries.add(len(parts))
                     parts.append(pending_boundary)
                     accumulated += len(pending_boundary) + 1
                     pending_boundary = None
@@ -413,10 +484,12 @@ def _extract_pptx(path: Path, max_chars: int) -> str:
                     break
             if accumulated >= max_chars:
                 break
-    except _OFFICE_ERRORS as exc:
+    except ExtractionError:
+        raise
+    except _EXTRACTOR_ERRORS as exc:
         raise ExtractionError(f"pptx 슬라이드를 읽지 못했습니다: {path}") from exc
 
-    return "\n".join(parts)[:max_chars]
+    return _join_truncated(parts, boundaries, max_chars)
 
 
 #: 확장자 → 추출기 디스패치 (스펙 §4.2). **`extract.py`의 지원 포맷 목록은 이 매핑 하나뿐이다** —
