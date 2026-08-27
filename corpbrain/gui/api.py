@@ -26,6 +26,12 @@ from corpbrain.core.config import (
     DEFAULT_MODEL,
     DEFAULT_OLLAMA_URL,
 )
+from corpbrain.core.configstore import default_config_path, read_section, update_section
+from corpbrain.core.consent import (
+    grant_cloud_consent,
+    is_cloud_consent_granted,
+    revoke_cloud_consent,
+)
 from corpbrain.core.embedding_text import parse_wiki_document
 from corpbrain.core.environment import DoctorReport, diagnose
 from corpbrain.core.errors import CorpBrainError, PreconditionError
@@ -39,6 +45,7 @@ from corpbrain.core.models import (
     SearchResult,
     WikiDocument,
 )
+from corpbrain.core.pii import PiiType
 from corpbrain.core.pipeline import collect_wiki_documents
 from corpbrain.core.report import build_expansion_evidence, build_summary_lines
 from corpbrain.core.rerun import read_source_path
@@ -84,6 +91,10 @@ EVENTS_PATH = "/api/events"
 ASSETS_PREFIX = "/assets/"
 #: 기동 시 여는 첫 화면.
 INDEX_ASSET = "index.html"
+#: `~/.corpbrain/config.json`에서 GUI가 쓰는 섹션 키 (§4.8). 클라우드 동의 섹션과
+#: 나란히 두며, 새 설정 파일을 만들지 않는다 — 사용자가 어디를 봐야 하는지 헷갈리지
+#: 않게 하고 코어의 기존 읽기·쓰기 관용구를 그대로 쓴다.
+GUI_SECTION = "gui"
 
 #: 상태를 바꾸는 메서드 — `Origin` 헤더를 **필수**로 요구하는 쪽 (§4.2).
 UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
@@ -203,6 +214,7 @@ class GuiApp:
         session_token: str | None = None,
         events: EventStream | None = None,
         scan: ScanController | None = None,
+        config_path: Path | None = None,
     ) -> None:
         self.out_dir = out_dir
         #: 진행 상태의 단일 출처. 스캔 상태는 서버가 소유하고 브라우저 세션이 소유하지
@@ -218,6 +230,9 @@ class GuiApp:
         #: 스캔 상태의 단일 출처 (§4.4). 워커 스레드는 하나뿐이며, 진행 중에 들어온 새 스캔
         #: 요청은 409로 거절된다.
         self.scan = scan or ScanController(self.events)
+        #: 설정 파일 경로. 테스트가 사용자의 실제 `~/.corpbrain/config.json`을 건드리지
+        #: 않도록 주입 이음새를 코어와 같은 모양으로 둔다.
+        self.config_path = config_path or default_config_path()
 
     @property
     def origin(self) -> str:
@@ -289,6 +304,7 @@ class GuiApp:
             "/api/wiki/document": {"GET": self._wiki_document},
             "/api/graph": {"GET": self._graph},
             "/api/search": {"GET": self._search},
+            "/api/settings": {"GET": self._settings, "POST": self._settings_update},
         }
 
     def handle(
@@ -445,6 +461,58 @@ class GuiApp:
             # 안내 문장이 되고, 버그면 여기서 다시 올라가 500이 된다.
             "failure": _section(_reraise(failure)) if failure is not None else None,
         }
+
+    # --- 설정 (§4.8 · §4.9 · §4.11) --------------------------------------------------
+
+    def _settings(self, request: Request) -> Response:
+        """엔진·클라우드 동의·마스킹 유형·GUI 설정 (§4.8 · §4.9).
+
+        **API 키를 다루지 않는다** — 키는 `ANTHROPIC_API_KEY` 환경변수로만 읽는다(§4.9).
+        GUI가 키를 받으면 그 값이 HTTP 바디로 오가고 서버 프로세스가 키를 쥐게 되어 경계가
+        넓어진다. 여기서 내보내는 것은 「설정되어 있는가」라는 **불리언 하나**뿐이다.
+        """
+        return json_response(
+            {
+                "config_path": str(self.config_path),
+                "cloud_consent": _section(self._consent_payload),
+                # 코어 `PiiType` **7종**을 그대로 낸다 — 목업이 6종이었고 라벨·플레이스홀더도
+                # 어긋나 있었다 (§4.11). 프론트가 자기 목록을 갖지 않는다.
+                "pii_types": [
+                    {
+                        "name": str(kind),
+                        "label": kind.label,
+                        "placeholder": kind.placeholder,
+                    }
+                    for kind in PiiType
+                ],
+                "gui": read_section(self.config_path, GUI_SECTION),
+            }
+        )
+
+    def _consent_payload(self) -> dict[str, Any]:
+        return {"granted": is_cloud_consent_granted(config_path=self.config_path)}
+
+    def _settings_update(self, request: Request) -> Response:
+        """동의 토글과 `gui` 섹션 저장 (§4.8).
+
+        쓰기는 코어의 공유 헬퍼를 그대로 쓴다 — 「재읽기 → 자기 섹션만 교체 → 임시파일 후
+        `rename`」. 두 어댑터가 한 파일을 쓰므로 「읽기 → 수정 → 통째로 쓰기」는 나중에 쓴
+        쪽이 상대 섹션을 날리고, 동의가 조용히 철회되면 클라우드 스캔이 막히면서 원인이
+        드러나지 않는다.
+        """
+        payload = _json_body(request)
+        consent = payload.get("cloud_consent")
+        if consent is not None:
+            if consent:
+                grant_cloud_consent(config_path=self.config_path)
+            else:
+                revoke_cloud_consent(config_path=self.config_path)
+        gui = payload.get("gui")
+        if gui is not None:
+            if not isinstance(gui, dict):
+                raise BadRequest("`gui`는 JSON 객체여야 합니다.")
+            update_section(self.config_path, GUI_SECTION, lambda current: {**current, **gui})
+        return self._settings(request)
 
     # --- 지식 검색 (§4.6.1) ----------------------------------------------------------
 

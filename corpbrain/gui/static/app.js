@@ -21,11 +21,6 @@ const VIEWS = [
 
 const DEFAULT_VIEW = 'dashboard';
 
-/** 아직 구현되지 않은 화면의 빈 상태 (§5 — 탭을 잠그거나 강제 이동시키지 않는다). */
-const PENDING_VIEWS = {
-  settings: '설정 화면은 다음 슬라이스에서 붙습니다.',
-};
-
 /* --- 부트스트랩 -------------------------------------------------------------- */
 
 /**
@@ -1163,15 +1158,79 @@ async function renderSearch(content, generation, params) {
   for (const result of body.results) results.appendChild(resultCardFor(result));
 }
 
-function renderPending(content, view) {
-  content.appendChild(
-    emptyState({
-      title: '아직 볼 것이 없습니다',
-      body: `${PENDING_VIEWS[view]} 먼저 스캔하면 이 화면이 채워집니다.`,
-      actionLabel: '플랜 & 스캔으로',
-      actionView: 'scan',
-    })
+/* --- 설정 (§4.8 · §4.9 · §4.11) ------------------------------------------------- */
+
+async function renderSettings(content, generation) {
+  content.appendChild(el('p', 'metric-caption', '불러오는 중…'));
+  const body = await getJson('/api/settings');
+  if (generation !== renderGeneration) return;
+  clear(content);
+  if (isError(body)) {
+    content.appendChild(emptyState({ title: '설정을 불러오지 못했습니다', body: body.message }));
+    return;
+  }
+
+  const grid = el('div', 'bento');
+
+  const consentCard = el('div', 'card');
+  consentCard.appendChild(el('div', 'card-title', '클라우드 엔진 동의'));
+  if (isError(body.cloud_consent)) {
+    consentCard.appendChild(el('p', 'metric-caption', body.cloud_consent.message));
+  } else {
+    const granted = body.cloud_consent.granted;
+    consentCard.appendChild(
+      el('p', 'metric-caption', granted
+        ? '문서 내용이 외부(Anthropic)로 전송됩니다 — PII 7종은 자동 마스킹됩니다.'
+        : '동의하지 않으면 `cloud` 엔진으로 스캔할 수 없습니다.')
+    );
+    const row = el('div', 'field field-check');
+    const toggle = el('input');
+    toggle.type = 'checkbox';
+    toggle.id = 'field-cloud-consent';
+    toggle.checked = granted;
+    toggle.addEventListener('change', async () => {
+      const result = await postJson('/api/settings', { cloud_consent: toggle.checked });
+      if (isError(result)) window.alert(result.message);
+      render();
+    });
+    const label = el('label', 'field-label', 'cloud 엔진(Anthropic API) 사용에 동의');
+    label.htmlFor = toggle.id;
+    row.appendChild(toggle);
+    row.appendChild(label);
+    consentCard.appendChild(row);
+    // API 키는 GUI에서 입력받지 않는다 (§4.9) — 값이 아니라 「설정되어 있는가」만 보인다.
+    consentCard.appendChild(
+      el('p', 'metric-caption', 'API 키는 ANTHROPIC_API_KEY 환경변수로만 읽습니다 — 여기서 입력받지 않습니다.')
+    );
+  }
+  grid.appendChild(consentCard);
+
+  const piiCard = el('div', 'card');
+  piiCard.appendChild(el('div', 'card-title', `마스킹 대상 ${body.pii_types.length}종`));
+  piiCard.appendChild(
+    el('p', 'metric-caption', '클라우드로 나가기 전에 자동으로 가려집니다.')
   );
+  for (const kind of body.pii_types) {
+    // 라벨·플레이스홀더를 프론트가 갖지 않는다 — 코어 `PiiType` 값을 그대로 그린다 (§4.11).
+    const row = el('div', 'check-row');
+    row.appendChild(el('div', 'check-name', kind.label));
+    row.appendChild(el('div', 'check-detail', kind.placeholder));
+    piiCard.appendChild(row);
+  }
+  grid.appendChild(piiCard);
+
+  const fileCard = el('div', 'card');
+  fileCard.appendChild(el('div', 'card-title', '설정 파일'));
+  fileCard.appendChild(
+    el('p', 'metric-caption', '동의와 GUI 설정이 한 파일에 나란히 저장됩니다 — 브라우저에 남기지 않습니다.')
+  );
+  const row = el('div', 'source-row');
+  row.appendChild(el('div', 'source-path', body.config_path));
+  row.appendChild(copyButton(body.config_path));
+  fileCard.appendChild(row);
+  grid.appendChild(fileCard);
+
+  content.appendChild(grid);
 }
 
 /* --- 렌더 루프 ---------------------------------------------------------------- */
@@ -1204,8 +1263,8 @@ async function render() {
     await renderGraph(content, generation, params);
   } else if (view === 'search') {
     await renderSearch(content, generation, params);
-  } else {
-    renderPending(content, view);
+  } else if (view === 'settings') {
+    await renderSettings(content, generation);
   }
 }
 
