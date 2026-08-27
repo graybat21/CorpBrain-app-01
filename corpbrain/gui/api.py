@@ -20,12 +20,51 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl
 
-from corpbrain.core.config import DEFAULT_EMBED_MODEL, DEFAULT_MODEL, DEFAULT_OLLAMA_URL
+from corpbrain.core.config import (
+    DEFAULT_EMBED_MODEL,
+    DEFAULT_GRAPH_DECAY,
+    DEFAULT_MODEL,
+    DEFAULT_OLLAMA_URL,
+)
+from corpbrain.core.configstore import default_config_path, read_section, update_section
+from corpbrain.core.consent import (
+    grant_cloud_consent,
+    is_cloud_consent_granted,
+    revoke_cloud_consent,
+)
+from corpbrain.core.embedding_text import parse_wiki_document
 from corpbrain.core.environment import DoctorReport, diagnose
 from corpbrain.core.errors import CorpBrainError
+from corpbrain.core.graph import parse_expand_edges
 from corpbrain.core.graphstore import SqliteGraphStore, graph_path_for
-from corpbrain.core.models import GraphStats
+from corpbrain.core.models import (
+    GraphStats,
+    NodeType,
+    ScanPlan,
+    ScanResult,
+    SearchResult,
+    WikiDocument,
+)
+from corpbrain.core.pii import PiiType
+from corpbrain.core.pipeline import collect_wiki_documents
+from corpbrain.core.report import build_expansion_evidence, build_summary_lines
+from corpbrain.core.rerun import read_source_path
+from corpbrain.core.scanner import ScanFindings, is_supported
+from corpbrain.core.search import search_index
 from corpbrain.gui.assets import AssetNotFound, content_type_for, read_asset
+from corpbrain.gui.errors import (
+    BadRequest,
+    DirectoryUnreadable,
+    GraphNotBuilt,
+    NothingScanned,
+    WikiNotFound,
+)
+from corpbrain.gui.scan import (
+    Measurement,
+    ScanController,
+    ScanInProgressError,
+    config_from_payload,
+)
 from corpbrain.gui.sse import EventStream
 
 __all__ = [
@@ -34,6 +73,7 @@ __all__ = [
     "JSON_CONTENT_TYPE",
     "SESSION_COOKIE",
     "TOKEN_QUERY_PARAM",
+    "BadRequest",
     "GuiApp",
     "Response",
     "json_response",
@@ -57,6 +97,10 @@ EVENTS_PATH = "/api/events"
 ASSETS_PREFIX = "/assets/"
 #: 기동 시 여는 첫 화면.
 INDEX_ASSET = "index.html"
+#: `~/.corpbrain/config.json`에서 GUI가 쓰는 섹션 키 (§4.8). 클라우드 동의 섹션과
+#: 나란히 두며, 새 설정 파일을 만들지 않는다 — 사용자가 어디를 봐야 하는지 헷갈리지
+#: 않게 하고 코어의 기존 읽기·쓰기 관용구를 그대로 쓴다.
+GUI_SECTION = "gui"
 
 #: 상태를 바꾸는 메서드 — `Origin` 헤더를 **필수**로 요구하는 쪽 (§4.2).
 UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
@@ -121,11 +165,15 @@ def response_for_exception(exc: BaseException) -> Response:
       기본값으로 열리고 `ThreadingHTTPServer`는 요청마다 스레드가 다르므로, 그 예외는
       손상이 아니라 **스레드 오용 버그**다. 200 + 「DB를 지우고 다시 스캔하세요」로 내보내면
       사용자가 멀쩡한 DB를 지운다.
+    - `BadRequest` → **400**. 요청 본문이 이 엔드포인트의 모양이 아니다 — 404·405와 같은
+      프로토콜 층 사건이다.
     - 그 밖의 예외 → 500. 5xx가 오직 버그일 때만 나므로 **로그의 500이 그대로 버그 신호**다.
 
     열거하지 않는 이유는 `CorpBrainError` 계층에 `GatewayError`·`ExtractionError` 등이
     더 있고, 목록에 없는 하나가 조회 경로로 새는 순간 버그가 아닌데 500이 되기 때문이다.
     """
+    if isinstance(exc, BadRequest):
+        return error_response(type(exc).__name__, str(exc), status=400)
     if isinstance(exc, sqlite3.ProgrammingError):
         return _bug_response(exc)
     if isinstance(exc, CorpBrainError | sqlite3.Error):
@@ -171,6 +219,8 @@ class GuiApp:
         port: int,
         session_token: str | None = None,
         events: EventStream | None = None,
+        scan: ScanController | None = None,
+        config_path: Path | None = None,
     ) -> None:
         self.out_dir = out_dir
         #: 진행 상태의 단일 출처. 스캔 상태는 서버가 소유하고 브라우저 세션이 소유하지
@@ -183,6 +233,12 @@ class GuiApp:
         #: 부트스트랩 토큰이 세션 값과 같지 않다.
         self.session_token = session_token or new_token()
         self.port = port
+        #: 스캔 상태의 단일 출처 (§4.4). 워커 스레드는 하나뿐이며, 진행 중에 들어온 새 스캔
+        #: 요청은 409로 거절된다.
+        self.scan = scan or ScanController(self.events)
+        #: 설정 파일 경로. 테스트가 사용자의 실제 `~/.corpbrain/config.json`을 건드리지
+        #: 않도록 주입 이음새를 코어와 같은 모양으로 둔다.
+        self.config_path = config_path or default_config_path()
 
     @property
     def origin(self) -> str:
@@ -247,6 +303,15 @@ class GuiApp:
         """경로 → 메서드 → 핸들러. 경로는 정확히 일치할 때만 매칭한다."""
         return {
             "/api/dashboard": {"GET": self._dashboard},
+            "/api/scan": {"GET": self._scan_status, "POST": self._scan_run},
+            "/api/scan/plan": {"POST": self._scan_plan},
+            "/api/scan/cancel": {"POST": self._scan_cancel},
+            "/api/wiki": {"GET": self._wiki_tree},
+            "/api/wiki/document": {"GET": self._wiki_document},
+            "/api/graph": {"GET": self._graph},
+            "/api/search": {"GET": self._search},
+            "/api/settings": {"GET": self._settings, "POST": self._settings_update},
+            "/api/browse": {"GET": self._browse},
         }
 
     def handle(
@@ -345,6 +410,354 @@ class GuiApp:
             }
         )
 
+    # --- 스캔 (§4.3.4 계량 → 확인 → 실행) -----------------------------------------
+
+    def _scan_plan(self, request: Request) -> Response:
+        """1단계 계량 — `plan_scan()`을 부르고 LLM은 부르지 않는다.
+
+        폴더를 고르는 즉시 자동으로 불리지 않는다(§4.3.4) — 이 엔드포인트는 사용자가
+        「계량하기」를 눌렀을 때만 호출된다. `plan_scan()`은 `nvidia-smi` subprocess와 전체
+        stat 패스를 돌리므로, 폴더를 둘러보는 동안 반복되면 탐색이 느려진다.
+        """
+        payload = _json_body(request)
+        config = config_from_payload(payload, default_out=self.out_dir)
+        return json_response(_measurement_dict(self.scan.measure(config)))
+
+    def _scan_run(self, request: Request) -> Response:
+        """2단계 실행 — 계량 결과 화면에서 눌러야 시작된다.
+
+        진행 중이면 **409**다(§4.4). 이것은 프로토콜 층 사건이라 도메인(200)으로 접지
+        않는다 — 화면이 「시작됐다」와 「이미 돌고 있다」를 같은 코드로 받으면 안 된다.
+        """
+        payload = _json_body(request)
+        config = config_from_payload(payload, default_out=self.out_dir)
+        try:
+            self.scan.start(config)
+        except ScanInProgressError as exc:
+            return error_response("ScanInProgress", str(exc), status=409)
+        return json_response(self._scan_state())
+
+    def _scan_cancel(self, request: Request) -> Response:
+        """취소 요청 — 진행 중인 문서를 마친 뒤 멈춘다 (§4.7).
+
+        진행 중이 아니어도 오류가 아니다. 취소는 **요청**이고, 이미 끝난 스캔에 대한 요청은
+        아무 일도 하지 않는 것이 옳다 — 화면과 서버 사이의 경합(마지막 문서가 끝나는 순간
+        누른 취소)을 오류로 만들면 사용자가 아무것도 잘못하지 않았는데 오류를 본다.
+        """
+        self.scan.cancel()
+        return json_response(self._scan_state())
+
+    def _scan_status(self, request: Request) -> Response:
+        """현재 스캔 상태 + 마지막 결과. 새로고침·다른 탭이 진행 중인 스캔에 다시 붙는 길이다."""
+        return json_response(self._scan_state())
+
+    def _scan_state(self) -> dict[str, Any]:
+        failure = self.scan.failure
+        return {
+            "running": self.scan.running,
+            "cancel_requested": self.scan.cancel_requested,
+            "plan": (
+                _measurement_dict(self.scan.measurement)
+                if self.scan.measurement is not None
+                else None
+            ),
+            "result": (
+                _result_dict(self.scan.result) if self.scan.result is not None else None
+            ),
+            # 워커 스레드에서 죽은 예외는 **이 요청의 오류가 아니라 상태**다. 그래서 절 안에
+            # 담고 응답은 200으로 둔다 — 되올려 500을 내면 이 엔드포인트가 영구히 500이 되고,
+            # 화면이 스캔 폼을 그리지 못해 **새 스캔을 시작할 길이 사라진다**(`_failure`는
+            # `start()`만 지운다). 서버를 다시 띄우는 것 말고는 빠져나올 수 없는 상태였다.
+            #
+            # 「로그의 500 = 버그 신호」는 여전히 성립한다 — 워커가 트레이스백을 stderr에
+            # 남기고(`scan.py`), 그 예외가 도메인인지 버그인지는 아래 `bug` 플래그가 가른다.
+            "failure": _failure_dict(failure) if failure is not None else None,
+        }
+
+    # --- 폴더 선택 (§4.5) -------------------------------------------------------------
+
+    def _browse(self, request: Request) -> Response:
+        """디렉터리 하나를 나열한다 — **범위에 제한을 두지 않는다** (§4.5).
+
+        임의 절대경로를 열람할 수 있다. CLI가 이미 `corpbrain scan /any/path`를 제한 없이
+        수행하므로, GUI만 좁히면 같은 코어의 두 어댑터가 다른 권한을 갖게 된다. 인가되지 않은
+        호출은 §4.2가 이미 거절하고, 서버는 사용자 자신의 파일 권한으로 돌아간다.
+
+        **숨김 항목을 서버가 거르지 않는다.** 「제한을 두지 않는다」는 결정이 거르는 쪽으로
+        새지 않도록, `hidden` 플래그만 실어 보내고 접을지는 화면이 정한다.
+
+        스캔 대상이 될 폴더를 고르는 화면이므로 **이 폴더에 지원 포맷 파일이 몇 개인지**를 함께
+        낸다. 판정은 코어 `is_supported()`를 그대로 쓴다 — 확장자 목록을 어댑터가 다시 적으면
+        `SUPPORTED_EXTENSIONS`와 갈린다.
+        """
+        raw = request.query.get("path", "")
+        # 기본값은 홈이다. 서버의 현재 작업 디렉터리를 쓰면 어디서 띄웠느냐에 따라 첫 화면이
+        # 달라져, 같은 조작이 사람마다 다른 곳을 보여 준다.
+        target = Path(raw).expanduser() if raw else Path.home()
+        try:
+            resolved = target.resolve()
+            if not resolved.is_dir():
+                raise DirectoryUnreadable(f"디렉터리가 아닙니다: {resolved}")
+            entries = sorted(resolved.iterdir(), key=lambda item: item.name.lower())
+        except DirectoryUnreadable:
+            raise
+        except OSError as exc:
+            # 권한 거부·깨진 심볼릭 링크·사라진 경로 — 전부 사용자가 만난 «환경의 상태»이지
+            # 서버의 버그가 아니다 (§5).
+            raise DirectoryUnreadable(f"읽을 수 없습니다: {target} — {exc.strerror or exc}") from exc
+
+        directories: list[dict[str, Any]] = []
+        supported = 0
+        for entry in entries:
+            try:
+                is_dir = entry.is_dir()
+            except OSError:
+                # 한 항목을 판정하지 못했다고 나열 전체를 실패시키지 않는다 — v0.1 §5의
+                # 「개별 파일 실패는 전체 실패로 위장하지 않는다」와 같은 결이다.
+                continue
+            if is_dir:
+                directories.append(
+                    {
+                        "name": entry.name,
+                        "path": str(entry),
+                        "hidden": entry.name.startswith("."),
+                    }
+                )
+            elif is_supported(entry):
+                supported += 1
+
+        parent = resolved.parent
+        return json_response(
+            {
+                "path": str(resolved),
+                # 루트에서는 `parent`가 자기 자신이다 — 화면이 「위로」를 감출 근거로 쓴다.
+                "parent": None if parent == resolved else str(parent),
+                "home": str(Path.home()),
+                "directories": directories,
+                "supported_file_count": supported,
+            }
+        )
+
+    # --- 설정 (§4.8 · §4.9 · §4.11) --------------------------------------------------
+
+    def _settings(self, request: Request) -> Response:
+        """엔진·클라우드 동의·마스킹 유형·GUI 설정 (§4.8 · §4.9).
+
+        **API 키를 다루지 않는다** — 키는 `ANTHROPIC_API_KEY` 환경변수로만 읽는다(§4.9).
+        GUI가 키를 받으면 그 값이 HTTP 바디로 오가고 서버 프로세스가 키를 쥐게 되어 경계가
+        넓어진다. 여기서 내보내는 것은 「설정되어 있는가」라는 **불리언 하나**뿐이다.
+        """
+        return json_response(
+            {
+                "config_path": str(self.config_path),
+                "cloud_consent": _section(self._consent_payload),
+                # 코어 `PiiType` **7종**을 그대로 낸다 — 목업이 6종이었고 라벨·플레이스홀더도
+                # 어긋나 있었다 (§4.11). 프론트가 자기 목록을 갖지 않는다.
+                "pii_types": [
+                    {
+                        "name": str(kind),
+                        "label": kind.label,
+                        "placeholder": kind.placeholder,
+                    }
+                    for kind in PiiType
+                ],
+                "gui": read_section(self.config_path, GUI_SECTION),
+            }
+        )
+
+    def _consent_payload(self) -> dict[str, Any]:
+        return {"granted": is_cloud_consent_granted(config_path=self.config_path)}
+
+    def _settings_update(self, request: Request) -> Response:
+        """동의 토글과 `gui` 섹션 저장 (§4.8).
+
+        쓰기는 코어의 공유 헬퍼를 그대로 쓴다 — 「재읽기 → 자기 섹션만 교체 → 임시파일 후
+        `rename`」. 두 어댑터가 한 파일을 쓰므로 「읽기 → 수정 → 통째로 쓰기」는 나중에 쓴
+        쪽이 상대 섹션을 날리고, 동의가 조용히 철회되면 클라우드 스캔이 막히면서 원인이
+        드러나지 않는다.
+        """
+        payload = _json_body(request)
+        consent = payload.get("cloud_consent")
+        if consent is not None:
+            if consent:
+                grant_cloud_consent(config_path=self.config_path)
+            else:
+                revoke_cloud_consent(config_path=self.config_path)
+        gui = payload.get("gui")
+        if gui is not None:
+            if not isinstance(gui, dict):
+                raise BadRequest("`gui`는 JSON 객체여야 합니다.")
+            update_section(self.config_path, GUI_SECTION, lambda current: {**current, **gui})
+        return self._settings(request)
+
+    # --- 지식 검색 (§4.6.1) ----------------------------------------------------------
+
+    def _search(self, request: Request) -> Response:
+        """코사인 + 그래프 확산 검색 (§4.6.1).
+
+        **검증을 자체적으로 두지 않는다** (§4.3.3). `graph_decay`의 범위와 `expand_edges`의
+        문법은 코어가 판정하고, 그 실패는 `PreconditionError`라 도메인(200 + 안내 문장)으로
+        나간다 — v0.7 §4.4가 「규칙이 한 곳에만 있어야 코어를 직접 부르는 후속 어댑터도 같은
+        보호를 받는다」고 정한 그 후속 어댑터가 이 GUI다.
+        """
+        query = request.query.get("q", "").strip()
+        if not query:
+            raise BadRequest("검색어를 입력하세요 (`q`).")
+        expand_raw = request.query.get("expand_edges", "")
+        results = search_index(
+            self.out_dir,
+            query,
+            top_k=_as_int(request.query.get("top_k"), default=5),
+            ollama_url=request.query.get("ollama_url") or DEFAULT_OLLAMA_URL,
+            # 문자열 `"false"`가 참이 되는 실수를 막는다 — 프론트는 `graph=false`를 보낸다.
+            graph=request.query.get("graph", "true").lower() != "false",
+            graph_decay=_as_float(
+                request.query.get("graph_decay"), default=DEFAULT_GRAPH_DECAY
+            ),
+            **(
+                {"expand_edges": parse_expand_edges(expand_raw)} if expand_raw else {}
+            ),
+        )
+        return json_response({"query": query, "results": [_result_row(r) for r in results]})
+
+    # --- 지식그래프 (§4.3.1) ---------------------------------------------------------
+
+    def _graph(self, request: Request) -> Response:
+        """전체 노드와 엣지 (§4.3.1).
+
+        노드는 기존 계약으로 얻는다 — 엣지만 `iter_edges()`가 필요했고, 그래서 계약이
+        10 → 11멤버가 됐다.
+
+        **`degree_ranking()`은 `Document` 노드만 준다** (v0.6 §4.7 `--central`이 문서 목록이라
+        그렇게 정의됐다). 스펙 §4.3.1은 그것이 「전 노드 id를 준다」고 적었으나 사실이 아니며,
+        그대로 믿고 짜면 `Entity`·`Tag` 노드가 통째로 빠진 그래프가 그려진다(실측 확인).
+        전 노드는 **`degree_ranking()`의 문서 ∪ 엣지 끝점**으로 얻는다 — `Entity`·`Tag`
+        노드는 문서가 그것을 가리켜야만 존재하므로 반드시 어떤 엣지의 끝점이고, 엣지가 하나도
+        없는 고립 문서는 `degree_ranking()`이 담는다. 두 집합의 합이 곧 전 노드다.
+
+        계약을 더 넓히지 않는다 — 이 길이 이미 있으므로 12번째 멤버를 만들 이유가 없다.
+
+        **규모 상한·필터·차수 추림을 두지 않는다** — 4종 노드를 제한 없이 전부 그리며,
+        대규모에서 느려지는 것은 §5가 명시한 알려진 한계이자 issue #58로 분리돼 있다.
+        여기서 조용히 잘라 내면 화면이 「이게 전부」라고 말하면서 아닌 것을 보여 준다.
+        """
+        path = graph_path_for(self.out_dir)
+        if not path.exists():
+            raise GraphNotBuilt(
+                "아직 스캔하지 않았습니다 — 먼저 스캔하면 지식그래프가 채워집니다."
+            )
+        store = SqliteGraphStore(path, read_only=True)
+        try:
+            edges = list(store.iter_edges())
+            node_ids = {node_id for node_id, _degree in store.degree_ranking()}
+            for edge in edges:
+                node_ids.add(edge.src)
+                node_ids.add(edge.dst)
+            nodes = store.nodes_of(sorted(node_ids))
+            stats = store.stats()
+        finally:
+            store.close()
+        # 차수는 **엣지에서 센다** — `degree_ranking()`은 문서만 담아 `Entity`·`Tag`가 전부
+        # 0이 되고, 화면이 노드 크기를 그것으로 정하므로 허브 태그가 가장 작게 그려진다.
+        # 문서의 값은 어차피 같다(둘 다 닿는 엣지 수).
+        degrees: dict[str, int] = {node_id: 0 for node_id in node_ids}
+        for edge in edges:
+            degrees[edge.src] = degrees.get(edge.src, 0) + 1
+            degrees[edge.dst] = degrees.get(edge.dst, 0) + 1
+        return json_response(
+            {
+                "stats": _stats_dict(stats),
+                "nodes": [
+                    {
+                        # 노드 종류는 코어 `NodeType` 값을 **그대로** 쓴다 — 프론트가 자기
+                        # 리터럴을 가지면 어휘가 갈린다 (§4.11).
+                        "id": node.id,
+                        "type": str(node.type),
+                        "label": node.label,
+                        "degree": degrees.get(node.id, 0),
+                    }
+                    for node in sorted(nodes.values(), key=lambda node: node.id)
+                ],
+                "edges": [
+                    {
+                        # 엣지 종류도 `EdgeType` 값 그대로 — `graph --stats` 출력·DB의 type
+                        # 컬럼·`--expand-edges` 플래그와 한 문자열이어야 한다 (§4.11).
+                        "src": edge.src,
+                        "dst": edge.dst,
+                        "type": str(edge.type),
+                        "weight": edge.weight,
+                    }
+                    for edge in edges
+                ],
+            }
+        )
+
+    # --- 위키 (§4.6 · §4.6.2) -------------------------------------------------------
+
+    def _wiki_tree(self, request: Request) -> Response:
+        """트리 — **제목은 그래프 `nodes.label`에서 얻는다** (§4.6.2).
+
+        `degree_ranking()`으로 전 노드 id를 받아 `nodes_of()`로 `Document` 노드의 라벨을
+        가져온다. sqlite 조회 2번이고 위키 파일을 하나도 열지 않는다. 라벨 선택 규칙은
+        `build_graph()` 한 곳에만 있고 조회는 저장된 값을 읽는다(v0.6.1 결정 계승) — 같은
+        문서가 화면마다 다른 제목으로 불리지 않는다.
+
+        **그래프가 없으면 파일명으로 대체하고 그 사실을 알린다** — §4.6.2의 파생 결정이다.
+        이 fallback 이 제목을 «파싱»하지 않는다는 점이 중요하다. 파일명을 쓰므로 제목 파싱
+        경로는 여전히 서버 안에 하나뿐이다.
+        """
+        path = graph_path_for(self.out_dir)
+        if path.exists():
+            store = SqliteGraphStore(path, read_only=True)
+            try:
+                ids = [node_id for node_id, _degree in store.degree_ranking()]
+                nodes = store.nodes_of(ids)
+            finally:
+                store.close()
+            documents = [
+                _tree_entry(node.id, node.label)
+                for node in sorted(nodes.values(), key=lambda node: node.id)
+                if node.type is NodeType.DOCUMENT
+            ]
+            if documents:
+                return json_response({"source": "graph", "documents": documents})
+
+        inventory = collect_wiki_documents(self.out_dir)
+        if not inventory.documents:
+            raise NothingScanned(
+                "아직 스캔하지 않았습니다 — 먼저 스캔하면 위키 트리가 채워집니다."
+            )
+        return json_response(
+            {
+                "source": "files",
+                "message": "그래프가 아직 없어 파일명을 제목 대신 씁니다 — 다시 스캔하면 채워집니다.",
+                "documents": [
+                    _tree_entry(doc_id, Path(doc_id).name)
+                    for doc_id in sorted(inventory.documents)
+                ],
+            }
+        )
+
+    def _wiki_document(self, request: Request) -> Response:
+        """상세 — front-matter 5키와 7섹션을 **필드로 분리해** 담는다 (§4.6).
+
+        프론트엔드에 마크다운 파서를 두지 않으므로 마크다운 렌더 경로의 XSS 방어도
+        프론트엔드 책임이 아니다.
+        """
+        doc_id = request.query.get("doc", "")
+        if not doc_id:
+            raise BadRequest("어느 문서인지 지정하세요 (`doc`).")
+        inventory = collect_wiki_documents(self.out_dir)
+        wiki_path = inventory.documents.get(doc_id)
+        if wiki_path is None:
+            raise WikiNotFound(
+                f"그 문서의 위키가 `{self.out_dir}` 아래에 없습니다 — 다시 스캔해 보세요."
+            )
+        document = parse_wiki_document(wiki_path.read_text(encoding="utf-8"))
+        return json_response(
+            _wiki_dict(document, wiki_path=wiki_path, out_dir=self.out_dir)
+        )
+
     def _doctor_payload(self) -> dict[str, Any]:
         return _doctor_dict(
             diagnose(
@@ -374,11 +787,12 @@ class GuiApp:
         path = graph_path_for(self.out_dir)
         if not path.exists():
             # 첫 실행은 오류가 아니라 정상적인 빈 상태다 (§5). 화면은 이 식별자를 보고
-            # 자기 빈 상태를 그리고 스캔 화면으로 보낸다.
-            return {
-                "error": "GraphNotBuilt",
-                "message": "아직 스캔하지 않았습니다 — 먼저 스캔하면 지식그래프가 채워집니다.",
-            }
+            # 자기 빈 상태를 그리고 스캔 화면으로 보낸다. **예외로 올린다** — 본문을 손으로
+            # 짜면 같은 조건이 화면마다 다른 식별자를 갖게 되고, `_section`이 §4.3.2 매핑을
+            # 적용할 기회도 사라진다.
+            raise GraphNotBuilt(
+                "아직 스캔하지 않았습니다 — 먼저 스캔하면 지식그래프가 채워집니다."
+            )
         store = SqliteGraphStore(path, read_only=True)
         try:
             return _stats_dict(store.stats())
@@ -504,3 +918,242 @@ def _parse_query(raw: str) -> dict[str, str]:
     for key, value in parse_qsl(raw, keep_blank_values=True):
         parsed.setdefault(key, value)
     return parsed
+
+
+def _failure_dict(exc: BaseException) -> dict[str, Any]:
+    """워커가 남긴 예외를 상태 절로 편다.
+
+    도메인/버그 판정은 `response_for_exception`의 규칙을 그대로 쓴다 — 규칙이 코드에 한 번만
+    적힌다(§4.3.2). 다만 여기서는 그 판정을 **상태코드가 아니라 `bug` 플래그**로 옮긴다:
+    실패는 이 요청의 오류가 아니라 지난 실행의 상태이므로, 응답 자체는 정상이다.
+    """
+    response = response_for_exception(exc)
+    body = response.json()
+    return {**body, "bug": response.status != 200}
+
+
+def _json_body(request: Request) -> dict[str, Any]:
+    """요청 본문을 JSON 객체로 읽는다. 본문이 없으면 빈 객체로 본다."""
+    if not request.body:
+        return {}
+    try:
+        payload = json.loads(request.body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise BadRequest(f"본문을 JSON으로 읽지 못했습니다: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise BadRequest("본문은 JSON 객체여야 합니다.")
+    return payload
+
+
+def _measurement_dict(measurement: Measurement) -> dict[str, Any]:
+    """계량 결과 — 파일별 테이블과 게이트 판정 (§4.3.4 1단계)."""
+    return {
+        "plan": _plan_dict(measurement.plan),
+        "findings": _findings_dict(
+            measurement.findings, max_files=measurement.config.max_files
+        ),
+    }
+
+
+def _plan_dict(plan: ScanPlan) -> dict[str, Any]:
+    gate = plan.gate
+    return {
+        "file_count": plan.file_count,
+        "total_est_tokens": plan.total_est_tokens,
+        "est_seconds": plan.est_seconds,
+        "hardware": {"gpu": plan.hardware.gpu, "label": plan.hardware.label},
+        "entries": [
+            {
+                "path": str(entry.path),
+                "ext": entry.ext,
+                "size_bytes": entry.size_bytes,
+                "est_tokens": entry.est_tokens,
+                "importance": entry.importance,
+            }
+            for entry in plan.entries
+        ],
+        "gate": (
+            None
+            if gate is None
+            else {
+                "gpu_ok": gate.gpu_ok,
+                "gpu_enforced": gate.gpu_enforced,
+                "tokens_ok": gate.tokens_ok,
+                "oversized_count": gate.oversized_count,
+                "max_file_size": gate.max_file_size,
+                "max_total_tokens": gate.max_total_tokens,
+                # 게이트가 걸리면 화면이 이유와 강행 토글(`force_gates`)을 함께 보여 준다 —
+                # CLI가 exit 3으로 막는 자리와 같다 (§4.3.4).
+                "blocked": (gate.gpu_enforced and not gate.gpu_ok) or not gate.tokens_ok,
+            }
+        ),
+    }
+
+
+def _findings_dict(findings: ScanFindings, *, max_files: int) -> dict[str, Any]:
+    """계량 결과의 파일 집계 — **상한 판정을 여기서 적용해 보여 준다.**
+
+    `measure()`가 훑는 findings는 `max_files=None`으로 얻은 **절단 이전** 집합이다(`run_scan`이
+    게이트를 그 위에서 계산해야 하므로 그래야 한다). 그 값을 그대로 내면 화면이
+    `limit_exceeded: false`와 「4개 문서」를 보여 주는데, 정작 「스캔 시작」을 누르면 `run_scan`이
+    `enforce_limit()`으로 즉시 중단해 **0건**이 나온다 — 확인 화면이 거짓말을 하는 셈이다.
+
+    판정 규칙은 코어 `enforce_limit()`과 같은 한 줄(`discovered_count > max_files`)이며, 여기서
+    무엇을 자를지 정하지 않는다 — 자르는 것은 여전히 `run_scan`의 몫이다.
+    """
+    limit_exceeded = findings.limit_exceeded or findings.discovered_count > max_files
+    return {
+        "discovered_count": findings.discovered_count,
+        "limit_exceeded": limit_exceeded,
+        "target_count": 0 if limit_exceeded else len(findings.targets),
+        "skipped": [
+            {"path": str(item.path), "reason": str(item.reason), "detail": item.detail}
+            for item in findings.skipped
+        ],
+    }
+
+
+def _result_dict(result: ScanResult) -> dict[str, Any]:
+    """스캔 결과 — 구조화된 집계 + 종료 요약 줄.
+
+    **줄을 함께 싣는 이유**는 §4.6.1의 원칙 그대로다. 갈라지면 안 되는 것은 「어휘」이고,
+    「그래프 미반영 — 다시 스캔하면 반영됩니다」·스킵 사유 라벨 같은 문구를 프론트가 다시
+    구현하면 CLI와 GUI가 같은 결과를 다른 말로 설명한다. 검색 결과와 달리 이 줄들은 이미
+    **독립된 줄의 목록**이라 프론트가 정규식으로 다시 가를 일이 없다 — 그대로 출력하면 된다.
+    카드가 필요로 하는 숫자는 아래 필드가 따로 낸다.
+    """
+    graph = result.graph
+    return {
+        "cancelled": result.cancelled,
+        "limit_exceeded": result.limit_exceeded,
+        "discovered_count": result.discovered_count,
+        "generated_count": len(result.generated),
+        "skipped_count": len(result.skipped),
+        "embedding_failure_count": len(result.embedding_failures),
+        "out_dir": str(result.out_dir),
+        "graph": None if graph is None or graph.stats is None else _stats_dict(graph.stats),
+        "summary_lines": build_summary_lines(result),
+    }
+
+
+def _tree_entry(doc_id: str, title: str) -> dict[str, Any]:
+    """트리 항목 — 키는 `doc_id`이며 그래프 화면·검색과 **같은 키**를 쓴다 (§4.6.2).
+
+    `directory`를 서버가 실어 보내는 것은 화면이 폴더별로 묶어 그리기 때문이다. 프론트가
+    절대경로를 잘라 쓰게 두지 않는다 — 경로 해석은 어댑터의 책임이다.
+    """
+    path = Path(doc_id)
+    return {
+        "doc_id": doc_id,
+        "title": title,
+        "name": path.name,
+        "directory": str(path.parent),
+    }
+
+
+def _wiki_dict(document: WikiDocument, *, wiki_path: Path, out_dir: Path) -> dict[str, Any]:
+    return {
+        # front-matter 5키 — `engine`을 빼지 않는다. 「이 문서가 외부로 나갔는가」를
+        # 생성물만 보고 아는 값이라 상세 화면에서 가장 먼저 보여야 할 값에 가깝다 (§4.6).
+        "source_path": document.source_path,
+        "generated_at": document.generated_at,
+        "model": document.model,
+        "engine": document.engine,
+        "source_bytes": document.source_bytes,
+        # 7섹션.
+        "title": document.title,
+        "one_line_summary": document.one_line_summary,
+        "key_points": list(document.key_points),
+        "summary": document.summary,
+        "tags": list(document.tags),
+        # 「원문」은 링크가 아니라 **경로**로 내려간다. `file://`는 http 페이지에서 브라우저가
+        # 차단하므로 화면은 경로 표시 + 복사 버튼으로 낸다 (§4.6 · IX2). 파일을 OS 기본 앱으로
+        # 여는 엔드포인트는 두지 않는다 — MVP 스펙 §2의 명시적 비목표다.
+        "source_link": document.source_link,
+        "related": _related_dicts(document, wiki_path=wiki_path, out_dir=out_dir),
+        "wiki_path": str(wiki_path),
+        "wiki_relative": str(wiki_path.relative_to(out_dir)) if wiki_path.is_relative_to(out_dir) else str(wiki_path),
+    }
+
+
+def _related_dicts(
+    document: WikiDocument, *, wiki_path: Path, out_dir: Path
+) -> list[dict[str, Any]]:
+    """「관련 문서」에 `doc_id`를 실어 내린다 (§4.6 · IX3).
+
+    위키 본문에는 `doc_id`가 **적혀 있지 않다** — 적혀 있는 것은 제목·상대경로·근거 문구뿐이다.
+    서버가 그 상대경로를 **이 위키 파일 기준**으로 풀어 대상 위키의 front-matter `source_path`를
+    읽는다. 비용은 상세 1건당 최대 `related_top_k`개(기본 5)의 head 읽기다.
+
+    **그래프에서 `rank_related()`로 다시 계산하지 않는다** — 동점 정렬 키가 달라져 화면 순서가
+    파일에 적힌 순서와 어긋나고, 「조회 시점에 파생값을 다시 계산하지 않는다」는 v0.6 불변식과도
+    부딪친다. 프론트가 링크를 파싱해 되돌리게 하지도 않는다 — 경로 해석이 프론트로 넘어가고
+    「프론트엔드에 마크다운 파서를 두지 않는다」와도 부딪친다.
+    """
+    entries: list[dict[str, Any]] = []
+    for link in document.related:
+        target = (wiki_path.parent / link.href).resolve()
+        doc_id = read_source_path(target) if target.is_file() else None
+        entries.append(
+            {
+                "title": link.title,
+                # 못 풀면 빈 문자열이다 — 화면은 링크 대신 제목만 보여 준다. 위키가 지워졌거나
+                # 사용자가 손으로 고친 경우이며, 상세 전체를 실패시킬 이유가 아니다.
+                "doc_id": doc_id or "",
+                # 근거 문구는 v0.6·v0.7이 못박은 **어휘**라 그대로 싣는다 (§4.6.1).
+                "evidence": link.evidence,
+            }
+        )
+    return entries
+
+
+def _as_int(raw: str | None, *, default: int) -> int:
+    """쿼리 파라미터를 정수로 옮긴다 — **값의 타당성은 코어가 판정한다** (§4.3.3)."""
+    if raw is None or raw == "":
+        return default
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise BadRequest(f"정수가 아닙니다: {raw}") from exc
+
+
+def _as_float(raw: str | None, *, default: float) -> float:
+    if raw is None or raw == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError as exc:
+        raise BadRequest(f"숫자가 아닙니다: {raw}") from exc
+
+
+def _result_row(result: SearchResult) -> dict[str, Any]:
+    """검색 결과 1건 — 필드로 내리되 **근거 줄만** 기존 빌더의 문자열을 그대로 싣는다.
+
+    §4.6.1의 원칙: **갈라지면 안 되는 것은 「어휘」이지 「줄 조립」이 아니다.** 카드는 점수
+    배지·제목·경로를 각각 그려야 하므로 `build_search_lines()` 전체를 내리면 프론트가 정규식
+    으로 다시 갈라야 하고, 출력 문구를 다듬는 순간 조용히 깨진다. 반대로 근거를 전부 구조화
+    하면 참조 방향 3종 문구(「시드를 참조함」·「시드가 참조함」·「서로 참조함」)를 프론트가 다시
+    구현하게 되어 v0.7이 정확 문자열까지 못박은 어휘가 둘로 갈린다.
+    """
+    metadata = result.metadata or {}
+    expansion = result.expansion
+    return {
+        "doc_id": result.doc_id,
+        "score": result.score,
+        # 제목·경로의 출처는 시드와 확산에서 하나로 유지된다 (v0.7 §4.7).
+        "title": metadata.get("title") or Path(result.doc_id).name,
+        # v0.4 그대로 원문 절대경로를 적는다. `metadata`가 없는 확산 문서는 `doc_id`가 곧
+        # 같은 값이다 (v0.7 §4.6).
+        "source_path": metadata.get("source_path") or result.doc_id,
+        "tags": list(metadata.get("tags") or []),
+        "expansion": (
+            None
+            if expansion is None
+            else {
+                "seed_doc_id": expansion.seed_doc_id,
+                "seed_title": expansion.seed_title,
+                # v0.7 §4.6이 정확 문자열까지 못박은 계약 — 한 글자도 갈리지 않는다.
+                "evidence": build_expansion_evidence(expansion, result.score),
+            }
+        ),
+    }

@@ -129,6 +129,14 @@ def build_summary_lines(result: ScanResult) -> list[str]:
             f"인덱싱 생략 — {INDEXING_SKIP_LABELS[result.indexing_skip_reason]} "
             "위키는 정상 생성됐지만 `corpbrain search`로는 찾을 수 없습니다."
         )
+    if result.cancelled:
+        # 취소는 «실행 전체의 상태»라 그래프 절이 아니라 여기서 낸다 (v0.9 §4.7).
+        # 그래프 단계를 건너뛴 창(window)을 조용히 두지 않는다 — 다음 `scan`이 재요약 없이
+        # 자동 회복하지만, 그때까지 「관련 문서」와 그래프 조회는 이번에 만든 위키를 모른다.
+        lines.append(
+            "중단됨 — 요청에 따라 스캔을 멈췄습니다. 그때까지 생성된 위키는 그대로 남습니다."
+        )
+        lines.append("  - 그래프 미반영 — 다시 스캔하면 반영됩니다.")
     lines.extend(_graph_summary_lines(result))
     lines.append(f"출력 경로: {result.out_dir}")
     return lines

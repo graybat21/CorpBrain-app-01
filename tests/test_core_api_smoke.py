@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -32,14 +33,41 @@ def test_run_scan_takes_pure_config_value() -> None:
     """공개 진입점은 어댑터 타입이 아닌 순수 값(`ScanConfig`)을 받는다."""
     signature = inspect.signature(core.run_scan)
     assert list(signature.parameters) == [
-        "config", "on_event", "findings", "plan", "consent_path",
+        "config", "on_event", "findings", "plan", "consent_path", "should_cancel",
     ]
     assert signature.parameters["config"].annotation == "ScanConfig"
-    # 관측 콜백·재사용 findings·재사용 plan·동의 경로 이음새는 모두 키워드 전용 선택 인자다 —
-    # ScanConfig는 순수 값으로 유지하고, 자격증명·경로 같은 환경 의존은 값 객체에 싣지 않는다.
-    for name in ("on_event", "findings", "plan", "consent_path"):
+    # 관측 콜백·재사용 findings·재사용 plan·동의 경로·취소 술어 이음새는 모두 키워드 전용
+    # 선택 인자다 — ScanConfig는 순수 값으로 유지하고, 자격증명·경로 같은 환경 의존은 값
+    # 객체에 싣지 않는다.
+    for name in ("on_event", "findings", "plan", "consent_path", "should_cancel"):
         assert signature.parameters[name].kind == inspect.Parameter.KEYWORD_ONLY
         assert signature.parameters[name].default is None
+
+
+def test_cancel_hook_is_a_pure_predicate() -> None:
+    """취소는 **순수 술어**로 받는다 — 동시성 자료형을 코어 시그니처에 박지 않는다 (v0.9 §4.7).
+
+    `threading.Event`를 받으면 「단일 프로세스 안의 스레드」를 전제하게 되어, 후속 어댑터가
+    프로세스·비동기로 갈 때 변환층을 지게 된다.
+    """
+    annotation = inspect.signature(core.run_scan).parameters["should_cancel"].annotation
+    assert annotation == "Callable[[], bool] | None"
+
+
+def test_core_imports_no_concurrency_machinery() -> None:
+    """코어에 `threading`·`asyncio`·`signal` import가 하나도 없다 (v0.9 §4.7).
+
+    이 성질이 유지되어야 취소 훅을 순수 술어로 둔 결정이 실제로 값을 갖는다. GUI 어댑터가
+    스레드를 쓰는 것은 어댑터의 사정이며 코어로 새지 않는다.
+    """
+    core_dir = Path(core.__file__).parent
+    offenders = [
+        f"{path.relative_to(core_dir)}:{number}"
+        for path in sorted(core_dir.rglob("*.py"))
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+        if re.match(r"\s*(import|from)\s+(threading|asyncio|signal)\b", line)
+    ]
+    assert offenders == []
 
 
 def test_scan_config_defaults_match_spec() -> None:

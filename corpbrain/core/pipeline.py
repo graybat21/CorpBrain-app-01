@@ -123,6 +123,7 @@ def run_scan(
     findings: ScanFindings | None = None,
     plan: ScanPlan | None = None,
     consent_path: Path | None = None,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> ScanResult:
     """폴더를 스캔해 문서마다 위키 마크다운 1개를 생성하고 결과를 반환한다.
 
@@ -142,6 +143,19 @@ def run_scan(
             코어 진입점까지 이어 준다 — 테스트나 후속 UI 어댑터가 사용자의 실제
             `~/.corpbrain/config.json`을 건드리지 않고 격리할 수 있다. `None`(기본)이면 실제
             사용자 설정 경로를 쓴다. `engine="local"`이면 읽지 않는다.
+        should_cancel: 협조적 취소를 묻는 **순수 술어**(선택, v0.9 §4.7). 파일 루프 경계에서
+            호출해 `True`면 멈추며, 계약은 「진행 중인 문서를 마친 뒤 멈춘다」다. `None`(기본)
+            이면 취소를 묻지 않는다.
+
+            **`threading.Event`를 받지 않는다** — 코어에는 `threading`·`asyncio`·`signal`
+            import가 하나도 없고, 순수 술어로 두면 그 성질이 유지되어 후속 어댑터가
+            프로세스·비동기로 가도 변환층이 생기지 않는다. **`on_event`의 반환값으로 취소를
+            표현하지도 않는다** — 표시 장치와 실행 제어를 한 콜백에 섞으면 sink 버그가 스캔을
+            조용히 멈추는 실패 모드가 생긴다.
+
+            **이 술어의 예외는 삼키지 않는다.** `_emit`이 `on_event` 예외를 흡수하는 것과
+            의도적으로 다르다 — sink는 표시 장치라 죽어도 스캔이 계속되는 것이 옳지만, 취소
+            술어는 제어 입력이라 조용히 무시하면 사용자의 중단 요청이 사라진다.
 
     Returns:
         생성·스킵 목록을 담은 `ScanResult`. 개별 파일 실패는 스킵으로 담고 예외로 올리지 않는다.
@@ -237,6 +251,12 @@ def run_scan(
         raise
     try:
         for index, source_path in enumerate(findings.targets, start=1):
+            # 파일 루프 **경계**에서 묻는다 — 직전 문서는 이미 끝났고 이 문서는 아직 시작하지
+            # 않았으므로, 「진행 중인 문서를 마친 뒤 멈춘다」는 계약이 그대로 성립한다.
+            # 예외를 감싸지 않는 것은 의도다(위 독스트링).
+            if should_cancel is not None and should_cancel():
+                result.cancelled = True
+                break
             _process_one(
                 source_path, root, config, result,
                 on_event=on_event, index=index, total=total, run_state=run_state,
@@ -247,22 +267,37 @@ def run_scan(
             if out_path.exists():
                 valid_ids.add(str(source_path))
 
-        # 고아 벡터 정리 (v0.4 스펙 §3 항목5): 이번 스캔 대상 범위(root) 안에서 위키가 없는
-        # 것으로 판명된 doc_id(원문 삭제·위키 삭제 등)만 지운다. root 밖의 기존 doc_id(예:
-        # 더 넓은 폴더로 이미 인덱싱된 뒤 이번엔 하위 폴더만 좁혀 스캔한 경우)는 이번 스캔과
-        # 무관하므로 건드리지 않는다.
-        try:
-            for stale_id in existing_ids - valid_ids:
-                if Path(stale_id).is_relative_to(root):
-                    store.delete(stale_id)
-        except sqlite3.Error:
-            pass  # 정리 실패는 베스트 에포트 — 이미 완료된 스캔 결과를 무효화하지 않는다.
+        if not result.cancelled:
+            # 고아 벡터 정리 (v0.4 스펙 §3 항목5): 이번 스캔 대상 범위(root) 안에서 위키가 없는
+            # 것으로 판명된 doc_id(원문 삭제·위키 삭제 등)만 지운다. root 밖의 기존 doc_id(예:
+            # 더 넓은 폴더로 이미 인덱싱된 뒤 이번엔 하위 폴더만 좁혀 스캔한 경우)는 이번 스캔과
+            # 무관하므로 건드리지 않는다.
+            #
+            # **취소되면 이 정리를 통째로 건너뛴다** (v0.9 §4.7). `valid_ids`는 파일 루프가
+            # **방문한 문서만** 담으므로, 루프가 일찍 끊기면 아직 방문하지 않은 문서 전부가
+            # 「위키가 사라진 문서」로 오판돼 벡터가 지워진다(문서 50개 중 3번째에서 취소 →
+            # 47건 삭제). 다음 실행이 백필하므로 영구 손실은 아니나 문서마다 임베딩 호출을
+            # 다시 치르고 그 사실이 보고되지 않는다. v0.6 §5가 「위키를 하나라도 읽지 못하면
+            # 재료 정리를 통째로 건너뛴다」로 세운 잣대와 같다 — **목록이 불완전한 채로
+            # «없는 문서»를 판정하지 않는다.**
+            try:
+                for stale_id in existing_ids - valid_ids:
+                    if Path(stale_id).is_relative_to(root):
+                        store.delete(stale_id)
+            except sqlite3.Error:
+                pass  # 정리 실패는 베스트 에포트 — 이미 완료된 스캔 결과를 무효화하지 않는다.
 
-        # 패스2·패스3 — 저장소가 열려 있는 이 블록 안에서 돈다 (v0.6 §4.8). `iter_vectors()`가
-        # 유사도 계산에 필요하므로 `finally: store.close()`의 범위를 실행 끝까지 늘린다.
-        result.graph = _run_graph_stage(
-            config, store=store, graph=graph, indexing=indexing, on_event=on_event
-        )
+            # 패스2·패스3 — 저장소가 열려 있는 이 블록 안에서 돈다 (v0.6 §4.8). `iter_vectors()`가
+            # 유사도 계산에 필요하므로 `finally: store.close()`의 범위를 실행 끝까지 늘린다.
+            #
+            # **취소되면 그래프 단계도 건너뛴다** — 취소가 가장 빨리 듣는 쪽을 택한다. 안전한
+            # 이유는 `doc_facts` upsert가 패스2가 아니라 **패스1의 파일 루프 안에서 문서마다**
+            # 일어나기 때문이다. 완료된 문서의 재료가 엔티티까지 온전히 남아, 다음 `scan`이
+            # 재요약 없이 그래프와 「관련 문서」를 자동 회복한다. 남는 대가는 다음 실행까지의
+            # 창뿐이며 그것은 종료 보고가 「그래프 미반영」으로 알린다(`report.py`).
+            result.graph = _run_graph_stage(
+                config, store=store, graph=graph, indexing=indexing, on_event=on_event
+            )
     finally:
         store.close()
         graph.close()
@@ -570,7 +605,7 @@ def _run_graph_stage(
     보였다.
     """
     _emit(on_event, GraphStarted(at=time.monotonic()))
-    inventory = _collect_wiki_documents(config.out_dir)
+    inventory = collect_wiki_documents(config.out_dir)
     wikis = inventory.documents
     facts, missing = _materialize_facts(wikis, config=config, graph=graph)
     if inventory.complete:
@@ -613,7 +648,7 @@ def _run_graph_stage(
 
 
 @dataclass
-class _WikiInventory:
+class WikiInventory:
     """`--out` 아래 위키 목록과, 그 목록을 믿어도 되는지에 대한 판정."""
 
     documents: dict[str, Path] = field(default_factory=dict)
@@ -623,13 +658,17 @@ class _WikiInventory:
     duplicates: list[Path] = field(default_factory=list)
 
 
-def _collect_wiki_documents(out_dir: Path) -> _WikiInventory:
+def collect_wiki_documents(out_dir: Path) -> WikiInventory:
     """`--out` 아래 위키를 모아 `doc_id` → 위키 경로로 만든다.
+
+    **공개 이름이다** (v0.9). GUI의 위키 상세가 `doc_id`로 위키 파일을 찾을 때 같은 규칙을
+    써야 하기 때문이다 — 중복 원문 처리와 「읽지 못한 위키는 목록을 불완전으로 표시한다」가
+    어댑터마다 복제되면, 한쪽만 고쳐지는 순간 두 경로가 같은 `--out`을 다르게 본다.
 
     front-matter의 `source_path`가 곧 `doc_id`다 (§4.1). 그 키가 없는 `.md`(사용자가 손으로
     둔 메모 등)는 조용히 건너뛰고, **읽지 못한 위키**는 목록을 불완전으로 표시한다.
     """
-    inventory = _WikiInventory()
+    inventory = WikiInventory()
     if not out_dir.is_dir():
         return inventory
     for path in sorted(out_dir.rglob("*.md")):
