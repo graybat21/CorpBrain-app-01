@@ -489,7 +489,12 @@ function scanFormCard(onMeasure, running) {
 
 function gateBox(gate) {
   const box = el('div', 'gate-box');
-  box.appendChild(el('strong', null, '자원 게이트에 막혔습니다'));
+  // 게이트 «판정»과 «강행 여부»는 다르다. `GateVerdict` 는 임계값만 보고 내려진 값이라
+  // `force_gates` 를 켜도 그대로 걸려 있으므로, 문구까지 「막혔습니다」로 두면 곧 시작될
+  // 스캔을 두고 막혔다고 말하게 된다.
+  box.appendChild(
+    el('strong', null, scanForm.force_gates ? '자원 게이트를 강행합니다' : '자원 게이트에 막혔습니다')
+  );
   const list = el('ul');
   if (gate.gpu_enforced && !gate.gpu_ok) {
     list.appendChild(el('li', null, 'GPU를 감지하지 못했습니다 — CPU로 강행하려면 아래 토글을 켜세요.'));
@@ -502,7 +507,11 @@ function gateBox(gate) {
   box.appendChild(list);
   // 게이트를 둔 이유가 「비용이 큰 작업을 무심코 시작하지 않게」이므로, 이유와 강행 토글을
   // 같은 자리에서 보여 준다 — CLI 가 exit 3 으로 막는 자리와 같다 (§4.3.4).
-  box.appendChild(field({ name: 'force_gates', label: '이해했고 강행합니다 (force_gates)', type: 'check' }));
+  const toggle = field({ name: 'force_gates', label: '이해했고 강행합니다 (force_gates)', type: 'check' });
+  // 토글을 켜면 위 문구가 곧바로 따라가야 한다 — 다시 계량할 때까지 「막혔습니다」가 남아
+  // 있으면 사용자가 자기 조작이 먹혔는지 알 수 없다.
+  toggle.querySelector('input').addEventListener('change', () => render());
+  box.appendChild(toggle);
   return box;
 }
 
