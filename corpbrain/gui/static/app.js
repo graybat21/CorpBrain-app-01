@@ -908,20 +908,24 @@ function drawGraph(canvas, data, selected) {
   const colors = Object.fromEntries(
     Object.entries(NODE_COLOR_VARS).map(([type, name]) => [type, cssVar(name)])
   );
+  const ink = cssVar('--ink');
   const placed = layoutNodes(data.nodes, width, height);
   ctx.lineWidth = 1;
-  ctx.strokeStyle = 'rgba(17, 17, 17, 0.10)';
   for (const edge of data.edges) {
     const from = placed.get(edge.src);
     const to = placed.get(edge.dst);
     if (!from || !to) continue;
+    // 색은 **토큰에서 온 값**이고 흐리기는 `globalAlpha` 로 준다 — `rgba(…)` 리터럴을 쓰면
+    // 토큰 값을 복제하게 되어, 팔레트가 바뀌어도 캔버스만 옛 색으로 남는다 (§4.10.5).
     const touches = selected && (edge.src === selected || edge.dst === selected);
-    ctx.strokeStyle = touches ? 'rgba(46, 106, 147, 0.55)' : 'rgba(17, 17, 17, 0.08)';
+    ctx.strokeStyle = touches ? colors.Document : ink;
+    ctx.globalAlpha = touches ? 0.55 : 0.08;
     ctx.beginPath();
     ctx.moveTo(from.x, from.y);
     ctx.lineTo(to.x, to.y);
     ctx.stroke();
   }
+  ctx.globalAlpha = 1;
   for (const spot of placed.values()) {
     const radius = spot.node.id === selected ? 7 : Math.min(6, 3 + spot.node.degree * 0.35);
     ctx.beginPath();
@@ -929,7 +933,7 @@ function drawGraph(canvas, data, selected) {
     ctx.fillStyle = colors[spot.node.type] || colors.Document;
     ctx.fill();
     if (spot.node.id === selected) {
-      ctx.strokeStyle = '#111111';
+      ctx.strokeStyle = ink;
       ctx.lineWidth = 2;
       ctx.stroke();
       ctx.lineWidth = 1;

@@ -121,6 +121,26 @@ def test_worker_wires_the_cancel_predicate_into_the_core(
     assert controller.cancel_requested is False
 
 
+def test_a_failed_thread_start_does_not_wedge_the_server(
+    corpus: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """스레드를 띄우지 못하면 구간을 되돌린다 — 아니면 `running`이 영원히 참이 된다.
+
+    되돌리지 않으면 이후 **모든** 스캔 요청이 409로 막히고, 서버를 다시 띄우는 것 말고는
+    빠져나올 길이 없다.
+    """
+    controller, config = _controller_and_config(corpus, tmp_path)
+
+    def _cannot_start(self: object) -> None:
+        raise RuntimeError("스레드를 만들 수 없다")
+
+    monkeypatch.setattr("threading.Thread.start", _cannot_start)
+    with pytest.raises(RuntimeError):
+        controller.start(config)
+
+    assert controller.running is False
+
+
 def test_worker_moves_a_core_failure_into_state_instead_of_dying(
     corpus: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

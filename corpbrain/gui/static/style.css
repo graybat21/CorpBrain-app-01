@@ -447,7 +447,8 @@ body {
   border-radius: var(--radius-lg);
   cursor: grab;
 }
-.graph-canvas:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: 2px; }
+/* 포커스 링은 전역 `:focus-visible` 하나가 소유한다 — 요소마다 다른 색을 쓰면
+   「어디에 포커스가 있는가」를 눈이 매번 새로 배워야 한다. */
 .legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 10px; font-size: 11px; }
 .legend-item { display: flex; align-items: center; gap: 6px; color: var(--text-secondary); }
 .legend-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }

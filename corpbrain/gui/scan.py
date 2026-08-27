@@ -10,7 +10,9 @@
 
 from __future__ import annotations
 
+import sys
 import threading
+import traceback
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -147,7 +149,14 @@ class ScanController:
                 daemon=True,
             )
             self._thread = thread
-            thread.start()
+            try:
+                thread.start()
+            except BaseException:
+                # `begin()`은 이미 돌았다. 여기서 되돌리지 않으면 **`running`이 영원히 참**이
+                # 되어 이후 모든 스캔 요청이 409로 막힌다 — 서버를 다시 띄우는 것 말고는
+                # 빠져나올 길이 없는 상태다.
+                self.events.end()
+                raise
 
     def cancel(self) -> None:
         """취소를 요청한다 — 진행 중인 문서를 마친 뒤 멈춘다 (§4.7).
@@ -175,6 +184,11 @@ class ScanController:
             # 워커 스레드에서 예외가 그대로 죽으면 아무도 그것을 보지 못한다. 상태로 옮겨
             # 담아 다음 조회 요청이 §4.3.2의 매핑 규칙을 그대로 적용하게 한다.
             self._failure = exc
+            # **터미널에도 남긴다.** 상태 응답은 §4.3.2대로 도메인이면 안내 문장, 버그면
+            # 500이 되는데, 500 본문에는 트레이스백이 실리지 않는다(사용자에게 보일 것이
+            # 아니다). 포그라운드로 떠 있는 서버의 터미널이 그 트레이스백이 갈 곳이다 —
+            # 「로그의 500 = 버그 신호」가 실제로 추적 가능하려면 로그에 근거가 있어야 한다.
+            traceback.print_exception(exc, file=sys.stderr)
         finally:
             self.events.end()
             self._cancel_requested = False
