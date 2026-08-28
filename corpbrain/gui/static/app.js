@@ -1091,6 +1091,22 @@ function cssVar(name) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
 
+//: 노드 반지름의 하한과 상한. 상한은 링의 이웃 간격에 따라 더 줄어들 수 있다 — 아래 `drawGraph`.
+const NODE_RADIUS_MIN = 4;
+const NODE_RADIUS_MAX = 18;
+
+//: 엣지 불투명도. 선택이 없을 때는 전부 `IDLE`, 선택이 있으면 닿는 엣지만 `ACTIVE`이고
+//: 나머지는 `MUTED`로 물러난다 — 그래야 선택이 실제로 무언가를 가른다.
+const EDGE_ALPHA_IDLE = 0.18;
+const EDGE_ALPHA_ACTIVE = 0.7;
+const EDGE_ALPHA_MUTED = 0.05;
+
+//: 라벨을 다는 상위 노드 수(차수 내림차순). 전부 달면 겹쳐서 하나도 못 읽는다.
+//: 선택된 노드는 순위와 무관하게 항상 단다.
+const NODE_LABEL_TOP = 12;
+//: 라벨 최대 글자 수. 넘으면 말줄임.
+const NODE_LABEL_CHARS = 14;
+
 /**
  * 결정적 레이아웃 — 종류별 동심원.
  *
@@ -1110,8 +1126,13 @@ function layoutNodes(nodes, width, height) {
     { type: 'Tag', radius: unit * 1.0 },
   ];
   const placed = new Map();
+  // 가장 촘촘한 링의 이웃 사이 호 간격. 노드 반지름의 상한을 여기서 끌어와야 규모가 커져도
+  // 원이 서로 겹치지 않는다 — 태그 링은 문서 링보다 훨씬 붐빈다.
+  let gap = Infinity;
   for (const ring of rings) {
     const list = byType[ring.type];
+    if (!list.length) continue;
+    if (list.length > 1) gap = Math.min(gap, (2 * Math.PI * ring.radius) / list.length);
     list.forEach((node, index) => {
       const angle = (index / Math.max(1, list.length)) * Math.PI * 2 - Math.PI / 2;
       placed.set(node.id, {
@@ -1121,7 +1142,7 @@ function layoutNodes(nodes, width, height) {
       });
     });
   }
-  return placed;
+  return { placed, gap: Number.isFinite(gap) ? gap : unit };
 }
 
 function drawGraph(canvas, data, selected) {
@@ -1138,8 +1159,27 @@ function drawGraph(canvas, data, selected) {
     Object.entries(NODE_COLOR_VARS).map(([type, name]) => [type, cssVar(name)])
   );
   const ink = cssVar('--ink');
-  const placed = layoutNodes(data.nodes, width, height);
-  ctx.lineWidth = 1;
+  const { placed, gap } = layoutNodes(data.nodes, width, height);
+  const cx = width / 2;
+  const cy = height / 2;
+
+  // 반지름은 **넓이가 차수에 비례**하도록 제곱근으로 매긴다. 지름을 차수에 비례시키면
+  // 허브 하나가 화면을 삼키고, 선형 가산(옛 `3 + degree * 0.35`)은 상한 6px에 연결 9개에서
+  // 닿아 그 위로는 전부 같은 크기가 됐다 — 태그 링의 대다수가 그 구간에 있어 크기 차이가
+  // 사실상 보이지 않았다.
+  const maxDegree = data.nodes.reduce((max, node) => Math.max(max, node.degree), 0);
+  // 상한은 가장 붐비는 링의 이웃 간격에서 끌어오되 **겹침을 조금 허용한다**.
+  //
+  // 간격의 절반 아래로 묶으면(겹침 0) 규모가 큰 그래프에서 상한이 7px 안팎으로 눌려,
+  // 크기로 차수를 읽는다는 목적 자체가 무너진다 — 태그 77개가 한 링에 놓이면 간격이
+  // 16.5px 뿐이다. 실제로 크기 차이가 필요한 것은 바로 그 규모다.
+  // 겹치는 원은 아래에서 바탕색 테두리를 둘러 서로 분리해 읽히게 한다.
+  const cap = Math.max(8, Math.min(NODE_RADIUS_MAX, gap * 0.7));
+  const radiusOf = (node) =>
+    maxDegree > 0
+      ? NODE_RADIUS_MIN + Math.sqrt(node.degree / maxDegree) * (cap - NODE_RADIUS_MIN)
+      : NODE_RADIUS_MIN;
+
   for (const edge of data.edges) {
     const from = placed.get(edge.src);
     const to = placed.get(edge.dst);
@@ -1148,27 +1188,81 @@ function drawGraph(canvas, data, selected) {
     // 토큰 값을 복제하게 되어, 팔레트가 바뀌어도 캔버스만 옛 색으로 남는다 (§4.10.5).
     const touches = selected && (edge.src === selected || edge.dst === selected);
     ctx.strokeStyle = touches ? colors.Document : ink;
-    ctx.globalAlpha = touches ? 0.55 : 0.08;
+    ctx.globalAlpha = selected
+      ? touches
+        ? EDGE_ALPHA_ACTIVE
+        : EDGE_ALPHA_MUTED
+      : EDGE_ALPHA_IDLE;
+    ctx.lineWidth = touches ? 1.5 : 1;
     ctx.beginPath();
     ctx.moveTo(from.x, from.y);
     ctx.lineTo(to.x, to.y);
     ctx.stroke();
   }
   ctx.globalAlpha = 1;
-  for (const spot of placed.values()) {
-    const radius = spot.node.id === selected ? 7 : Math.min(6, 3 + spot.node.degree * 0.35);
+  ctx.lineWidth = 1;
+
+  // 차수가 낮은 것부터 그린다 — 큰 노드가 위에 얹혀야 허브가 가려지지 않는다.
+  const drawOrder = [...placed.values()].sort((a, b) => a.node.degree - b.node.degree);
+  const surface = cssVar('--surface');
+  for (const spot of drawOrder) {
+    const isSelected = spot.node.id === selected;
+    const radius = radiusOf(spot.node) + (isSelected ? 3 : 0);
     ctx.beginPath();
     ctx.arc(spot.x, spot.y, radius, 0, Math.PI * 2);
     ctx.fillStyle = colors[spot.node.type] || colors.Document;
     ctx.fill();
-    if (spot.node.id === selected) {
-      ctx.strokeStyle = ink;
-      ctx.lineWidth = 2;
-      ctx.stroke();
-      ctx.lineWidth = 1;
-    }
+    // 바탕색 테두리 — 겹친 원끼리 서로 분리돼 읽힌다. 새 색이 아니라 카드 바탕 토큰이다.
+    ctx.strokeStyle = isSelected ? ink : surface;
+    ctx.lineWidth = isSelected ? 2 : 1.5;
+    ctx.stroke();
+    ctx.lineWidth = 1;
   }
+
+  drawNodeLabels(ctx, { placed, selected, radiusOf, cx, cy, width });
   return placed;
+}
+
+/**
+ * 차수 상위 노드에만 라벨을 그린다.
+ *
+ * 전부 달면 겹쳐서 하나도 못 읽고, 하나도 안 달면 캔버스가 「글자 없는 색점 밭」이 되어
+ * 모든 식별이 옆 목록에서만 일어난다. 정렬 키는 노드 목록과 **같다**(차수 내림차순 →
+ * id 사전순) — 두 화면이 같은 노드를 다르게 꼽으면 안 된다.
+ *
+ * 글꼴·색은 토큰에서 가져온다. 캔버스라고 해서 새 회색을 만들지 않는다.
+ */
+function drawNodeLabels(ctx, { placed, selected, radiusOf, cx, cy, width }) {
+  const spots = [...placed.values()];
+  const ranked = [...spots].sort(
+    (a, b) => b.node.degree - a.node.degree || a.node.id.localeCompare(b.node.id)
+  );
+  const shown = new Set(ranked.slice(0, NODE_LABEL_TOP).map((spot) => spot.node.id));
+  if (selected) shown.add(selected);
+
+  ctx.font = `500 11px ${cssVar('--font-sans')}`;
+  ctx.fillStyle = cssVar('--text-secondary');
+  ctx.textBaseline = 'middle';
+  for (const spot of spots) {
+    if (!shown.has(spot.node.id)) continue;
+    const raw = spot.node.label || spot.node.id;
+    const text =
+      raw.length > NODE_LABEL_CHARS ? `${raw.slice(0, NODE_LABEL_CHARS - 1)}…` : raw;
+    // 중심에서 바깥쪽으로 밀어 낸다 — 동심원 배치라 라벨이 링을 가로지르지 않는다.
+    const dx = spot.x - cx;
+    const dy = spot.y - cy;
+    const len = Math.hypot(dx, dy) || 1;
+    const away = radiusOf(spot.node) + 6;
+    const toLeft = dx < 0;
+    ctx.textAlign = toLeft ? 'right' : 'left';
+    const textWidth = ctx.measureText(text).width;
+    let x = spot.x + (dx / len) * away;
+    // 캔버스 밖으로 나가지 않게 붙든다.
+    x = toLeft
+      ? Math.max(x, 4 + textWidth)
+      : Math.min(x, width - 4 - textWidth);
+    ctx.fillText(text, x, spot.y + (dy / len) * away);
+  }
 }
 
 function graphLegend() {
@@ -1181,6 +1275,16 @@ function graphLegend() {
     item.appendChild(el('span', null, type));
     box.appendChild(item);
   }
+  // 크기가 의미를 갖게 됐으므로 그 의미를 적는다 — 설명 없는 크기 차이는 장식으로 읽힌다.
+  const size = el('div', 'legend-item');
+  const small = el('span', 'legend-dot');
+  small.style.cssText = 'width:5px;height:5px;background:var(--text-muted)';
+  const large = el('span', 'legend-dot');
+  large.style.cssText = 'width:13px;height:13px;background:var(--text-muted)';
+  size.appendChild(small);
+  size.appendChild(large);
+  size.appendChild(el('span', null, '크기 = 연결 수'));
+  box.appendChild(size);
   return box;
 }
 
