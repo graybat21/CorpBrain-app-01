@@ -1168,8 +1168,13 @@ function drawGraph(canvas, data, selected) {
   // 닿아 그 위로는 전부 같은 크기가 됐다 — 태그 링의 대다수가 그 구간에 있어 크기 차이가
   // 사실상 보이지 않았다.
   const maxDegree = data.nodes.reduce((max, node) => Math.max(max, node.degree), 0);
-  // 상한은 가장 붐비는 링의 이웃 간격을 넘지 않는다 — 규모가 커지면 원이 저절로 작아진다.
-  const cap = Math.max(NODE_RADIUS_MIN + 1, Math.min(NODE_RADIUS_MAX, gap * 0.45));
+  // 상한은 가장 붐비는 링의 이웃 간격에서 끌어오되 **겹침을 조금 허용한다**.
+  //
+  // 간격의 절반 아래로 묶으면(겹침 0) 규모가 큰 그래프에서 상한이 7px 안팎으로 눌려,
+  // 크기로 차수를 읽는다는 목적 자체가 무너진다 — 태그 77개가 한 링에 놓이면 간격이
+  // 16.5px 뿐이다. 실제로 크기 차이가 필요한 것은 바로 그 규모다.
+  // 겹치는 원은 아래에서 바탕색 테두리를 둘러 서로 분리해 읽히게 한다.
+  const cap = Math.max(8, Math.min(NODE_RADIUS_MAX, gap * 0.7));
   const radiusOf = (node) =>
     maxDegree > 0
       ? NODE_RADIUS_MIN + Math.sqrt(node.degree / maxDegree) * (cap - NODE_RADIUS_MIN)
@@ -1197,19 +1202,21 @@ function drawGraph(canvas, data, selected) {
   ctx.globalAlpha = 1;
   ctx.lineWidth = 1;
 
-  for (const spot of placed.values()) {
+  // 차수가 낮은 것부터 그린다 — 큰 노드가 위에 얹혀야 허브가 가려지지 않는다.
+  const drawOrder = [...placed.values()].sort((a, b) => a.node.degree - b.node.degree);
+  const surface = cssVar('--surface');
+  for (const spot of drawOrder) {
     const isSelected = spot.node.id === selected;
     const radius = radiusOf(spot.node) + (isSelected ? 3 : 0);
     ctx.beginPath();
     ctx.arc(spot.x, spot.y, radius, 0, Math.PI * 2);
     ctx.fillStyle = colors[spot.node.type] || colors.Document;
     ctx.fill();
-    if (isSelected) {
-      ctx.strokeStyle = ink;
-      ctx.lineWidth = 2;
-      ctx.stroke();
-      ctx.lineWidth = 1;
-    }
+    // 바탕색 테두리 — 겹친 원끼리 서로 분리돼 읽힌다. 새 색이 아니라 카드 바탕 토큰이다.
+    ctx.strokeStyle = isSelected ? ink : surface;
+    ctx.lineWidth = isSelected ? 2 : 1.5;
+    ctx.stroke();
+    ctx.lineWidth = 1;
   }
 
   drawNodeLabels(ctx, { placed, selected, radiusOf, cx, cy, width });
