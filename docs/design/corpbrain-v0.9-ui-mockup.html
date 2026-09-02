@@ -1,0 +1,668 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- CorpBrain v0.9 GUI 디자인 목업. 데이터는 전부 하드코딩이며 코어를 호출하지 않는다.
+     설계 근거: docs/design/corpbrain-v0.9-ui-spec.md · 계약: static/docs/specs/features/corpbrain-v0.9-web-gui.md -->
+<title>CorpBrain 워크벤치</title>
+<style>
+:root{
+  --bg:#F4F6F8; --surface:#FFFFFF; --surface-2:#EAEEF2;
+  --ink:#10151B; --ink-2:#4A5561; --ink-3:#78848F;
+  --line:#D8DFE6; --line-2:#C2CCD6;
+  --accent:#2E5EAA; --accent-ink:#FFFFFF; --accent-soft:#E4EBF6;
+  --ok:#166534; --ok-soft:#DEF0E4;
+  --warn:#9A5B12; --warn-soft:#F7EBDA;
+  --stop:#A32620; --stop-soft:#F7E1DF;
+  --font-ui:-apple-system,BlinkMacSystemFont,"Segoe UI","Malgun Gothic","Apple SD Gothic Neo",system-ui,sans-serif;
+  --font-mono:ui-monospace,SFMono-Regular,Consolas,"D2Coding",monospace;
+  --r:4px;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#0E1319; --surface:#151B23; --surface-2:#1D242D;
+    --ink:#E4E9EE; --ink-2:#A6B1BC; --ink-3:#76828F;
+    --line:#28313B; --line-2:#39434F;
+    --accent:#7FA9E8; --accent-ink:#0E1319; --accent-soft:#1B2635;
+    --ok:#5FB584; --ok-soft:#16281F;
+    --warn:#D2984B; --warn-soft:#2B2317;
+    --stop:#DE8B84; --stop-soft:#2E1B1A;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0E1319; --surface:#151B23; --surface-2:#1D242D;
+  --ink:#E4E9EE; --ink-2:#A6B1BC; --ink-3:#76828F;
+  --line:#28313B; --line-2:#39434F;
+  --accent:#7FA9E8; --accent-ink:#0E1319; --accent-soft:#1B2635;
+  --ok:#5FB584; --ok-soft:#16281F;
+  --warn:#D2984B; --warn-soft:#2B2317;
+  --stop:#DE8B84; --stop-soft:#2E1B1A;
+  color-scheme:dark;
+}
+
+*{box-sizing:border-box}
+body{
+  margin:0;background:var(--bg);color:var(--ink);
+  font-family:var(--font-ui);font-size:13.5px;line-height:1.55;
+  -webkit-font-smoothing:antialiased;
+}
+button,input,select,textarea{font:inherit;color:inherit}
+.mono{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:2px}
+
+/* ---------- shell ---------- */
+.app{display:grid;grid-template-columns:236px minmax(0,1fr);min-height:100vh}
+@media (max-width:900px){.app{grid-template-columns:1fr}}
+
+/* ---------- sidebar ---------- */
+.side{
+  background:var(--surface);border-right:1px solid var(--line);
+  display:flex;flex-direction:column;padding:14px 12px;gap:14px;
+}
+@media (max-width:900px){.side{border-right:none;border-bottom:1px solid var(--line)}}
+.brand{display:flex;align-items:center;gap:8px;padding:2px 6px 0;font-weight:600;letter-spacing:-.01em}
+.brand .dot{width:9px;height:9px;border-radius:2px;background:var(--accent);flex:none}
+.ws{
+  width:100%;background:var(--surface-2);border:1px solid var(--line);border-radius:var(--r);
+  padding:7px 9px;font-size:13px;font-weight:500;cursor:pointer;text-align:left;
+  display:flex;align-items:center;justify-content:space-between;gap:8px;
+  transition:border-color .12s,background .12s;
+}
+.ws:hover{border-color:var(--line-2)}
+.ws .cap{font-size:10.5px;font-weight:500;color:var(--ink-3);display:block;letter-spacing:.06em}
+.ws svg{flex:none;color:var(--ink-3)}
+nav{display:flex;flex-direction:column;gap:1px}
+.nav-item{
+  display:flex;align-items:center;gap:9px;width:100%;
+  background:none;border:0;border-radius:var(--r);padding:7px 9px;
+  font-size:13.5px;color:var(--ink-2);cursor:pointer;text-align:left;
+  transition:background .12s,color .12s;
+}
+.nav-item:hover{background:var(--surface-2);color:var(--ink)}
+.nav-item[aria-current="page"]{background:var(--accent-soft);color:var(--accent);font-weight:600}
+.nav-item svg{flex:none}
+.side-foot{margin-top:auto;border-top:1px solid var(--line);padding-top:10px;display:flex;flex-direction:column;gap:1px}
+
+/* ---------- main ---------- */
+main{min-width:0;display:flex;flex-direction:column}
+.bar{
+  height:52px;flex:none;border-bottom:1px solid var(--line);background:var(--surface);
+  display:flex;align-items:center;justify-content:space-between;gap:12px;padding:0 18px;
+}
+.bar h1{margin:0;font-size:19px;font-weight:600;letter-spacing:-.01em}
+.bar .tools{display:flex;align-items:center;gap:8px}
+.view{padding:18px;display:none;min-width:0}
+.view.on{display:block}
+
+/* ---------- controls ---------- */
+.btn{
+  border:1px solid var(--line-2);background:var(--surface);color:var(--ink);
+  border-radius:var(--r);padding:6px 12px;font-size:13px;cursor:pointer;
+  transition:background .12s,border-color .12s;white-space:nowrap;
+}
+.btn:hover{background:var(--surface-2)}
+.btn:active{transform:translateY(1px)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:500}
+.btn.primary:hover{filter:brightness(1.08)}
+.btn.danger{color:var(--stop);border-color:var(--stop)}
+.btn.danger:hover{background:var(--stop-soft)}
+.btn[disabled]{opacity:.5;cursor:not-allowed}
+label.f{display:block;font-size:12px;font-weight:500;color:var(--ink-2);margin-bottom:4px}
+.in{
+  width:100%;background:var(--surface);border:1px solid var(--line-2);border-radius:var(--r);
+  padding:7px 10px;font-size:13px;transition:border-color .12s;
+}
+.in:hover{border-color:var(--ink-3)}
+.in::placeholder{color:var(--ink-3)}
+.seg{display:inline-flex;border:1px solid var(--line-2);border-radius:var(--r);overflow:hidden}
+.seg button{
+  border:0;background:var(--surface);padding:5px 12px;font-size:12.5px;color:var(--ink-2);cursor:pointer;
+  transition:background .12s,color .12s;
+}
+.seg button+button{border-left:1px solid var(--line-2)}
+.seg button[aria-pressed="true"]{background:var(--accent-soft);color:var(--accent);font-weight:600}
+
+.chip{display:inline-block;font-family:var(--font-mono);font-size:11px;border-radius:2px;padding:1px 6px;white-space:nowrap}
+.chip.ok{background:var(--ok-soft);color:var(--ok)}
+.chip.warn{background:var(--warn-soft);color:var(--warn)}
+.chip.stop{background:var(--stop-soft);color:var(--stop)}
+.chip.mute{background:var(--surface-2);color:var(--ink-3)}
+
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:14px 16px}
+.sec-h{font-size:14px;font-weight:600;margin:0 0 10px}
+.hint{font-size:12px;color:var(--ink-3);margin:0}
+
+/* ---------- 탐색 ---------- */
+.explore{display:flex;flex-direction:column;gap:12px;height:calc(100vh - 52px - 36px)}
+.searchrow{display:flex;gap:8px}
+.searchrow .in{flex:1}
+.panes{display:grid;grid-template-columns:320px minmax(0,1fr);gap:12px;flex:1;min-height:0}
+@media (max-width:1100px){.panes{grid-template-columns:1fr;height:auto}.explore{height:auto}}
+.results{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);overflow-y:auto;min-height:0}
+.results .meta{padding:9px 12px;border-bottom:1px solid var(--line);font-size:12px;color:var(--ink-3)}
+.hit{
+  display:block;width:100%;text-align:left;background:none;border:0;
+  border-bottom:1px solid var(--line);padding:10px 12px;cursor:pointer;
+  transition:background .12s;
+}
+.hit:hover{background:var(--surface-2)}
+.hit[aria-selected="true"]{background:var(--accent-soft)}
+.hit .top{display:flex;align-items:baseline;justify-content:space-between;gap:8px}
+.hit .t{font-size:13.5px;font-weight:500}
+.hit .s{font-family:var(--font-mono);font-size:11.5px;color:var(--ink-3);font-variant-numeric:tabular-nums}
+.hit .p{font-family:var(--font-mono);font-size:11px;color:var(--ink-3);margin-top:2px;word-break:break-all}
+.hit .why{font-size:11.5px;color:var(--ink-2);margin-top:5px;padding-left:9px;border-left:2px solid var(--accent)}
+.detail{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);display:flex;flex-direction:column;min-height:0}
+.detail-h{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line)}
+.detail-h .t{font-weight:600}
+.doc{padding:16px 18px;overflow-y:auto;min-height:0}
+.doc .body{max-width:68ch}
+.doc h2{font-size:13px;font-weight:600;color:var(--ink-2);margin:18px 0 6px;letter-spacing:.01em}
+.doc h2:first-child{margin-top:0}
+.doc p{margin:0 0 8px;color:var(--ink-2)}
+.doc ul{margin:0 0 8px;padding-left:18px;color:var(--ink-2)}
+.doc li{margin-bottom:3px}
+.fm{font-family:var(--font-mono);font-size:11.5px;color:var(--ink-3);background:var(--surface-2);border-radius:var(--r);padding:8px 10px;margin-bottom:14px;word-break:break-all}
+.rel{margin-top:6px;border-top:1px solid var(--line);padding-top:10px}
+.rel a{color:var(--accent);text-decoration:none}
+.rel a:hover{text-decoration:underline}
+.rel li{font-size:12.5px}
+canvas{display:block;width:100%;height:100%}
+.graphwrap{flex:1;min-height:320px;position:relative}
+.legend{position:absolute;left:12px;bottom:12px;display:flex;gap:10px;font-size:11px;color:var(--ink-3);background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:5px 9px}
+.legend i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:4px;vertical-align:middle}
+
+/* ---------- 스캔 ---------- */
+.scan-grid{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:12px;align-items:start}
+@media (max-width:1000px){.scan-grid{grid-template-columns:1fr}}
+.frow{display:grid;grid-template-columns:1fr 150px 1fr;gap:10px;margin-bottom:12px}
+@media (max-width:760px){.frow{grid-template-columns:1fr}}
+details.adv{border-top:1px solid var(--line);padding-top:10px;margin-top:4px}
+details.adv summary{cursor:pointer;font-size:12.5px;color:var(--ink-2);list-style:none;display:flex;align-items:center;gap:6px}
+details.adv summary::-webkit-details-marker{display:none}
+details.adv summary .caret{transition:transform .12s}
+details.adv[open] summary .caret{transform:rotate(90deg)}
+.advgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-top:12px}
+.check{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--ink-2)}
+.prog{height:6px;background:var(--surface-2);border-radius:2px;overflow:hidden;margin:10px 0 6px}
+.prog i{display:block;height:100%;background:var(--accent);width:0;transition:width .3s linear}
+.prog.indet i{width:35%;animation:slide 1.4s ease-in-out infinite}
+@keyframes slide{0%{margin-left:-35%}100%{margin-left:100%}}
+.log{font-family:var(--font-mono);font-size:11.5px;max-height:210px;overflow-y:auto;border-top:1px solid var(--line);margin-top:10px;padding-top:8px}
+.log div{padding:2px 0;color:var(--ink-2);display:flex;gap:8px}
+.log b{color:var(--ink-3);font-weight:400;flex:none}
+.skiplist{border-top:1px solid var(--line);margin-top:12px;padding-top:10px}
+.skiprow{display:flex;justify-content:space-between;gap:10px;font-size:12.5px;padding:3px 0;color:var(--ink-2)}
+
+/* ---------- 대시보드 ---------- */
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:14px}
+.tile{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:14px 16px}
+.tile .n{font-family:var(--font-mono);font-size:26px;font-weight:600;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.tile .l{font-size:12px;color:var(--ink-3);margin-top:2px}
+.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px}
+.kv{display:flex;justify-content:space-between;gap:10px;padding:5px 0;border-bottom:1px solid var(--line);font-size:12.5px}
+.kv:last-child{border-bottom:0}
+.kv span:last-child{font-family:var(--font-mono);color:var(--ink-2);font-variant-numeric:tabular-nums}
+
+/* ---------- 설정 ---------- */
+.doctor{display:flex;flex-direction:column}
+.drow{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid var(--line)}
+.drow:last-child{border-bottom:0}
+.drow .l{display:flex;align-items:center;gap:9px}
+.drow .fix{font-size:11.5px;color:var(--ink-3);font-family:var(--font-mono)}
+.notice{background:var(--warn-soft);border:1px solid var(--warn);border-radius:var(--r);padding:11px 13px;font-size:12.5px;color:var(--ink);margin-bottom:12px}
+.notice b{display:block;margin-bottom:5px;color:var(--warn)}
+.notice ul{margin:0;padding-left:17px}
+.wsrow{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--line)}
+.wsrow:last-child{border-bottom:0}
+.wsrow .p{font-family:var(--font-mono);font-size:11px;color:var(--ink-3);word-break:break-all}
+
+.empty{text-align:center;padding:38px 20px;color:var(--ink-3)}
+.empty p{margin:0 0 10px;font-size:13px}
+
+@media (prefers-reduced-motion:reduce){
+  *{transition:none!important;animation:none!important}
+}
+</style>
+</head>
+<body>
+
+<div class="app">
+
+  <aside class="side">
+    <div class="brand"><span class="dot"></span>CorpBrain</div>
+
+    <button class="ws" id="wsBtn" aria-haspopup="listbox">
+      <span><span class="cap">워크스페이스</span>인사자료</span>
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+    </button>
+
+    <nav aria-label="주요 화면">
+      <button class="nav-item" data-view="explore" aria-current="page">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+        탐색
+      </button>
+      <button class="nav-item" data-view="scan">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 7h7l2 2h9v10H3z"/><path d="M12 12v4M10 14h4"/></svg>
+        스캔
+      </button>
+      <button class="nav-item" data-view="dash">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>
+        대시보드
+      </button>
+    </nav>
+
+    <div class="side-foot">
+      <button class="nav-item" data-view="settings">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg>
+        설정
+      </button>
+    </div>
+  </aside>
+
+  <main>
+    <div class="bar">
+      <h1 id="viewTitle">탐색</h1>
+      <div class="tools">
+        <button class="btn" id="themeBtn" aria-label="테마 전환">테마</button>
+      </div>
+    </div>
+
+    <!-- ================= 탐색 ================= -->
+    <section class="view on" id="v-explore">
+      <div class="explore">
+        <div class="searchrow">
+          <input class="in" id="q" placeholder="찾고 싶은 내용을 문장으로 적어도 됩니다" value="신규 입사자 첫 주 일정">
+          <button class="btn primary">검색</button>
+        </div>
+
+        <div class="panes">
+          <div class="results" role="listbox" aria-label="검색 결과">
+            <div class="meta">결과 5건 · 그래프 확산 켜짐</div>
+
+            <button class="hit" aria-selected="true" data-doc="0">
+              <div class="top"><span class="t">신규 입사자 온보딩 가이드</span><span class="s">0.828</span></div>
+              <div class="p">C:\docs\인사\온보딩.md</div>
+            </button>
+            <button class="hit" data-doc="1">
+              <div class="top"><span class="t">2026년 복지제도 안내</span><span class="s">0.765</span></div>
+              <div class="p">C:\docs\인사\복지제도.md</div>
+              <div class="why">코사인 0.612 · 시드 «온보딩» · 공유 태그 <span class="mono">인사</span> · 서로 참조함</div>
+            </button>
+            <button class="hit" data-doc="2">
+              <div class="top"><span class="t">2026년 성과평가 제도 개편</span><span class="s">0.802</span></div>
+              <div class="p">C:\docs\인사\평가제도.md</div>
+            </button>
+            <button class="hit" data-doc="3">
+              <div class="top"><span class="t">2026년도 상반기 신입 공채 계획</span><span class="s">0.775</span></div>
+              <div class="p">C:\docs\인사\채용계획.docx</div>
+            </button>
+            <button class="hit" data-doc="4">
+              <div class="top"><span class="t">2026년 하반기 조직개편안</span><span class="s">0.757</span></div>
+              <div class="p">C:\docs\인사\조직개편.md</div>
+            </button>
+          </div>
+
+          <div class="detail">
+            <div class="detail-h">
+              <span class="t" id="docTitle">신규 입사자 온보딩 가이드</span>
+              <div class="seg" role="group" aria-label="보기 전환">
+                <button aria-pressed="true" data-pane="body">본문</button>
+                <button aria-pressed="false" data-pane="graph">그래프</button>
+              </div>
+            </div>
+
+            <div class="doc" id="paneBody">
+              <div class="body">
+                <div class="fm">source_path: C:\docs\인사\온보딩.md<br>model: qwen2.5:3b-instruct · source_bytes: 1571</div>
+                <h2>한 줄 요약</h2>
+                <p>신규 입사자의 입사 첫날, 1주차, 2주차 과정을 정리한 가이드.</p>
+                <h2>핵심 포인트</h2>
+                <ul>
+                  <li>첫날은 인사팀 오리엔테이션, 계정 발급, 장비 수령, 소속 조직 미팅으로 이루어진다</li>
+                  <li>1주차는 사내 문서 시스템 사용법, 보안 교육, 멘토 배정</li>
+                  <li>2주차는 담당 업무 인수인계와 인사팀 1:1 면담</li>
+                </ul>
+                <h2>태그·키워드</h2>
+                <p class="mono" style="font-size:12px">인사 · 온보딩 · 신규 입사자 · 정보보안 · 멘토</p>
+                <div class="rel">
+                  <h2 style="margin-top:0">관련 문서</h2>
+                  <ul>
+                    <li><a href="#" data-doc="1">2026년 복지제도 안내</a> <span style="color:var(--ink-3)">유사도 0.86 · 이 문서를 참조함 · 공유 엔티티 <span class="mono">인사팀</span></span></li>
+                    <li><a href="#" data-doc="2">2026년 성과평가 제도 개편</a> <span style="color:var(--ink-3)">유사도 0.84 · 공유 태그 <span class="mono">온보딩</span></span></li>
+                    <li><a href="#" data-doc="3">2026년도 상반기 신입 공채 계획</a> <span style="color:var(--ink-3)">유사도 0.82 · 서로 참조함</span></li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+
+            <div class="graphwrap" id="paneGraph" hidden>
+              <canvas id="gcv"></canvas>
+              <div class="legend">
+                <span><i style="background:var(--accent)"></i>문서</span>
+                <span><i style="background:var(--ok)"></i>태그</span>
+                <span><i style="background:var(--warn)"></i>엔티티</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= 스캔 ================= -->
+    <section class="view" id="v-scan">
+      <div class="scan-grid">
+        <div>
+          <div class="card" id="scanForm">
+            <h2 class="sec-h">스캔 설정</h2>
+            <div style="margin-bottom:12px">
+              <label class="f" for="folder">스캔 대상 폴더</label>
+              <div style="display:flex;gap:8px">
+                <input class="in mono" id="folder" value="C:\docs\인사" readonly>
+                <button class="btn">찾아보기</button>
+              </div>
+            </div>
+            <div class="frow">
+              <div>
+                <label class="f" for="engine">요약 엔진</label>
+                <select class="in" id="engine"><option>로컬 (Ollama)</option><option>클라우드 (동의 필요)</option></select>
+              </div>
+              <div></div>
+              <div>
+                <label class="f" for="model">요약 모델</label>
+                <select class="in" id="model"><option>qwen2.5:3b-instruct</option><option>qwen2.5:7b-instruct</option></select>
+              </div>
+            </div>
+
+            <details class="adv">
+              <summary>
+                <svg class="caret" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+                고급 설정
+              </summary>
+              <div class="advgrid">
+                <label class="check"><input type="checkbox"> 강제 재생성</label>
+                <label class="check"><input type="checkbox"> 게이트 무시</label>
+                <div><label class="f" for="a1">스캔 상한</label><input class="in mono" id="a1" value="50"></div>
+                <div><label class="f" for="a2">문서당 글자수</label><input class="in mono" id="a2" value="12000"></div>
+                <div><label class="f" for="a3">파일 크기 (MB)</label><input class="in mono" id="a3" value="20"></div>
+                <div><label class="f" for="a4">총 토큰 예산</label><input class="in mono" id="a4" value="200000"></div>
+                <div><label class="f" for="a5">유사도 임계치</label><input class="in mono" id="a5" value="0.5717"></div>
+                <div><label class="f" for="a6">관련 문서 개수</label><input class="in mono" id="a6" value="5"></div>
+              </div>
+              <p class="hint" style="margin-top:10px">강제 재생성과 게이트 무시는 저장되지 않고 매번 꺼진 채로 시작합니다.</p>
+            </details>
+
+            <div style="margin-top:14px;display:flex;gap:8px;align-items:center">
+              <button class="btn primary" id="runBtn">스캔 시작</button>
+              <span class="hint">예상 5개 파일 · 약 1분</span>
+            </div>
+          </div>
+
+          <div class="card" id="scanRun" hidden style="margin-top:12px">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+              <h2 class="sec-h" style="margin:0" id="runPhase">문서 요약 중</h2>
+              <button class="btn danger" id="stopBtn">중지</button>
+            </div>
+            <div class="prog" id="progWrap"><i id="progBar"></i></div>
+            <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--ink-3)">
+              <span class="mono" id="progCount">0 / 5</span>
+              <span class="mono" id="progEta">경과 00:00</span>
+            </div>
+            <div class="log" id="runLog"></div>
+            <p class="hint" style="margin-top:10px">중지하면 이미 만들어진 위키는 남고 인덱스 커밋은 유실됩니다. 다음 스캔이 복구합니다.</p>
+          </div>
+
+          <div class="card" id="scanDone" hidden style="margin-top:12px">
+            <h2 class="sec-h">마지막 실행 결과</h2>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:4px">
+              <span class="chip ok">처리 4건</span>
+              <span class="chip warn">스킵 1건</span>
+              <span class="chip mute">관련 문서 갱신 5건</span>
+            </div>
+            <div class="skiplist">
+              <div class="skiprow"><span>기타/스캔본.pdf</span><span class="chip mute">empty_document</span></div>
+            </div>
+            <p class="hint" style="margin-top:10px">2026-09-01 15:07 종료 · 그래프 노드 43개 / 엣지 65개</p>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2 class="sec-h">스캔 전 견적</h2>
+          <div class="kv"><span>파일</span><span>5개</span></div>
+          <div class="kv"><span>예상 토큰</span><span>1,383</span></div>
+          <div class="kv"><span>예상 소요</span><span>약 1분</span></div>
+          <div class="kv"><span>하드웨어</span><span>GTX 1050</span></div>
+          <div class="kv"><span>GPU 게이트</span><span class="chip ok">OK</span></div>
+          <div class="kv"><span>토큰 게이트</span><span class="chip ok">OK</span></div>
+          <p class="hint" style="margin-top:10px">견적은 파일을 열지 않고 크기와 확장자만으로 계산합니다. 네트워크를 쓰지 않습니다.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= 대시보드 ================= -->
+    <section class="view" id="v-dash">
+      <div class="tiles">
+        <div class="tile"><div class="n">24</div><div class="l">위키 문서</div></div>
+        <div class="tile"><div class="n">65</div><div class="l">그래프 엣지</div></div>
+        <div class="tile"><div class="n">13</div><div class="l">엔티티</div></div>
+        <div class="tile"><div class="n">2시간 전</div><div class="l">마지막 스캔</div></div>
+      </div>
+      <div class="two">
+        <div class="card">
+          <h2 class="sec-h">엣지 종류</h2>
+          <div class="kv"><span>TAGGED_WITH</span><span>30</span></div>
+          <div class="kv"><span>CONTAINS_ENTITY</span><span>20</span></div>
+          <div class="kv"><span>SEMANTICALLY_SIMILAR</span><span>10</span></div>
+          <div class="kv"><span>REFERENCES</span><span>5</span></div>
+        </div>
+        <div class="card">
+          <h2 class="sec-h">마지막 실행에서 건너뛴 문서</h2>
+          <div class="skiprow"><span>기타/스캔본.pdf</span><span class="chip mute">empty_document</span></div>
+          <p class="hint" style="margin-top:10px">텍스트 레이어가 없는 PDF입니다. OCR은 지원하지 않습니다.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= 설정 ================= -->
+    <section class="view" id="v-settings">
+      <div class="two">
+        <div class="card">
+          <h2 class="sec-h">환경 점검</h2>
+          <div class="doctor">
+            <div class="drow"><div class="l"><span class="chip ok">OK</span> Ollama 설치됨</div></div>
+            <div class="drow"><div class="l"><span class="chip ok">OK</span> 데몬 구동 중</div><span class="fix">127.0.0.1:11434</span></div>
+            <div class="drow"><div class="l"><span class="chip ok">OK</span> 요약 모델</div><span class="fix">qwen2.5:3b-instruct</span></div>
+            <div class="drow"><div class="l"><span class="chip ok">OK</span> 임베딩 모델</div><span class="fix">nomic-embed-text</span></div>
+            <div class="drow"><div class="l"><span class="chip warn">경고</span> GPU 가속</div><span class="fix">드라이버 560.94 · CPU 모드</span></div>
+            <div class="drow"><div class="l"><span class="chip mute">미설정</span> 클라우드 API 키</div><span class="fix">ANTHROPIC_API_KEY</span></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2 class="sec-h">클라우드 엔진</h2>
+          <div class="notice">
+            <b>동의하면 다음이 적용됩니다</b>
+            <ul>
+              <li>문서 내용이 외부(Anthropic)로 전송됩니다</li>
+              <li>주민등록번호 등 개인정보 7종은 전송 전에 자동 마스킹됩니다</li>
+              <li>API 키는 환경변수로만 받으며 파일에 저장되지 않습니다</li>
+            </ul>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <button class="btn">동의하고 켜기</button>
+            <span class="hint">현재 상태: 동의 없음</span>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2 class="sec-h">워크스페이스</h2>
+          <div class="wsrow">
+            <div><div style="font-weight:500">인사자료</div><div class="p">C:\docs\인사 → C:\wiki\인사</div></div>
+            <span class="chip ok">활성</span>
+          </div>
+          <div class="wsrow">
+            <div><div style="font-weight:500">개발문서</div><div class="p">C:\docs\개발 → C:\wiki\개발</div></div>
+            <button class="btn" style="padding:3px 9px;font-size:12px">열기</button>
+          </div>
+          <div class="wsrow">
+            <div><div style="font-weight:500">재무자료</div><div class="p">D:\finance → C:\wiki\재무</div></div>
+            <span class="chip stop">폴더 없음</span>
+          </div>
+          <button class="btn" style="margin-top:12px">워크스페이스 추가</button>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<script>
+(function(){
+  var TITLES={explore:"탐색",scan:"스캔",dash:"대시보드",settings:"설정"};
+  var navs=[].slice.call(document.querySelectorAll(".nav-item"));
+
+  function show(v){
+    navs.forEach(function(b){
+      var on=b.dataset.view===v;
+      if(on){b.setAttribute("aria-current","page");}else{b.removeAttribute("aria-current");}
+    });
+    ["explore","scan","dash","settings"].forEach(function(k){
+      document.getElementById("v-"+k).classList.toggle("on",k===v);
+    });
+    document.getElementById("viewTitle").textContent=TITLES[v];
+    if(v==="explore") sizeCanvas();
+  }
+  navs.forEach(function(b){b.addEventListener("click",function(){show(b.dataset.view);});});
+
+  /* 테마 */
+  document.getElementById("themeBtn").addEventListener("click",function(){
+    var r=document.documentElement;
+    var cur=r.getAttribute("data-theme");
+    if(!cur){cur=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";}
+    r.setAttribute("data-theme",cur==="dark"?"light":"dark");
+    drawGraph();
+  });
+
+  /* 결과 선택 */
+  var DOCS=[
+    "신규 입사자 온보딩 가이드","2026년 복지제도 안내","2026년 성과평가 제도 개편",
+    "2026년도 상반기 신입 공채 계획","2026년 하반기 조직개편안"
+  ];
+  document.querySelectorAll(".hit").forEach(function(h){
+    h.addEventListener("click",function(){
+      document.querySelectorAll(".hit").forEach(function(x){x.setAttribute("aria-selected","false");});
+      h.setAttribute("aria-selected","true");
+      document.getElementById("docTitle").textContent=DOCS[h.dataset.doc];
+    });
+  });
+  document.querySelectorAll(".rel a").forEach(function(a){
+    a.addEventListener("click",function(e){
+      e.preventDefault();
+      var t=document.querySelector('.hit[data-doc="'+a.dataset.doc+'"]');
+      if(t) t.click();
+    });
+  });
+
+  /* 본문 / 그래프 */
+  document.querySelectorAll(".seg button").forEach(function(b){
+    b.addEventListener("click",function(){
+      document.querySelectorAll(".seg button").forEach(function(x){x.setAttribute("aria-pressed","false");});
+      b.setAttribute("aria-pressed","true");
+      var g=b.dataset.pane==="graph";
+      document.getElementById("paneBody").hidden=g;
+      document.getElementById("paneGraph").hidden=!g;
+      if(g) sizeCanvas();
+    });
+  });
+
+  /* 그래프 캔버스 */
+  var cv=document.getElementById("gcv"),ctx=cv.getContext("2d");
+  var N=[
+    {x:.50,y:.42,t:"doc",l:"온보딩"},{x:.24,y:.24,t:"doc",l:"복지제도"},
+    {x:.76,y:.26,t:"doc",l:"평가제도"},{x:.28,y:.72,t:"doc",l:"채용계획"},
+    {x:.74,y:.70,t:"doc",l:"조직개편"},
+    {x:.50,y:.14,t:"tag",l:"인사"},{x:.13,y:.50,t:"tag",l:"온보딩"},
+    {x:.50,y:.86,t:"ent",l:"인사팀"},{x:.88,y:.48,t:"ent",l:"연구개발팀"}
+  ];
+  var E=[[0,1],[0,2],[0,3],[0,4],[0,5],[1,5],[2,5],[3,5],[0,6],[1,6],[0,7],[1,7],[3,7],[4,8],[3,8],[2,4]];
+  function cssv(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim();}
+  function sizeCanvas(){
+    var w=cv.parentElement.clientWidth,h=cv.parentElement.clientHeight;
+    if(!w||!h)return;
+    var d=window.devicePixelRatio||1;
+    cv.width=w*d;cv.height=h*d;cv.style.width=w+"px";cv.style.height=h+"px";
+    ctx.setTransform(d,0,0,d,0,0);drawGraph();
+  }
+  function drawGraph(){
+    var w=cv.clientWidth,h=cv.clientHeight;if(!w||!h)return;
+    var C={doc:cssv("--accent"),tag:cssv("--ok"),ent:cssv("--warn")};
+    ctx.clearRect(0,0,w,h);
+    ctx.strokeStyle=cssv("--line-2");ctx.lineWidth=1;
+    E.forEach(function(e){
+      ctx.beginPath();
+      ctx.moveTo(N[e[0]].x*w,N[e[0]].y*h);
+      ctx.lineTo(N[e[1]].x*w,N[e[1]].y*h);
+      ctx.stroke();
+    });
+    ctx.font="11px "+cssv("--font-ui");
+    ctx.textAlign="center";
+    N.forEach(function(n,i){
+      var r=n.t==="doc"?(i===0?9:7):5;
+      ctx.beginPath();ctx.arc(n.x*w,n.y*h,r,0,6.284);
+      ctx.fillStyle=C[n.t];ctx.fill();
+      if(i===0){ctx.lineWidth=2;ctx.strokeStyle=cssv("--surface");ctx.stroke();}
+      ctx.fillStyle=cssv("--ink-2");
+      ctx.fillText(n.l,n.x*w,n.y*h-r-5);
+    });
+  }
+  window.addEventListener("resize",sizeCanvas);
+  setTimeout(sizeCanvas,0);
+
+  /* 스캔 시뮬레이션 */
+  var FILES=["복지제도.md","온보딩.md","조직개편.md","채용계획.md","평가제도.md"];
+  var timer=null;
+  function setPhase(t){document.getElementById("runPhase").textContent=t;}
+  document.getElementById("runBtn").addEventListener("click",function(){
+    document.getElementById("scanForm").hidden=true;
+    document.getElementById("scanDone").hidden=true;
+    var run=document.getElementById("scanRun");run.hidden=false;
+    var log=document.getElementById("runLog");log.innerHTML="";
+    var bar=document.getElementById("progBar"),wrap=document.getElementById("progWrap");
+    wrap.classList.remove("indet");bar.style.width="0%";
+    setPhase("문서 요약 중");
+    var i=0,t0=Date.now();
+    timer=setInterval(function(){
+      var el=Math.floor((Date.now()-t0)/1000);
+      document.getElementById("progEta").textContent="경과 "+String(Math.floor(el/60)).padStart(2,"0")+":"+String(el%60).padStart(2,"0");
+      if(i<FILES.length){
+        i++;
+        bar.style.width=(i/FILES.length*100)+"%";
+        document.getElementById("progCount").textContent=i+" / "+FILES.length;
+        var d=document.createElement("div");
+        d.innerHTML="<b>["+i+"/5]</b> 생성 "+FILES[i-1];
+        log.appendChild(d);log.scrollTop=log.scrollHeight;
+      }else{
+        clearInterval(timer);timer=null;
+        setPhase("그래프 만드는 중");
+        wrap.classList.add("indet");
+        document.getElementById("progCount").textContent="5 / 5";
+        setTimeout(function(){
+          run.hidden=true;
+          document.getElementById("scanForm").hidden=false;
+          document.getElementById("scanDone").hidden=false;
+        },1800);
+      }
+    },700);
+  });
+  document.getElementById("stopBtn").addEventListener("click",function(){
+    if(timer){clearInterval(timer);timer=null;}
+    document.getElementById("scanRun").hidden=true;
+    document.getElementById("scanForm").hidden=false;
+  });
+})();
+</script>
+</body>
+</html>

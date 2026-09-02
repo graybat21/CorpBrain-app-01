@@ -449,3 +449,61 @@ def test_gateway_blocks_a_cloud_call_to_a_wrong_host(watch_sockets: SocketWatche
         )
 
     assert watch_sockets.addresses == []  # 소켓을 아예 열지 않았다
+
+
+# --- v0.9 GUI (스펙 §3 항목10) ---------------------------------------------------
+#
+# 새 파일로 분리하지 않는다 — 소켓 패치 관용구가 복제되고, 감시장치가 공허하게 통과하지
+# 않음을 증명하는 `test_watcher_flags_a_gateway_bypass`의 보호를 받지 못한다
+# (v0.6·v0.7·v0.8 결정 계승).
+
+
+def test_gui_server_start_opens_no_outbound_connection(watch_sockets: SocketWatcher) -> None:
+    """GUI 서버 기동은 **나가는 연결을 하나도 만들지 않는다**.
+
+    `bind`/`listen`은 들어오는 연결을 받는 것이라 이 감시의 대상이 아니다 — 관문 불변식은
+    나가는 호출만 다룬다(`gateway.py` 모듈 docstring). 여기서 확인하는 것은 서버를 세우는
+    동안 어디로도 접속하지 않는다는 것이다.
+    """
+    from corpbrain.gui import server as gui_server
+
+    state = gui_server.GuiState()
+    httpd = gui_server.create_server(state, port=0)
+    try:
+        assert httpd.server_address[0] == "127.0.0.1"  # 루프백 고정
+    finally:
+        httpd.server_close()
+
+    assert watch_sockets.addresses == []
+
+
+def test_gui_api_routing_opens_no_socket(
+    watch_sockets: SocketWatcher, tmp_path: Path
+) -> None:
+    """워크스페이스·폴더 탐색·그래프 조회는 소켓을 하나도 열지 않는다.
+
+    `graph`가 순수 조회라 소켓 0건이어야 한다는 v0.6 §3 항목8과 같은 종류의 단언이다.
+    """
+    from corpbrain.gui import server as gui_server
+    from corpbrain.gui import workspaces as gui_workspaces
+
+    registry = tmp_path / "workspaces.json"
+    (tmp_path / "docs").mkdir()
+    entry = gui_workspaces.add(
+        registry, name="ws", source_dir=tmp_path / "docs", out_dir=tmp_path / "wiki"
+    )
+    state = gui_server.GuiState(registry_path=registry)
+
+    for method, path, query in [
+        ("GET", "/api/workspaces", {}),
+        ("GET", "/api/fs/list", {"path": [str(tmp_path)]}),
+        ("GET", f"/api/workspaces/{entry.id}/dashboard", {}),
+        ("GET", f"/api/workspaces/{entry.id}/graph", {}),
+        ("GET", "/api/scan", {}),
+    ]:
+        status, _payload = gui_server.route(
+            method=method, path=path, query=query, body={}, state=state
+        )
+        assert status == 200
+
+    assert watch_sockets.addresses == []

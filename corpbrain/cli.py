@@ -46,6 +46,7 @@ from corpbrain.core.scanner import (
     scan_folder,
     validated_root,
 )
+from corpbrain.gui import server as gui_server
 
 #: `--model`을 대신 지정할 수 있는 환경변수 (스펙 §4.1).
 MODEL_ENV_VAR = "CORPBRAIN_MODEL"
@@ -393,6 +394,33 @@ def build_parser() -> argparse.ArgumentParser:
         "--central", action="store_true", help="연결 차수 내림차순 문서 목록을 낸다."
     )
 
+    gui = subparsers.add_parser(
+        "gui",
+        help="로컬 웹 GUI를 띄운다 (127.0.0.1 전용).",
+        description=(
+            "표준 라이브러리 서버를 127.0.0.1에 띄우고 브라우저를 연다. 바인딩 주소는 "
+            "고정이며 플래그로 바꿀 수 없다 — 이 서버는 로컬 파일시스템을 탐색하고 문서 "
+            "본문을 돌려주므로 외부에 노출하지 않는다."
+        ),
+    )
+    gui.add_argument(
+        "--port",
+        dest="port",
+        type=int,
+        default=gui_server.DEFAULT_PORT,
+        metavar="N",
+        help=(
+            f"수신 포트 (기본 {gui_server.DEFAULT_PORT}). 사용 중이면 다음 빈 포트를 "
+            "자동으로 잡는다."
+        ),
+    )
+    gui.add_argument(
+        "--no-browser",
+        dest="no_browser",
+        action="store_true",
+        help="브라우저를 자동으로 열지 않는다 (접속 URL은 stderr에 낸다).",
+    )
+
     doctor = subparsers.add_parser(
         "doctor",
         help="환경 준비 상태(Ollama 설치/구동/모델·GPU·게이트 임계)를 점검한다.",
@@ -479,7 +507,56 @@ def main(argv: list[str] | None = None) -> int:
         return _run_consent(args)
     if args.command == "graph":
         return _run_graph(args)
+    if args.command == "gui":
+        return _run_gui(args)
+    # 이 체인의 끝은 무조건 scan이다 — 새 서브커맨드를 더할 때 분기를 여기 위에 넣지 않으면
+    # 그 명령이 조용히 스캔을 돌린다. `tests/test_gui_server.py`가 이것을 단언한다.
     return _run_scan(args)
+
+
+def _run_gui(args: argparse.Namespace) -> int:
+    """`gui` — 로컬 웹 서버를 띄우고 브라우저를 연다 (v0.9 스펙 §4.1).
+
+    접속 URL은 `--no-browser`여도 stderr에 낸다 — 브라우저 자동 오픈이 실패하는 환경
+    (원격 셸·헤드리스)에서 사용자가 붙여넣을 값이 필요하다. 포트를 하나도 잡지 못하면
+    선행 조건 실패로 exit 1이다.
+    """
+    state = gui_server.GuiState()
+    try:
+        httpd = gui_server.create_server(state, port=args.port)
+    except PreconditionError as exc:
+        _log(f"선행 조건 실패: {exc}")
+        return EXIT_PRECONDITION_FAILED
+
+    port = httpd.server_address[1]
+    url = gui_server.entry_url(state, port=port)
+    _log(f"CorpBrain GUI: {url}")
+    if port != args.port:
+        _log(f"안내: 포트 {args.port}가 사용 중이어서 {port}로 열었습니다.")
+    if not args.no_browser:
+        _open_browser(url)
+
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        _log("종료합니다.")
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+    return EXIT_OK
+
+
+def _open_browser(url: str) -> None:
+    """기본 브라우저로 URL을 연다 — 실패해도 기동을 막지 않는다.
+
+    헤드리스·원격 셸에서는 열리지 않는 것이 정상이며, 그때는 stderr의 URL을 쓰면 된다.
+    """
+    try:
+        import webbrowser
+
+        webbrowser.open(url)
+    except Exception as exc:  # noqa: BLE001 - 어떤 실패도 기동을 막지 않는다
+        _log(f"안내: 브라우저를 열지 못했습니다({exc}). 위 URL을 직접 여세요.")
 
 
 def _run_consent(args: argparse.Namespace) -> int:

@@ -1,5 +1,20 @@
 # CorpBrain
 
+> **이 저장소에는 나란한 두 트랙이 있습니다.**
+>
+> | 트랙 | 브랜치 | GUI 구현 |
+> |---|---|---|
+> | 기본 | `main` | SSE 기반 (`gui/api·httpd·sse·scan`) |
+> | 폴링 | `track/gui-polling` | 1초 폴링 + 자식 프로세스 (`gui/server·scanjob·runner`) |
+>
+> 두 트랙은 **`v0.8.0`에서 갈라져 나온 서로 다른 v0.9 GUI 구현**이며, 어느 쪽도 상대의
+> 커밋을 담고 있지 않습니다. 버전 번호도 갈라 붙입니다 — `main` 은 `0.9.1`,
+> 이 트랙은 `0.9.2+polling` 처럼 뒤에 트랙 이름을 답니다.
+>
+> **그대로 병합하지 마세요.** `corpbrain/gui/` 의 모듈 구성이 서로 다르고 코어 8개 파일을
+> 각자 고쳤습니다. 합치려면 둘 중 어느 GUI 를 남길지부터 정해야 합니다.
+
+
 > **100% 로컬 구동형 AI 지식 관리 솔루션** — 로컬 문서 자동 스캔, 요약 및 마크다운 위키 생성 (MVP)
 
 CorpBrain은 흩어져 있는 로컬 문서(`.txt`, `.md`, `.docx`, `.pdf`, `.xlsx`, `.xlsm`, `.pptx`)를 재귀적으로 탐색하고, 로컬 LLM(Ollama)을 활용하여 핵심 요약 및 태그가 포함된 마크다운 위키 페이지로 자동 구조화하는 도구입니다.
@@ -15,7 +30,12 @@ CorpBrain은 흩어져 있는 로컬 문서(`.txt`, `.md`, `.docx`, `.pdf`, `.xl
 - **🤖 자동 요약 & 키워드 추출**: 문서별로 한 줄 요약, 핵심 포인트, 상세 요약, 태그/키워드를 일관된 마크다운 템플릿으로 출력.
 - **⚡ 효율적인 증분 재처리 (Incremental Processing)**: 원본 문서의 수정 시간(`mtime`)을 비교하여 변경된 파일만 선택적으로 재생성 (`--force`로 강제 재생성 가능).
 - **🛡️ 안전한 예외 처리**: 빈 문서, 권한 거부, 긴 경로, 미지원 포맷 등 엣지 케이스 시 스킵 및 상세 리포트 제공.
-- **🧩 모듈식 코어 아키텍처**: 비즈니스 로직(Core)과 어댑터(CLI)가 완벽히 분리되어 있어 추후 UI(pywebview/React) 확장 용이.
+- **🖥️ 로컬 웹 GUI**: `corpbrain gui` 로 브라우저 화면에서 스캔·검색·탐색. `127.0.0.1` 전용이며 외부 CDN을 쓰지 않는다.
+- **🧩 모듈식 코어 아키텍처**: 비즈니스 로직(Core)과 어댑터(CLI·GUI)가 완벽히 분리되어 있다.
+
+> ⚠️ 이 README는 개요만 담는다. **명령·옵션의 정본은 [`docs/USAGE.md`](docs/USAGE.md)** 이며,
+> `scan` 외에 `plan`·`search`·`graph`·`doctor`·`consent`·`gui` 여섯 명령이 더 있다.
+> v0.3의 GPU 게이팅과 v0.4의 임베딩 모델 필수화 같은 파괴적 변경도 그 문서에 적혀 있다.
 
 ---
 
@@ -54,6 +74,9 @@ uv pip install -e .
 
 # 스캔 명령어 실행
 uv run corpbrain scan ./docs_folder --out ./corpbrain_wiki
+
+# 또는 브라우저 화면으로 (v0.9)
+uv run corpbrain gui
 ```
 
 ---
@@ -130,7 +153,7 @@ source_bytes: 15420
 CorpBrain은 높은 품질과 단위/통합/네트워크 격리 테스트를 포함하고 있습니다.
 
 ```bash
-# 전체 테스트 실행 (150+ 개 테스트 스위트)
+# 전체 테스트 실행 (1,000+ 개 테스트 스위트)
 uv run pytest
 
 # 코드 스타일 검사 (Ruff)
@@ -145,6 +168,7 @@ uv run ruff check .
 CorpBrain-app-01/
 ├── corpbrain/
 │   ├── cli.py             # CLI 어댑터 (얇은 진입점)
+│   ├── gui/               # 로컬 웹 GUI 어댑터 (서버·러너·정적 자산)
 │   └── core/              # 핵심 비즈니스 로직 (재사용 가능한 코어 라이브러리)
 │       ├── scanner.py     # 파일 탐색 및 스킵 조건 검사
 │       ├── extract.py     # .txt/.md/.docx/.pdf/.xlsx/.xlsm/.pptx 텍스트 추출기

@@ -164,10 +164,21 @@ def _nodes(out_dir: Path) -> set[tuple[str, str]]:
     return {(row[0], _short(row[1])) for row in rows}
 
 
+def _posix(node_id: str) -> str:
+    """경로 구분자를 `/`로 정규화한다.
+
+    `doc_id`는 **원문 절대경로 문자열**이라 Windows에서는 `...\\인사\\채용계획.docx`처럼
+    역슬래시가 온다. 기대값을 그 표기로 바꾸면 이번엔 POSIX에서 깨지므로, 비교 직전에
+    한쪽으로 모은다. 프로덕션의 `doc_id` 계약은 그대로다.
+    """
+    return node_id.replace("\\", "/")
+
+
 def _short(node_id: str) -> str:
     """절대경로 노드 id를 코퍼스 상대경로로 줄여 기대값을 읽을 수 있게 한다."""
+    normalized = _posix(node_id)
     for relative in FILES:
-        if node_id.endswith(relative):
+        if normalized.endswith(relative):
             return relative
     return node_id
 
@@ -531,7 +542,7 @@ def test_unreadable_wiki_suspends_orphan_pruning(
     # 읽히지 않은 문서의 재료가 살아 있다 — 정리가 유예됐다.
     with SqliteGraphStore(graph_path_for(out_dir)) as store:
         surviving = {facts.doc_id for facts in store.iter_facts()}
-    assert any(doc_id.endswith("기타/메모.txt") for doc_id in surviving)
+    assert any(_posix(doc_id).endswith("기타/메모.txt") for doc_id in surviving)
 
 
 def test_orphan_facts_are_pruned_when_the_inventory_is_complete(
@@ -551,7 +562,7 @@ def test_orphan_facts_are_pruned_when_the_inventory_is_complete(
 
     with SqliteGraphStore(graph_path_for(out_dir)) as store:
         surviving = {facts.doc_id for facts in store.iter_facts()}
-    assert not any(doc_id.endswith("기타/메모.txt") for doc_id in surviving)
+    assert not any(_posix(doc_id).endswith("기타/메모.txt") for doc_id in surviving)
 
 
 def test_duplicate_source_path_is_reported_not_swallowed(

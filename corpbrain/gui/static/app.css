@@ -1,0 +1,400 @@
+:root{
+  --bg:#F4F6F8; --surface:#FFFFFF; --surface-2:#EAEEF2;
+  --ink:#10151B; --ink-2:#4A5561; --ink-3:#78848F;
+  --line:#D8DFE6; --line-2:#C2CCD6;
+  --accent:#2E5EAA; --accent-ink:#FFFFFF; --accent-soft:#E4EBF6;
+  --ok:#166534; --ok-soft:#DEF0E4;
+  --warn:#9A5B12; --warn-soft:#F7EBDA;
+  --stop:#A32620; --stop-soft:#F7E1DF;
+  --font-ui:-apple-system,BlinkMacSystemFont,"Segoe UI","Malgun Gothic","Apple SD Gothic Neo",system-ui,sans-serif;
+  --font-mono:ui-monospace,SFMono-Regular,Consolas,"D2Coding",monospace;
+  --r:4px;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#0E1319; --surface:#151B23; --surface-2:#1D242D;
+    --ink:#E4E9EE; --ink-2:#A6B1BC; --ink-3:#76828F;
+    --line:#28313B; --line-2:#39434F;
+    --accent:#7FA9E8; --accent-ink:#0E1319; --accent-soft:#1B2635;
+    --ok:#5FB584; --ok-soft:#16281F;
+    --warn:#D2984B; --warn-soft:#2B2317;
+    --stop:#DE8B84; --stop-soft:#2E1B1A;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0E1319; --surface:#151B23; --surface-2:#1D242D;
+  --ink:#E4E9EE; --ink-2:#A6B1BC; --ink-3:#76828F;
+  --line:#28313B; --line-2:#39434F;
+  --accent:#7FA9E8; --accent-ink:#0E1319; --accent-soft:#1B2635;
+  --ok:#5FB584; --ok-soft:#16281F;
+  --warn:#D2984B; --warn-soft:#2B2317;
+  --stop:#DE8B84; --stop-soft:#2E1B1A;
+  color-scheme:dark;
+}
+
+*{box-sizing:border-box}
+
+/* HTML 의 `hidden` 속성이 언제나 이기게 한다.
+ *
+ * 브라우저 기본 규칙은 `[hidden]{display:none}` 인데, 클래스 규칙이 `display` 를 지정하면
+ * 그쪽이 우선순위에서 이겨 **숨겼다고 생각한 요소가 그대로 뜬다.** 실제로 `.modal{display:flex}`
+ * 때문에 폴더 선택 모달이 첫 화면부터 떠 화면 전체를 덮고 클릭을 전부 먹었다.
+ * JS 는 `el.hidden = true/false` 로만 여닫으므로 이 한 줄이 그 계약을 지켜 준다. */
+[hidden]{display:none!important}
+body{
+  margin:0;background:var(--bg);color:var(--ink);
+  font-family:var(--font-ui);font-size:13.5px;line-height:1.55;
+  -webkit-font-smoothing:antialiased;
+}
+button,input,select,textarea{font:inherit;color:inherit}
+.mono{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:2px}
+
+/* ---------- shell ---------- */
+.app{display:grid;grid-template-columns:236px minmax(0,1fr);min-height:100vh}
+@media (max-width:900px){.app{grid-template-columns:1fr}}
+
+/* ---------- sidebar ---------- */
+.side{
+  background:var(--surface);border-right:1px solid var(--line);
+  display:flex;flex-direction:column;padding:14px 12px;gap:14px;
+}
+@media (max-width:900px){.side{border-right:none;border-bottom:1px solid var(--line)}}
+.brand{display:flex;align-items:center;gap:8px;padding:2px 6px 0;font-weight:600;letter-spacing:-.01em}
+.brand .dot{width:9px;height:9px;border-radius:2px;background:var(--accent);flex:none}
+.ws{
+  width:100%;background:var(--surface-2);border:1px solid var(--line);border-radius:var(--r);
+  padding:7px 9px;font-size:13px;font-weight:500;cursor:pointer;text-align:left;
+  display:flex;align-items:center;justify-content:space-between;gap:8px;
+  transition:border-color .12s,background .12s;
+}
+.ws:hover{border-color:var(--line-2)}
+.ws .cap{font-size:10.5px;font-weight:500;color:var(--ink-3);display:block;letter-spacing:.06em}
+.ws svg{flex:none;color:var(--ink-3)}
+nav{display:flex;flex-direction:column;gap:1px}
+.nav-item{
+  display:flex;align-items:center;gap:9px;width:100%;
+  background:none;border:0;border-radius:var(--r);padding:7px 9px;
+  font-size:13.5px;color:var(--ink-2);cursor:pointer;text-align:left;
+  transition:background .12s,color .12s;
+}
+.nav-item:hover{background:var(--surface-2);color:var(--ink)}
+.nav-item[aria-current="page"]{background:var(--accent-soft);color:var(--accent);font-weight:600}
+.nav-item svg{flex:none}
+.side-foot{margin-top:auto;border-top:1px solid var(--line);padding-top:10px;display:flex;flex-direction:column;gap:1px}
+
+/* ---------- main ---------- */
+main{min-width:0;display:flex;flex-direction:column}
+.bar{
+  height:52px;flex:none;border-bottom:1px solid var(--line);background:var(--surface);
+  display:flex;align-items:center;justify-content:space-between;gap:12px;padding:0 18px;
+}
+.bar h1{margin:0;font-size:19px;font-weight:600;letter-spacing:-.01em}
+.bar .tools{display:flex;align-items:center;gap:8px}
+.view{padding:18px;display:none;min-width:0}
+.view.on{display:block}
+
+/* ---------- controls ---------- */
+.btn{
+  border:1px solid var(--line-2);background:var(--surface);color:var(--ink);
+  border-radius:var(--r);padding:6px 12px;font-size:13px;cursor:pointer;
+  transition:background .12s,border-color .12s;white-space:nowrap;
+}
+.btn:hover{background:var(--surface-2)}
+.btn:active{transform:translateY(1px)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:500}
+.btn.primary:hover{filter:brightness(1.08)}
+.btn.danger{color:var(--stop);border-color:var(--stop)}
+.btn.danger:hover{background:var(--stop-soft)}
+.btn[disabled]{opacity:.5;cursor:not-allowed}
+label.f{display:block;font-size:12px;font-weight:500;color:var(--ink-2);margin-bottom:4px}
+.in{
+  width:100%;background:var(--surface);border:1px solid var(--line-2);border-radius:var(--r);
+  padding:7px 10px;font-size:13px;transition:border-color .12s;
+}
+.in:hover{border-color:var(--ink-3)}
+.in::placeholder{color:var(--ink-3)}
+.seg{display:inline-flex;border:1px solid var(--line-2);border-radius:var(--r);overflow:hidden}
+.seg button{
+  border:0;background:var(--surface);padding:5px 12px;font-size:12.5px;color:var(--ink-2);cursor:pointer;
+  transition:background .12s,color .12s;
+}
+.seg button+button{border-left:1px solid var(--line-2)}
+.seg button[aria-pressed="true"]{background:var(--accent-soft);color:var(--accent);font-weight:600}
+
+.chip{display:inline-block;font-family:var(--font-mono);font-size:11px;border-radius:2px;padding:1px 6px;white-space:nowrap}
+.chip.ok{background:var(--ok-soft);color:var(--ok)}
+.chip.warn{background:var(--warn-soft);color:var(--warn)}
+.chip.stop{background:var(--stop-soft);color:var(--stop)}
+.chip.mute{background:var(--surface-2);color:var(--ink-3)}
+
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:14px 16px}
+.sec-h{font-size:14px;font-weight:600;margin:0 0 10px}
+.hint{font-size:12px;color:var(--ink-3);margin:0}
+
+/* ---------- 탐색 ---------- */
+.explore{display:flex;flex-direction:column;gap:12px;height:calc(100vh - 52px - 36px)}
+.searchrow{display:flex;gap:8px}
+.searchrow .in{flex:1}
+.panes{display:grid;grid-template-columns:320px minmax(0,1fr);gap:12px;flex:1;min-height:0}
+@media (max-width:1100px){.panes{grid-template-columns:1fr;height:auto}.explore{height:auto}}
+.results{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);overflow-y:auto;min-height:0}
+.results .meta{padding:9px 12px;border-bottom:1px solid var(--line);font-size:12px;color:var(--ink-3)}
+.hit{
+  display:block;width:100%;text-align:left;background:none;border:0;
+  border-bottom:1px solid var(--line);padding:10px 12px;cursor:pointer;
+  transition:background .12s;
+}
+.hit:hover{background:var(--surface-2)}
+.hit[aria-selected="true"]{background:var(--accent-soft)}
+.hit .top{display:flex;align-items:baseline;justify-content:space-between;gap:8px}
+.hit .t{font-size:13.5px;font-weight:500}
+.hit .s{font-family:var(--font-mono);font-size:11.5px;color:var(--ink-3);font-variant-numeric:tabular-nums}
+.hit .p{font-family:var(--font-mono);font-size:11px;color:var(--ink-3);margin-top:2px;word-break:break-all}
+.hit .why{font-size:11.5px;color:var(--ink-2);margin-top:5px;padding-left:9px;border-left:2px solid var(--accent)}
+/* 폴더 트리 — 들여쓰기 폭은 CSS 가 소유하고 JS 는 깊이(`--depth`)만 넘긴다. 검색 결과에는
+   붙지 않으므로(`--depth` 없음) 기본값 0 으로 평면 그대로다.
+
+   파일은 폴더보다 **8px 더** 들어간다. 같은 식을 쓰면 파일 글자가 폴더 삼각형 자리에서
+   시작해 어느 폴더에 든 것인지 눈으로 짚기 어렵다 — 폴더 «이름»보다 오른쪽에서 시작해야
+   한 단계 아래로 읽힌다. */
+.hit{padding-left:calc(20px + var(--depth,0) * 18px)}
+.dir{
+  display:flex;align-items:center;gap:7px;width:100%;text-align:left;
+  background:var(--surface-2);border:0;border-bottom:1px solid var(--line);cursor:pointer;
+  padding:7px 12px 7px calc(12px + var(--depth,0) * 18px);
+  font-size:12px;color:var(--ink-3);
+}
+.dir:hover{background:var(--accent-soft)}
+.dir .caret{flex:none;font-size:13px;line-height:1;transition:transform .12s}
+.dir[aria-expanded="false"] .caret{transform:rotate(-90deg)}
+.dir .n{font-weight:600;color:var(--ink-2)}
+.dir .c{margin-left:auto;font-variant-numeric:tabular-nums;color:var(--ink-3)}
+/* 트리의 문서 줄만 가로 배치다 — 검색 결과(`.hit` 단독)는 종전대로 세로로 쌓인다. */
+.hit.doc{display:flex;align-items:baseline;gap:8px}
+.hit.doc .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+.detail{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);display:flex;flex-direction:column;min-height:0}
+.detail-h{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line)}
+.detail-h .t{font-weight:600}
+.doc{padding:16px 18px;overflow-y:auto;min-height:0}
+.doc .body{max-width:68ch}
+.doc h2{font-size:13px;font-weight:600;color:var(--ink-2);margin:18px 0 6px;letter-spacing:.01em}
+.doc h2:first-child{margin-top:0}
+.doc p{margin:0 0 8px;color:var(--ink-2)}
+.doc ul{margin:0 0 8px;padding-left:18px;color:var(--ink-2)}
+.doc li{margin-bottom:3px}
+.fm{font-family:var(--font-mono);font-size:11.5px;color:var(--ink-3);background:var(--surface-2);border-radius:var(--r);padding:8px 10px;margin-bottom:14px;word-break:break-all}
+.rel{margin-top:6px;border-top:1px solid var(--line);padding-top:10px}
+.rel a{color:var(--accent);text-decoration:none}
+.rel a:hover{text-decoration:underline}
+/* 「원문」 섹션의 바로가기. 브라우저는 `file://` 로 갈 수 없어 서버가 대신 폴더를 여는데,
+   그 자리가 링크처럼 보여야 눌러 볼 마음이 든다 — 버튼이지만 링크의 옷을 입힌다. */
+.doc .reveal{
+  background:none;border:0;padding:0;font:inherit;color:var(--accent);cursor:pointer;
+}
+.doc .reveal:hover{text-decoration:underline}
+.rel li{font-size:12.5px}
+canvas{display:block;width:100%;height:100%}
+.graphwrap{flex:1;min-height:320px;position:relative}
+/* 조작 방법 한 줄. 「동그라미 크기」 설명은 위 안내문(`graph-note`)이 문장으로 말한다 —
+   성격이 다른 두 문장을 한 상자에 이어 붙이면 어디서 끊어야 할지 알 수 없다. */
+.legend{
+  position:absolute;left:12px;bottom:12px;
+  display:flex;gap:10px;
+  font-size:11px;line-height:1.5;color:var(--ink-3);
+  background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
+  padding:5px 10px;
+}
+.legend i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:4px;vertical-align:middle}
+
+/* ---------- 스캔 ---------- */
+.scan-grid{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:12px;align-items:start}
+@media (max-width:1000px){.scan-grid{grid-template-columns:1fr}}
+.frow{display:grid;grid-template-columns:1fr 150px 1fr;gap:10px;margin-bottom:12px}
+@media (max-width:760px){.frow{grid-template-columns:1fr}}
+details.adv{border-top:1px solid var(--line);padding-top:10px;margin-top:4px}
+details.adv summary{cursor:pointer;font-size:12.5px;color:var(--ink-2);list-style:none;display:flex;align-items:center;gap:6px}
+details.adv summary::-webkit-details-marker{display:none}
+details.adv summary .caret{transition:transform .12s}
+details.adv[open] summary .caret{transform:rotate(90deg)}
+.advgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-top:12px}
+.check{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--ink-2)}
+/* 체크박스 항목의 `?` 는 라벨 **밖**에 둔다 — 안에 넣으면 도움말을 누를 때 체크가
+   함께 켜진다. 대신 가로로 세워 다른 항목처럼 라벨 오른쪽에 오게 한다. */
+.advcheck{display:flex;align-items:center;gap:2px}
+.prog{height:6px;background:var(--surface-2);border-radius:2px;overflow:hidden;margin:10px 0 6px}
+.prog i{display:block;height:100%;background:var(--accent);width:0;transition:width .3s linear}
+.prog.indet i{width:35%;animation:slide 1.4s ease-in-out infinite}
+@keyframes slide{0%{margin-left:-35%}100%{margin-left:100%}}
+.log{font-family:var(--font-mono);font-size:11.5px;max-height:210px;overflow-y:auto;border-top:1px solid var(--line);margin-top:10px;padding-top:8px}
+.log div{padding:2px 0;color:var(--ink-2);display:flex;gap:8px}
+.log b{color:var(--ink-3);font-weight:400;flex:none}
+.skiplist{border-top:1px solid var(--line);margin-top:12px;padding-top:10px}
+.skiprow{display:flex;justify-content:space-between;gap:10px;font-size:12.5px;padding:3px 0;color:var(--ink-2)}
+
+/* ---------- 대시보드 ---------- */
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:14px}
+.tile{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:14px 16px}
+.tile .n{font-family:var(--font-mono);font-size:26px;font-weight:600;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.tile .l{font-size:12px;color:var(--ink-3);margin-top:2px}
+.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px}
+.kv{display:flex;justify-content:space-between;gap:10px;padding:5px 0;border-bottom:1px solid var(--line);font-size:12.5px}
+.kv:last-child{border-bottom:0}
+.kv span:last-child{font-family:var(--font-mono);color:var(--ink-2);font-variant-numeric:tabular-nums}
+/* 「?」 도움말 — 대시보드 엣지 종류와 스캔 고급 설정이 함께 쓴다.
+   라이브러리를 쓰지 않는다(의존성 0).
+
+   ui-ux-pro-max 지침 넷을 지킨다.
+   1. **호버에만 의존하지 않는다**(Hover vs Tap · High). 클릭·탭으로도 열리며 그 상태는
+      `aria-expanded` 가 들고 있다. 터치 기기에는 호버가 없다.
+   2. **겨냥할 자리를 넓힌다**(터치 목표 · Critical). 보이는 원은 15px 그대로 두고
+      `::before` 로 사방 9px 를 넓혀 33px 를 만든다 — 글자 줄의 높이를 밀지 않는다.
+   3. **대비를 지킨다.** 글자가 아니라 **그림**이므로 적용 기준이 WCAG 1.4.11(비텍스트
+      3:1)이다. `--ink-3` 는 흰 바탕에서 3.9:1, 카드 바탕(`--surface-2`)에서 3.3:1 로 통과한다.
+      글자였을 때는 4.5:1 이 필요해 같은 색이 미달이었다.
+   4. **글을 고정 폭 상자에 가두지 않는다**(Text Reflow · Critical). `max-content` 에
+      `min()` 상한만 두어 짧은 설명은 짧게, 긴 설명은 접혀 들어간다. */
+.qm{
+  display:inline-flex;align-items:center;justify-content:center;position:relative;
+  margin-left:5px;vertical-align:-3px;flex:none;
+  color:var(--ink-3);cursor:help;
+}
+.qm svg{display:block}
+.qm::before{content:"";position:absolute;inset:-9px;border-radius:50%}
+.qm:hover,.qm:focus-visible,.qm[aria-expanded="true"]{color:var(--accent)}
+.qm::after{
+  content:attr(data-tip);
+  position:absolute;left:-10px;top:24px;z-index:5;
+  width:max-content;max-width:min(260px,68vw);
+  background:var(--surface);color:var(--ink-2);
+  border:1px solid var(--line-2);border-radius:var(--r);padding:8px 10px;
+  font-size:11.5px;font-weight:400;line-height:1.6;text-align:left;white-space:normal;
+  box-shadow:0 4px 14px rgba(0,0,0,.14);
+  opacity:0;visibility:hidden;transition:opacity .12s;
+}
+.qm:hover::after,.qm:focus-visible::after,.qm[aria-expanded="true"]::after{
+  opacity:1;visibility:visible;
+}
+@media (prefers-reduced-motion:reduce){.qm::after{transition:none}}
+/* `.kv span:last-child` 가 색을 잡아가므로 그 안에서는 한 번 더 못박는다. */
+.kv .qm{color:var(--ink-3)}
+.kv .qm:hover,.kv .qm:focus-visible,.kv .qm[aria-expanded="true"]{color:var(--accent)}
+
+/* ---------- 설정 ---------- */
+.doctor{display:flex;flex-direction:column}
+.drow{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid var(--line)}
+.drow:last-child{border-bottom:0}
+.drow .l{display:flex;align-items:center;gap:9px}
+.drow .fix{font-size:11.5px;color:var(--ink-3);font-family:var(--font-mono)}
+.notice{background:var(--warn-soft);border:1px solid var(--warn);border-radius:var(--r);padding:11px 13px;font-size:12.5px;color:var(--ink);margin-bottom:12px}
+.notice b{display:block;margin-bottom:5px;color:var(--warn)}
+.notice ul{margin:0;padding-left:17px}
+.wsrow{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--line)}
+.wsrow:last-child{border-bottom:0}
+.wsrow .p{font-family:var(--font-mono);font-size:11px;color:var(--ink-3);word-break:break-all}
+/* 「활성」 표시와 옆의 버튼들은 **같은 상자**를 쓴다. 크기를 각자(예전엔 JS 의 인라인
+   style 에) 적으면 한쪽만 바뀌어 줄이 들쭉날쭉해진다. 「활성」은 누를 수 없는 상태
+   표시이므로 태그는 <span> 그대로 두고 모양만 맞춘다. */
+.wsrow .btn,.wsrow .ws-active{padding:3px 9px;font-size:12px}
+/* 테두리는 **투명하다.** 보이는 테두리를 두면 누를 수 있는 것으로 읽혀 버튼과 헷갈리는데,
+   아예 빼면 폭 1px 만큼 옆 버튼보다 작아져 줄이 어긋난다. 자리만 차지하게 둔다. */
+.wsrow .ws-active{
+  display:inline-block;border:1px solid transparent;border-radius:var(--r);
+  background:var(--ok-soft);color:var(--ok);white-space:nowrap;
+}
+
+.empty{text-align:center;padding:38px 20px;color:var(--ink-3)}
+.empty p{margin:0 0 10px;font-size:13px}
+
+@media (prefers-reduced-motion:reduce){
+  *{transition:none!important;animation:none!important}
+}
+
+/* ---------- 모달 · 토스트 (W8 추가) ---------- */
+.modal{
+  position:fixed;inset:0;background:rgba(16,21,27,.45);
+  display:flex;align-items:center;justify-content:center;padding:24px;z-index:50;
+}
+.modal-box{
+  background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
+  width:min(560px,100%);max-height:80vh;display:flex;flex-direction:column;
+  box-shadow:0 12px 40px rgba(16,21,27,.28);
+}
+.toast{
+  position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:60;
+  background:var(--ink);color:var(--bg);border-radius:var(--r);
+  padding:9px 16px;font-size:13px;max-width:min(560px,90vw);
+  box-shadow:0 6px 20px rgba(16,21,27,.3);
+}
+.toast.stop{background:var(--stop);color:#fff}
+.toast.warn{background:var(--warn);color:#fff}
+.btn.danger{color:var(--stop);border-color:var(--stop)}
+.btn.danger:hover{background:var(--stop-soft)}
+#docBody .body{max-width:68ch}
+#docBody h1{font-size:19px;font-weight:600;margin:0 0 12px;letter-spacing:-.01em}
+#docBody h2{font-size:13px;font-weight:600;color:var(--ink-2);margin:18px 0 6px}
+#docBody p{margin:0 0 8px;color:var(--ink-2)}
+#docBody ul{margin:0 0 8px;padding-left:18px;color:var(--ink-2)}
+#docBody li{margin-bottom:3px}
+#docBody a{color:var(--accent)}
+#docBody code{
+  font-family:var(--font-mono);font-size:12px;background:var(--surface-2);
+  border-radius:2px;padding:1px 5px;
+}
+.drow{padding:7px 0;border-bottom:1px solid var(--line);font-size:12.5px;color:var(--ink-2)}
+.drow:last-child{border-bottom:0}
+
+/* ---------- 환경 점검 ---------- */
+.doctor-banner{
+  display:flex;flex-direction:column;gap:3px;
+  border-radius:var(--r);padding:10px 13px;margin-bottom:12px;font-size:13px;
+  border:1px solid;
+}
+.doctor-banner.good{background:var(--ok-soft);border-color:var(--ok);color:var(--ok)}
+.doctor-banner.bad{background:var(--stop-soft);border-color:var(--stop);color:var(--stop)}
+.doctor-banner span{font-size:12px;color:var(--ink-2)}
+.check-row{padding:9px 0;border-bottom:1px solid var(--line)}
+.check-row:last-of-type{border-bottom:0}
+.check-head{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap}
+.check-label{font-weight:500;font-size:13.5px}
+.check-detail{font-size:11.5px;color:var(--ink-3);word-break:break-all}
+.check-action{
+  font-size:12px;color:var(--ink-2);margin-top:5px;margin-left:2px;
+  padding-left:10px;border-left:2px solid var(--line-2);
+}
+.check-row.fail .check-action{border-left-color:var(--stop)}
+.check-row.warn .check-action{border-left-color:var(--warn)}
+
+/* ---------- 읽기용 값 표시 (고르는 것이 아니라 보여 주는 것) ---------- */
+/* 왼쪽(고르는 것)을 넓게, 오른쪽(보여 주는 것)은 내용에 맞게 — 읽기용 값이 컨트롤보다
+ * 길어 보이면 그쪽이 주인공처럼 읽힌다. */
+/* 왼쪽(고르는 것)을 넓게, 오른쪽(보여 주는 것)은 내용에 맞게 — 읽기용 값이 컨트롤보다
+ * 길어 보이면 그쪽이 주인공처럼 읽힌다. */
+.engine-row{
+  display:grid;grid-template-columns:340px minmax(0,300px);
+  gap:10px;align-items:center;justify-content:start;
+}
+@media (max-width:760px){.engine-row{grid-template-columns:1fr}}
+.readout{
+  display:flex;align-items:center;gap:10px;
+  background:var(--surface-2);border:1px solid var(--line);border-radius:var(--r);
+  padding:6px 8px 6px 12px;font-size:12.5px;min-height:33px;
+}
+.readout .mono{flex:1;min-width:0;color:var(--ink);word-break:break-all}
+.readout .btn{flex:none;padding:3px 10px;font-size:12px}
+.callout-warn{
+  margin-top:8px;font-size:12px;line-height:1.6;color:var(--ink-2);
+  background:var(--warn-soft);border-left:2px solid var(--warn);
+  border-radius:0 var(--r) var(--r) 0;padding:8px 11px;
+}
+
+/* ---------- 그래프 안내 ---------- */
+.graph-note{
+  position:absolute;left:12px;right:12px;top:12px;
+  background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
+  padding:8px 11px;font-size:12px;line-height:1.55;color:var(--ink-2);
+}
+.legend{bottom:12px}

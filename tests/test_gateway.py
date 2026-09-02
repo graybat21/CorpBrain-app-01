@@ -419,8 +419,31 @@ def _is_network_module(name: str) -> bool:
     )
 
 
+def _is_allowed_inbound(name: str, allowed: frozenset[str]) -> bool:
+    """`name`이 허용된 inbound 모듈이거나 그 하위인가 (`http.server.ThreadingHTTPServer` 등)."""
+    return any(name == ok or name.startswith(f"{ok}.") for ok in allowed)
+
+
+#: **나가는** 호출은 못 하지만 **들어오는** 연결은 받아야 하는 모듈 (v0.9 GUI 서버).
+#:
+#: 이 관문 불변식이 막으려는 것은 "관문을 우회해 밖으로 나가는 호출"이다(`gateway.py`
+#: 모듈 docstring — "프로세스의 유일한 외부 네트워크 **출구**"). 로컬 GUI 서버는 방향이
+#: 반대다 — `127.0.0.1`에 바인딩해 브라우저의 접속을 받을 뿐 어디로도 연결하지 않는다.
+#:
+#: 그래서 **모듈을 통째로 면제하지 않고 inbound 서버 모듈만** 허용한다. 아래 모듈에서도
+#: `urllib.request`·`requests`·`socket` 같은 outbound 수단은 여전히 금지된다 — GUI가
+#: 코어를 우회해 직접 나가는 호출을 하면 그것은 진짜 위반이다.
+_INBOUND_ONLY_MODULES: dict[str, frozenset[str]] = {
+    str(Path("gui") / "server.py"): frozenset({"http.server"}),
+}
+
+
 def test_gateway_is_the_only_module_touching_the_network() -> None:
-    """AC 시나리오 2: 관문 외의 어떤 모듈도 네트워크 라이브러리를 직접 import 하지 않는다."""
+    """AC 시나리오 2: 관문 외의 어떤 모듈도 네트워크 라이브러리를 직접 import 하지 않는다.
+
+    예외는 `_INBOUND_ONLY_MODULES` 하나뿐이며, 거기서도 허용되는 것은 들어오는 연결을 받는
+    모듈뿐이다. 나가는 호출 수단은 어디서도 허용되지 않는다.
+    """
     package_root = Path(gateway.__file__).resolve().parents[1]
     gateway_path = Path(gateway.__file__).resolve()
 
@@ -429,10 +452,14 @@ def test_gateway_is_the_only_module_touching_the_network() -> None:
         if source_path.resolve() == gateway_path:
             continue
         tree = ast.parse(source_path.read_text(encoding="utf-8"))
+        relative = str(source_path.relative_to(package_root))
+        allowed = _INBOUND_ONLY_MODULES.get(relative, frozenset())
         blocked = {
-            name for name in _imported_module_names(tree) if _is_network_module(name)
+            name
+            for name in _imported_module_names(tree)
+            if _is_network_module(name) and not _is_allowed_inbound(name, allowed)
         }
         if blocked:
-            offenders[str(source_path.relative_to(package_root))] = blocked
+            offenders[relative] = blocked
 
     assert offenders == {}, f"관문을 우회하는 네트워크 import: {offenders}"
