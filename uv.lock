@@ -13,7 +13,7 @@ wheels = [
 
 [[package]]
 name = "corpbrain"
-version = "0.9.2+polling"
+version = "0.9.3+polling"
 source = { editable = "." }
 dependencies = [
     { name = "openpyxl" },

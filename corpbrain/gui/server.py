@@ -437,7 +437,8 @@ def _wiki_page(out_dir: Path, relative: str) -> tuple[int, dict[str, Any]]:
         "path": relative,
         "title": _wiki_title(target),
         "front_matter": document.front_matter,
-        "html": markdown.render(document.body),
+        # 「관련 문서」 링크가 이 파일 기준 상대경로라, 어느 위키인지 풀려면 자기 경로가 필요하다.
+        "html": markdown.render(document.body, base=relative),
         "raw": raw,
     }
 

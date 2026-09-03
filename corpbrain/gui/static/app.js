@@ -151,6 +151,7 @@
     state.current = ws;
     state.wiki = [];
     graphData = { nodes: [], edges: [] };
+    graphLayout = null;
     graphView = { scale: 1, ox: 0, oy: 0 };
     installedModels = null;
     openPage = null;
@@ -176,7 +177,66 @@
   function renderWorkspaceButton() {
     var label = $("#wsName");
     label.textContent = state.current ? state.current.name : "워크스페이스 없음";
-    $("#wsBtn").disabled = state.workspaces.length < 2;
+    renderWorkspaceMenu();
+  }
+
+  /* 사이드바 드롭다운. **전환만 한다** — 추가·제거는 설정 화면이 맡고, 여기 맨 아래
+   * 한 줄이 그리로 데려간다. 두 줄로 나누지 않는 것은 설정의 추가 폼이 워크스페이스
+   * 카드 안에 함께 있어 「관리」와 「추가」의 목적지가 같기 때문이다. 목록이 비었을
+   * 때만 글자를 「추가」로 바꾼다 — 관리할 것이 없는데 「관리」라고 적지 않는다. */
+  function renderWorkspaceMenu() {
+    var pop = $("#wsPop");
+    clear(pop);
+    // 목록만 스크롤한다 — 아래 「관리…」 줄은 워크스페이스가 몇 개든 늘 보여야 한다.
+    var list = el("div", { class: "wsmenu-list" });
+    pop.appendChild(list);
+
+    if (!state.workspaces.length) {
+      list.appendChild(el("p", { class: "wsmenu-empty" }, "아직 워크스페이스가 없습니다."));
+    } else {
+      state.workspaces.forEach(function (ws) {
+        var active = !!(state.current && ws.id === state.current.id);
+        var item = el("button", {
+          class: "wsmenu-item", role: "menuitemradio",
+          "aria-checked": active ? "true" : "false", title: ws.source_dir
+        });
+        var ck = el("span", { class: "ck" }, active ? "✓" : "");
+        ck.setAttribute("aria-hidden", "true");
+        item.appendChild(ck);
+        item.appendChild(el("span", { class: "nm" }, ws.name));
+        item.addEventListener("click", function () {
+          closeWorkspaceMenu();
+          // 이미 보고 있는 워크스페이스면 상태를 지우지 않는다 — 열어 둔 본문이 이유 없이 닫힌다.
+          if (active) return;
+          useWorkspace(ws);
+          show("dash");
+        });
+        list.appendChild(item);
+      });
+    }
+
+    pop.appendChild(el("div", { class: "wsmenu-sep" }));
+    var manage = el(
+      "button", { class: "wsmenu-item", role: "menuitem" },
+      state.workspaces.length ? "워크스페이스 관리…" : "워크스페이스 추가…"
+    );
+    manage.addEventListener("click", function () {
+      closeWorkspaceMenu();
+      show("settings");
+    });
+    pop.appendChild(manage);
+  }
+
+  function closeWorkspaceMenu() {
+    $("#wsBtn").setAttribute("aria-expanded", "false");
+    $("#wsPop").hidden = true;
+  }
+
+  function toggleWorkspaceMenu() {
+    var open = $("#wsBtn").getAttribute("aria-expanded") === "true";
+    if (open) return closeWorkspaceMenu();
+    $("#wsBtn").setAttribute("aria-expanded", "true");
+    $("#wsPop").hidden = false;
   }
 
   function renderWorkspaceList() {
@@ -193,16 +253,11 @@
       left.appendChild(el("div", { class: "p" }, ws.source_dir + " → " + ws.out_dir));
       row.appendChild(left);
 
+      /* 고르는 자리는 사이드바 드롭다운 **한 곳**이다. 여기는 관리(추가·제거) 화면이므로
+       * 어느 것이 활성인지 읽기 전용으로만 보여 준다. */
       var actions = el("div", { style: "display:flex;gap:6px" });
       if (state.current && ws.id === state.current.id) {
         actions.appendChild(el("span", { class: "ws-active" }, "활성"));
-      } else {
-        var open = el("button", { class: "btn" }, "열기");
-        open.addEventListener("click", function () {
-          useWorkspace(ws);
-          show("dash");
-        });
-        actions.appendChild(open);
       }
       var del = el("button", { class: "btn danger" }, "제거");
       del.addEventListener("click", function () {
@@ -788,12 +843,117 @@
   function loadGraph() {
     if (!state.current) return;
     api("/api/workspaces/" + state.current.id + "/graph")
-      .then(function (data) { graphData = data; drawGraph(); })
+      .then(function (data) { graphData = data; graphLayout = null; drawGraph(); })
       .catch(function (e) { toast(e.message, "stop"); });
   }
 
   function cssv(name) {
     return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  }
+
+  /* 계산해 둔 지도. `graphData` 가 바뀔 때만 다시 만든다. */
+  var graphLayout = null;
+
+  /* 문서 경로에서 시작 위치를 만든다 — **무작위를 쓰지 않는다.** 같은 문서 집합이면 언제
+   * 열어도 같은 지도여야 지도 구실을 한다. 무작위 시작점을 쓰면 열 때마다 지형이 달라져
+   * 종전의 «고를 때마다 바뀌는» 문제를 이름만 바꿔 되살리게 된다. */
+  function graphSeed(text) {
+    var hash = 2166136261;
+    for (var i = 0; i < text.length; i++) {
+      hash ^= text.charCodeAt(i);
+      hash = (hash * 16777619) >>> 0;
+    }
+    return hash;
+  }
+
+  function graphLayoutFor(nodes, edges) {
+    // 문서 목록과 엣지 수가 그대로면 같은 지도를 다시 쓴다.
+    var key = nodes.map(function (n) { return n.id; }).join(" | ")
+            + " #" + edges.length;
+    if (graphLayout && graphLayout.key === key) return graphLayout;
+    graphLayout = { key: key, pos: computeGraphLayout(nodes, edges) };
+    return graphLayout;
+  }
+
+  /* **고정 배치.** 이어진 문서끼리 당기고 모든 문서가 서로 밀어내게 두면, 관계가 많은
+   * 문서들이 가까이 모이고 상관없는 덩어리는 멀어진다 — 그래서 «거리»에 뜻이 생긴다.
+   *
+   * 결과는 -1~1 의 추상 좌표다. 상자 크기에 맞추는 일은 그리는 단계가 하므로, 창을
+   * 줄였다 늘려도 점들의 상대 위치는 변하지 않는다.
+   *
+   * 이것은 **그림을 그리기 위한 좌표**일 뿐 저장된 값을 다시 계산하는 것이 아니다.
+   * 중심성·클러스터 같은 파생값을 화면이 지어내 표시하지 않는다(§4.11). */
+  function computeGraphLayout(nodes, edges) {
+    var pos = {}, count = nodes.length;
+    if (!count) return pos;
+    if (count === 1) {
+      pos[nodes[0].id] = { x: 0, y: 0 };
+      return pos;
+    }
+
+    nodes.forEach(function (node) {
+      var seed = graphSeed(node.id);
+      var angle = ((seed % 10000) / 10000) * Math.PI * 2;
+      var radius = 0.35 + (((seed >>> 13) % 10000) / 10000) * 0.65;
+      pos[node.id] = { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius, dx: 0, dy: 0 };
+    });
+
+    var linked = edges.filter(function (edge) {
+      return pos[edge.src] && pos[edge.dst] && edge.src !== edge.dst;
+    });
+    // 노드가 많으면 반복을 줄인다 — 전 쌍 계산이라 비용이 제곱으로 는다.
+    var rounds = count > 200 ? 120 : 300;
+    var k = 1.6 / Math.sqrt(count);          // 서로 편안한 거리
+    var step = 0.10;
+
+    for (var round = 0; round < rounds; round++) {
+      var cool = step * (1 - round / rounds);
+      nodes.forEach(function (node) { var p = pos[node.id]; p.dx = 0; p.dy = 0; });
+
+      for (var i = 0; i < count; i++) {
+        for (var j = i + 1; j < count; j++) {
+          var a = pos[nodes[i].id], b = pos[nodes[j].id];
+          var dx = a.x - b.x, dy = a.y - b.y;
+          var dist = Math.sqrt(dx * dx + dy * dy) || 0.0001;
+          var push = (k * k) / dist;
+          a.dx += (dx / dist) * push; a.dy += (dy / dist) * push;
+          b.dx -= (dx / dist) * push; b.dy -= (dy / dist) * push;
+        }
+      }
+      linked.forEach(function (edge) {
+        var a = pos[edge.src], b = pos[edge.dst];
+        var dx = a.x - b.x, dy = a.y - b.y;
+        var dist = Math.sqrt(dx * dx + dy * dy) || 0.0001;
+        var pull = (dist * dist) / k;
+        a.dx -= (dx / dist) * pull; a.dy -= (dy / dist) * pull;
+        b.dx += (dx / dist) * pull; b.dy += (dy / dist) * pull;
+      });
+      nodes.forEach(function (node) {
+        var p = pos[node.id];
+        // 가운데로 아주 약하게 당긴다 — 이어진 데 없는 문서가 끝없이 밀려나지 않게.
+        p.dx -= p.x * 0.35; p.dy -= p.y * 0.35;
+        var len = Math.sqrt(p.dx * p.dx + p.dy * p.dy) || 0.0001;
+        var move = Math.min(len, cool);
+        p.x += (p.dx / len) * move;
+        p.y += (p.dy / len) * move;
+      });
+    }
+
+    // 무게중심을 원점으로 옮기고 가장 먼 점이 1이 되게 맞춘다.
+    var mx = 0, my = 0;
+    nodes.forEach(function (node) { mx += pos[node.id].x; my += pos[node.id].y; });
+    mx /= count; my /= count;
+    var far = 0.0001;
+    nodes.forEach(function (node) {
+      var p = pos[node.id];
+      p.x -= mx; p.y -= my;
+      far = Math.max(far, Math.sqrt(p.x * p.x + p.y * p.y));
+    });
+    nodes.forEach(function (node) {
+      var p = pos[node.id];
+      pos[node.id] = { x: p.x / far, y: p.y / far };
+    });
+    return pos;
   }
 
   function drawGraph() {
@@ -818,9 +978,18 @@
       return;
     }
 
-    /* 원형 배치다 — 물리 시뮬레이션을 돌리지 않는다. 배치는 노드 순서(차수 내림차순)로
-     * 결정되므로 같은 그래프는 언제나 같은 그림이 된다. 조회 화면이 클라이언트에서
-     * 파생값을 다시 계산하지 않는다는 불변식과도 맞는다. */
+    /* **지도처럼 다룬다.** 배치는 워크스페이스마다 **한 번만** 계산해 고정하고, 문서를
+     * 고르면 점을 옮기는 대신 **화면(카메라)만** 그 점으로 움직인다.
+     *
+     * 종전에는 고른 문서를 가운데 두고 매번 방사형으로 다시 놓았는데, 고를 때마다 그림이
+     * 통째로 바뀌어 위화감이 컸다. 게다가 그 배치에서 뜻을 가진 것은 «안쪽 고리 = 직접
+     * 이어짐» 하나뿐이었고 고리 위의 각도와 점 사이 거리에는 **아무 뜻이 없었다** — 뜻도
+     * 없는 것이 선택할 때마다 움직이고 있었던 셈이다.
+     *
+     * 고정 배치에서는 이어진 문서끼리 가까이 모이므로 **거리에 처음으로 뜻이 생긴다.**
+     * 「이 문서의 이웃이 누구인가」는 아무것도 움직이지 않고 **강조**로 보여 준다. */
+    var layout = graphLayoutFor(nodes, graphData.edges || []);
+
     ctx.save();
     ctx.translate(graphView.ox, graphView.oy);
     ctx.scale(graphView.scale, graphView.scale);
@@ -830,92 +999,74 @@
     var padTop = 62, padBottom = 34;
     var band = Math.max(60, h - padTop - padBottom);
     var cx = w / 2, cy = padTop + band / 2;
-    /* 라벨을 고리 **바깥**에 두므로 그만큼 자리를 비운다. 노드 바로 위에 두던 종전 방식은
-     * 상자가 작아져 고리가 줄면 이웃 노드의 글자와 겹쳤다. */
+    /* 라벨을 점 옆에 두므로 그만큼 자리를 비운다. */
     var labelRoom = Math.min(160, Math.max(60, w * 0.2));
-    var rOuter = Math.max(30, Math.min(w / 2 - labelRoom, band / 2 - 14));
+    var span = Math.max(30, Math.min(w / 2 - labelRoom, band / 2 - 14));
 
-    /* **방사형 배치.** 고른 문서(없으면 연결이 가장 많은 문서)를 가운데 두고, 그 문서와
-     * 직접 이어진 문서를 안쪽 고리에, 나머지를 바깥 고리에 놓는다. 다각형 한 겹으로
-     * 늘어놓던 종전 배치는 어느 문서가 중심인지 그림이 말해 주지 않았다.
-     *
-     * 중심 선택도 이웃 판정도 **서버가 준 값**(연결 수 · 엣지)을 읽기만 한다. 화면이
-     * 중심성을 다시 계산하지 않는다는 불변식(§4.11)을 지킨다. */
-    var center = null;
-    nodes.forEach(function (node) { if (node.id === focusedDocId) center = node; });
-    if (!center) center = nodes[0];
-
-    var linked = {};
-    (graphData.edges || []).forEach(function (edge) {
-      if (edge.src === center.id) linked[edge.dst] = true;
-      else if (edge.dst === center.id) linked[edge.src] = true;
-    });
-
-    var inner = [], outer = [];
-    nodes.forEach(function (node) {
-      if (node.id === center.id) return;
-      (linked[node.id] ? inner : outer).push(node);
-    });
-    var rInner = inner.length ? rOuter * 0.52 : 0;
-
+    /* 배치는 -1~1 의 추상 좌표로 저장돼 있다. 상자 크기에 맞추는 것은 **그리는 단계**의
+     * 일이라, 창을 줄였다 늘려도 점들의 상대 위치는 그대로다. */
     var pos = {};
-    pos[center.id] = {
-      x: cx, y: cy, angle: Math.PI / 2, radius: 6 + Math.min(6, center.degree), hub: true
-    };
-    function placeRing(ring, radius) {
-      ring.forEach(function (node, i) {
-        var angle = (i / ring.length) * Math.PI * 2 - Math.PI / 2;
-        pos[node.id] = {
-          x: cx + Math.cos(angle) * radius,
-          y: cy + Math.sin(angle) * radius,
-          angle: angle,
-          radius: 5 + Math.min(5, node.degree)
-        };
+    nodes.forEach(function (node) {
+      var at = layout.pos[node.id];
+      if (!at) return;
+      pos[node.id] = {
+        x: cx + at.x * span,
+        y: cy + at.y * span,
+        radius: 5 + Math.min(6, node.degree || 0)
+      };
+    });
+
+    var near = {};
+    if (focusedDocId) {
+      (graphData.edges || []).forEach(function (edge) {
+        if (edge.src === focusedDocId) near[edge.dst] = true;
+        else if (edge.dst === focusedDocId) near[edge.src] = true;
       });
     }
-    placeRing(inner, rInner);
-    placeRing(outer, rOuter);
 
-    /* 선은 **곡선**이다. 직선으로 이으면 지름을 가로지르는 선이 수직·수평 막대처럼 보여
-     * 그림이 거칠어진다. 가운데에서 바깥으로 휘게 해 선들이 중심에서 뭉치지 않게 한다. */
+    /* 선은 **직선**이다. 곡선을 쓰던 것은 방사형에서 지름을 가로지르는 선이 막대처럼
+     * 보였기 때문인데, 고정 배치에서는 그 문제가 없고 직선이 관계를 더 곧게 읽힌다.
+     * 고른 문서에 닿는 선은 먼저 흐린 선을 다 그린 뒤 그 위에 덧그린다. */
+    var lit = [];
+    ctx.lineWidth = 1;
     ctx.strokeStyle = cssv("--line-2");
-    ctx.lineWidth = 1.2;
     (graphData.edges || []).forEach(function (edge) {
       var a = pos[edge.src], b = pos[edge.dst];
       if (!a || !b) return;
-      var dx = b.x - a.x, dy = b.y - a.y;
-      var len = Math.sqrt(dx * dx + dy * dy) || 1;
-      var nx = -dy / len, ny = dx / len;
-      var mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
-      if ((mx - cx) * nx + (my - cy) * ny < 0) { nx = -nx; ny = -ny; }
-      var bow = Math.min(28, len * 0.16);
+      if (focusedDocId && (edge.src === focusedDocId || edge.dst === focusedDocId)) {
+        lit.push([a, b]);
+        return;
+      }
       ctx.beginPath();
       ctx.moveTo(a.x, a.y);
-      ctx.quadraticCurveTo(mx + nx * bow, my + ny * bow, b.x, b.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+    });
+    ctx.lineWidth = 1.8;
+    ctx.strokeStyle = cssv("--accent");
+    lit.forEach(function (pair) {
+      ctx.beginPath();
+      ctx.moveTo(pair[0].x, pair[0].y);
+      ctx.lineTo(pair[1].x, pair[1].y);
       ctx.stroke();
     });
 
-    /* 노드 사이 간격이 글자 높이보다 좁아지면 라벨은 어떻게 놓아도 겹친다. 그때는
-     * 라벨을 접고 **고른 문서 하나만** 남긴다 — 읽히지 않는 글자 더미보다 낫다. */
-    var ring = Math.max(1, outer.length || inner.length);
-    var gap = (2 * Math.PI * rOuter) / ring;
-    var fs = gap < 17 ? 10 : 11.5;
-    var showLabels = gap >= fs + 3;
-    ctx.font = fs + "px " + cssv("--font-ui");
-    ctx.textBaseline = "middle";
-
-    // 고른 문서를 맨 나중에 그려 다른 노드에 덮이지 않게 한다.
-    var order = nodes.slice().sort(function (a, b) {
-      return (a.id === focusedDocId ? 1 : 0) - (b.id === focusedDocId ? 1 : 0);
+    /* 고른 문서 → 이웃 → 나머지 순으로 그린다. 나중에 그린 것이 위에 오므로 순서를
+     * 뒤집어 담고, 라벨도 같은 우선순위로 자리를 잡는다. */
+    var ranked = nodes.slice().sort(function (a, b) {
+      return graphRank(a, near) - graphRank(b, near);
     });
+
     graphHits = [];
-    order.forEach(function (node) {
+    ranked.forEach(function (node) {
       var p = pos[node.id];
+      if (!p) return;
       var focused = node.id === focusedDocId;
       var rad = p.radius + (focused ? 2 : 0);
       ctx.beginPath();
       ctx.arc(p.x, p.y, rad, 0, Math.PI * 2);
-      ctx.fillStyle = focused ? cssv("--warn") : cssv("--accent");
+      ctx.fillStyle = focused ? cssv("--warn")
+        : (!focusedDocId || near[node.id]) ? cssv("--accent") : cssv("--line-2");
       ctx.fill();
       if (focused) {
         ctx.lineWidth = 3;
@@ -924,23 +1075,91 @@
       }
       // 클릭 판정에 쓸 자리. 그린 그대로를 담으므로 그림과 어긋날 수 없다.
       graphHits.push({ id: node.id, x: p.x, y: p.y, r: rad + 6 });
+    });
 
-      if (!showLabels && !focused && !p.hub) return;
-      if (p.hub) {
-        // 가운데 노드는 바깥으로 밀 방향이 없다. 점 아래에 가운데 정렬로 적는다.
-        ctx.textAlign = "center";
-        ctx.fillStyle = focused ? cssv("--warn") : cssv("--ink");
-        ctx.fillText(ellipsize(ctx, node.label, rOuter * 1.4), p.x, p.y + rad + 10);
-        return;
-      }
-      var toRight = Math.cos(p.angle) >= 0;
-      var lx = p.x + Math.cos(p.angle) * (rad + 6);
-      var ly = p.y + Math.sin(p.angle) * (rad + 6);
+    /* 라벨은 **겹치면 접는다.** 고른 문서와 그 이웃이 먼저 자리를 잡고, 남은 자리에
+     * 나머지가 들어간다 — 읽히지 않는 글자 더미보다 몇 개를 접는 편이 낫다. */
+    ctx.textBaseline = "middle";
+    ctx.font = "11.5px " + cssv("--font-ui");
+    var taken = [];
+    ranked.slice().reverse().forEach(function (node) {
+      var p = pos[node.id];
+      if (!p) return;
+      var focused = node.id === focusedDocId;
+      var rad = p.radius + (focused ? 2 : 0);
+      var toRight = p.x <= cx;
+      var lx = p.x + (toRight ? rad + 6 : -(rad + 6));
+      var room = toRight ? w - lx - 6 : lx - 6;
+      var text = ellipsize(ctx, node.label, Math.min(room, 150));
+      if (!text) return;
+      var tw = ctx.measureText(text).width;
+      var box = {
+        x1: toRight ? lx : lx - tw, y1: p.y - 7,
+        x2: toRight ? lx + tw : lx, y2: p.y + 7
+      };
+      var hidden = taken.some(function (other) {
+        return box.x1 < other.x2 && other.x1 < box.x2
+            && box.y1 < other.y2 && other.y1 < box.y2;
+      });
+      if (hidden && !focused) return;
+      taken.push(box);
       ctx.textAlign = toRight ? "left" : "right";
-      ctx.fillStyle = focused ? cssv("--warn") : cssv("--ink-2");
-      ctx.fillText(ellipsize(ctx, node.label, toRight ? w - lx - 6 : lx - 6), lx, ly);
+      ctx.fillStyle = focused ? cssv("--warn")
+        : (!focusedDocId || near[node.id]) ? cssv("--ink") : cssv("--ink-3");
+      ctx.fillText(text, lx, p.y);
     });
     ctx.restore();
+
+    /* 고른 문서가 바뀌었으면 **점을 옮기는 대신 화면을 옮긴다.** 지도에서 한 곳을 찾으면
+     * 그 자리가 가운데로 오되 다른 곳들은 제자리를 지키는 것과 같다. */
+    if (focusedDocId !== graphCentered) {
+      graphCentered = focusedDocId;
+      if (focusedDocId && pos[focusedDocId]) centerCameraOn(pos[focusedDocId], cx, cy);
+    }
+  }
+
+  /* 그리는 차례 — 작을수록 먼저(=아래에) 그린다. */
+  function graphRank(node, near) {
+    if (node.id === focusedDocId) return 2;
+    return near[node.id] ? 1 : 0;
+  }
+
+  /* 지금 화면 가운데에 둔 문서. 「바뀌었는가」를 이 값으로 판정한다. */
+  var graphCentered = null;
+  var graphPan = null;
+
+  /* 고른 점이 그림 한가운데 오도록 `graphView` 의 이동값을 맞춘다. **배치는 건드리지
+   * 않는다** — 확대 배율도 그대로 두므로 확대해 둔 채로 골라도 그 배율이 유지된다. */
+  function centerCameraOn(point, cx, cy) {
+    var to = {
+      ox: cx - point.x * graphView.scale,
+      oy: cy - point.y * graphView.scale
+    };
+    var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduce) {
+      graphView.ox = to.ox; graphView.oy = to.oy;
+      drawGraph();
+      return;
+    }
+    graphPan = {
+      from: { ox: graphView.ox, oy: graphView.oy },
+      to: to,
+      start: (window.performance || Date).now()
+    };
+    requestAnimationFrame(stepCameraPan);
+  }
+
+  function stepCameraPan() {
+    if (!graphPan) return;
+    var elapsed = (window.performance || Date).now() - graphPan.start;
+    var t = Math.min(1, elapsed / 360);
+    var ease = 1 - Math.pow(1 - t, 3);
+    graphView.ox = graphPan.from.ox + (graphPan.to.ox - graphPan.from.ox) * ease;
+    graphView.oy = graphPan.from.oy + (graphPan.to.oy - graphPan.from.oy) * ease;
+    var done = t >= 1;
+    if (done) graphPan = null;
+    drawGraph();
+    if (!done) requestAnimationFrame(stepCameraPan);
   }
 
   /* 마지막으로 그린 노드의 자리. 캔버스에는 클릭할 요소가 없으므로 좌표로 직접 맞힌다. */
@@ -1180,7 +1399,22 @@
       drawGraph();
     });
 
-    $("#wsBtn").addEventListener("click", function () { show("settings"); });
+    $("#wsBtn").addEventListener("click", function (event) {
+      event.stopPropagation();   // 아래 「바깥 클릭」 감시가 방금 연 메뉴를 곧바로 닫지 않게 한다.
+      toggleWorkspaceMenu();
+    });
+    /* 여닫는 방식은 「?」 도움말과 같다 — 바깥을 누르거나 Esc 면 닫힌다.
+     * (`?` 는 호버로도 열리지만 이 메뉴는 클릭·키보드로만 연다.) */
+    document.addEventListener("click", function (event) {
+      if (event.target.closest && event.target.closest(".wsmenu")) return;
+      closeWorkspaceMenu();
+    });
+    document.addEventListener("keydown", function (event) {
+      if (event.key !== "Escape") return;
+      if ($("#wsPop").hidden) return;
+      closeWorkspaceMenu();
+      $("#wsBtn").focus();
+    });
     $("#searchBtn").addEventListener("click", search);
     $("#q").addEventListener("keydown", function (e) { if (e.key === "Enter") search(); });
     $("#engine").addEventListener("change", renderEffectiveModel);
@@ -1195,8 +1429,16 @@
     /* 본문의 「바로가기」 — 브라우저는 `file://` 로 갈 수 없으므로 서버가 대신 폴더를 연다.
      * 본문은 문서를 열 때마다 새로 만들어지므로 버튼 하나하나에 붙이지 않고 위임한다. */
     $("#docBody").addEventListener("click", function (event) {
+      if (!state.current) return;
+      /* 「관련 문서」 링크 — 목록에서 고른 것과 **같은 경로**로 연다. 그림·목록·본문이
+       * 서로 다른 문서를 가리키는 상태를 만들지 않는다(그래프 점 클릭과 같은 규칙). */
+      var wiki = event.target.closest(".wikilink");
+      if (wiki) {
+        openWikiByPath(wiki.dataset.path, wiki.textContent);
+        return;
+      }
       var button = event.target.closest(".reveal");
-      if (!button || !state.current) return;
+      if (!button) return;
       api("/api/workspaces/" + state.current.id + "/reveal",
           { method: "POST", body: { path: button.dataset.path } })
         .then(function (data) {
@@ -1302,6 +1544,8 @@
     gcv.addEventListener("dblclick", function (event) {
       if (nodeAt(event)) return;
       graphView = { scale: 1, ox: 0, oy: 0 };
+      graphPan = null;
+      graphCentered = focusedDocId;   // 전체 보기로 되돌린 화면을 곧바로 다시 옮기지 않는다
       drawGraph();
     });
 

@@ -73,6 +73,36 @@ button,input,select,textarea{font:inherit;color:inherit}
 .ws:hover{border-color:var(--line-2)}
 .ws .cap{font-size:10.5px;font-weight:500;color:var(--ink-3);display:block;letter-spacing:.06em}
 .ws svg{flex:none;color:var(--ink-3)}
+.ws[aria-expanded="true"]{border-color:var(--line-2);background:var(--surface)}
+.ws[aria-expanded="true"] svg{transform:rotate(180deg)}
+.ws svg{transition:transform .12s}
+@media (prefers-reduced-motion:reduce){.ws svg{transition:none}}
+
+/* 워크스페이스 드롭다운. 사이드바 폭에 맞춰 버튼 바로 아래에 겹쳐 띄운다 — 사이드바가
+   `display:flex` 라 흐름에 두면 아래 메뉴가 밀려 내려간다. */
+.wsmenu{position:relative}
+.wsmenu-pop{
+  position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:6;
+  background:var(--surface);border:1px solid var(--line-2);border-radius:var(--r);
+  padding:4px;box-shadow:0 6px 18px rgba(0,0,0,.16);
+  display:flex;flex-direction:column;gap:1px;
+}
+/* 워크스페이스가 늘어도 메뉴가 화면을 넘지 않는다. 스크롤은 **목록에만** 걸고
+   구분선과 「관리…」 줄은 밖에 두어 언제나 보이게 한다. */
+.wsmenu-list{max-height:min(46vh,320px);overflow-y:auto;display:flex;flex-direction:column;gap:1px}
+.wsmenu-item{
+  display:flex;align-items:center;gap:7px;width:100%;
+  background:none;border:0;border-radius:var(--r);padding:7px 8px;
+  font-size:13px;color:var(--ink-2);cursor:pointer;text-align:left;
+}
+.wsmenu-item:hover,.wsmenu-item:focus-visible{background:var(--surface-2);color:var(--ink)}
+.wsmenu-item[aria-checked="true"]{color:var(--ink);font-weight:500}
+/* 체크 자리는 고른 항목이 아니어도 폭을 차지한다 — 그러지 않으면 활성 워크스페이스만
+   글자가 오른쪽으로 밀려 줄이 들쭉날쭉해진다. */
+.wsmenu-item .ck{flex:none;width:13px;color:var(--accent)}
+.wsmenu-item .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wsmenu-sep{height:1px;background:var(--line);margin:4px 2px}
+.wsmenu-empty{padding:8px;font-size:12px;color:var(--ink-3);line-height:1.5}
 nav{display:flex;flex-direction:column;gap:1px}
 .nav-item{
   display:flex;align-items:center;gap:9px;width:100%;
@@ -192,11 +222,20 @@ label.f{display:block;font-size:12px;font-weight:500;color:var(--ink-2);margin-b
 .rel a:hover{text-decoration:underline}
 /* 「원문」 섹션의 바로가기. 브라우저는 `file://` 로 갈 수 없어 서버가 대신 폴더를 여는데,
    그 자리가 링크처럼 보여야 눌러 볼 마음이 든다 — 버튼이지만 링크의 옷을 입힌다. */
-.doc .reveal{
+/* 본문 안에서 **누를 수 있는 글자** 둘 — 「원본 파일 열기」와 「관련 문서」 링크.
+   둘 다 링크처럼 보여야 하지만 `<a>` 가 아니다(하나는 폴더 열기, 하나는 화면 안에서
+   문서 열기라 주소로 갈 곳이 없다). 모양을 한 규칙으로 둔다. */
+.doc .reveal,.doc .wikilink{
   background:none;border:0;padding:0;font:inherit;color:var(--accent);cursor:pointer;
+  text-align:left;
 }
-.doc .reveal:hover{text-decoration:underline}
+.doc .reveal:hover,.doc .wikilink:hover{text-decoration:underline}
+/* 「관련 문서」는 **한 줄로 유지한다**. 제목과 근거가 길어 두세 줄로 접히면 항목 사이
+   경계가 흐려져 몇 건인지 눈으로 세기 어렵다. 넘치는 만큼은 `…` 로 줄인다.
+   줄임은 **안쪽 상자**(`.rline`)가 맡는다 — `li` 에 `overflow` 를 걸면 목록 점이 함께
+   잘린다(마커는 `li` 상자 밖에 그려진다). 목록 점은 「핵심 포인트」와 같은 것을 쓴다. */
 .rel li{font-size:12.5px}
+.rel .rline{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 canvas{display:block;width:100%;height:100%}
 .graphwrap{flex:1;min-height:320px;position:relative}
 /* 조작 방법 한 줄. 「동그라미 크기」 설명은 위 안내문(`graph-note`)이 문장으로 말한다 —
@@ -292,6 +331,9 @@ details.adv[open] summary .caret{transform:rotate(90deg)}
 .notice{background:var(--warn-soft);border:1px solid var(--warn);border-radius:var(--r);padding:11px 13px;font-size:12.5px;color:var(--ink);margin-bottom:12px}
 .notice b{display:block;margin-bottom:5px;color:var(--warn)}
 .notice ul{margin:0;padding-left:17px}
+/* 목록도 같은 이유로 상한을 둔다 — 없으면 설정 화면이 워크스페이스 수만큼 길어져
+   아래의 「새 워크스페이스 추가」가 화면 밖으로 밀려난다. */
+.wslist{max-height:min(44vh,300px);overflow-y:auto}
 .wsrow{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--line)}
 .wsrow:last-child{border-bottom:0}
 .wsrow .p{font-family:var(--font-mono);font-size:11px;color:var(--ink-3);word-break:break-all}
@@ -305,6 +347,26 @@ details.adv[open] summary .caret{transform:rotate(90deg)}
   display:inline-block;border:1px solid transparent;border-radius:var(--r);
   background:var(--ok-soft);color:var(--ok);white-space:nowrap;
 }
+/* 「새 워크스페이스 추가」 상자. 목록과 **바탕색이 다르다** — 실선 하나로 나누면 행
+   사이 구분선과 구별되지 않는다. 카드 안쪽 여백만큼 좌우로 넓혀 목록과 층이 갈리게 한다. */
+.wsadd{
+  background:var(--surface-2);border:1px solid var(--line);border-radius:var(--r);
+  margin:16px -4px 0;padding:12px 13px;
+}
+.sub-h{font-size:12.5px;font-weight:600;color:var(--ink-2);margin:0 0 10px}
+/* 이름표는 입력칸 **왼쪽에 세로 가운데**로 놓는다. 세 줄의 이름표 폭을 같게 고정해야
+   입력칸이 같은 자리에서 시작하고, 남는 폭은 전부 입력칸이 갖는다(`min-width:0` 을
+   풀지 않으면 입력 요소의 기본 최소 폭이 버텨 상자 끝까지 닿지 않는다). */
+.frow{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.frow:last-of-type{margin-bottom:10px}
+.frow>.f{flex:none;width:96px;margin-bottom:0;white-space:nowrap}
+.frow>.in,.frow>.frow-in{flex:1 1 auto;min-width:0}
+/* 경로 줄에서는 「찾아보기」를 뺀 나머지 전부가 입력칸이다. 버튼은 좌우 여백만 줄여
+   폭을 조금 덜 차지하게 한다 — 테두리·색 같은 모양은 다른 버튼과 같게 둔다. */
+.frow-in{display:flex;gap:8px}
+.frow-in .in{flex:1 1 auto;min-width:0}
+.frow-in .btn{padding-left:8px;padding-right:8px}
+
 
 .empty{text-align:center;padding:38px 20px;color:var(--ink-3)}
 .empty p{margin:0 0 10px;font-size:13px}

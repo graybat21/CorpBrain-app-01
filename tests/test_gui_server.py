@@ -1733,27 +1733,48 @@ def test_graph_redraws_when_its_box_changes_size() -> None:
     assert "ResizeObserver" in js
 
 
-def test_graph_is_radial_and_clickable() -> None:
-    """그래프는 **방사형**이고 점을 누르면 그 문서가 열린다.
+def test_graph_layout_is_fixed_and_the_camera_moves_instead() -> None:
+    """그래프는 **지도처럼** 다룬다 — 배치는 고정이고 고르면 화면이 움직인다 (스펙 §4.8).
 
-    다각형 한 겹으로 늘어놓던 배치는 어느 문서가 중심인지 그림이 말해 주지 않았고, 지름을
-    가로지르는 직선이 막대처럼 보였다. 가운데·안쪽 고리·바깥 고리로 나누고 선을 곡선으로
-    그린다.
+    방사형 배치는 고를 때마다 전체를 다시 놓아 그림이 통째로 바뀌었다. 게다가 그 배치에서
+    뜻을 가진 것은 「안쪽 고리 = 직접 이어짐」 하나뿐이었고, 고리 위의 각도와 점 사이 거리에는
+    아무 뜻이 없었다 — 뜻도 없는 것이 선택할 때마다 움직이고 있었던 셈이다.
 
-    중심 선택도 이웃 판정도 **서버가 준 값**(연결 수·엣지)을 읽기만 한다 — 화면이 중심성을
-    다시 계산하지 않는다는 불변식(§4.11)을 지킨다.
+    고정 배치에서는 이어진 문서끼리 가까이 모이므로 거리에 뜻이 생기고, 「이 문서의 이웃이
+    누구인가」는 **아무것도 움직이지 않고** 강조로 답한다.
 
-    클릭은 **목록에서 고른 것과 같은 경로**를 탄다(`openWikiByPath`). 그림과 목록이 서로 다른
-    문서를 가리키는 상태를 만들지 않는다.
+    클릭은 종전대로 **목록에서 고른 것과 같은 경로**를 탄다(`openWikiByPath`).
     """
     js = (gui_server.STATIC_DIR / "app.js").read_text("utf-8")
 
-    assert "placeRing(inner, rInner)" in js and "placeRing(outer, rOuter)" in js
-    assert "quadraticCurveTo" in js                      # 곡선 연결
+    assert "function computeGraphLayout(nodes, edges)" in js
+    assert "placeRing" not in js and "quadraticCurveTo" not in js   # 방사형·곡선의 잔재
+    # 고르면 배치가 아니라 카메라가 움직인다.
+    assert "function centerCameraOn(point, cx, cy)" in js
+    assert "if (focusedDocId !== graphCentered)" in js
     assert "function openGraphNode(docId)" in js
     assert "openWikiByPath(match.path" in js             # 목록 클릭과 같은 경로
     # 클릭 판정 좌표는 **그린 그대로** 담는다 — 그림과 어긋날 수 없다.
     assert "graphHits.push({ id: node.id" in js
+
+
+def test_graph_layout_is_deterministic_and_cached() -> None:
+    """같은 문서 집합이면 **언제 열어도 같은 지도**여야 한다.
+
+    무작위 시작점을 쓰면 열 때마다 지형이 달라져, 되돌리려던 「고를 때마다 바뀐다」가 이름만
+    바꿔 되살아난다. 시작 위치는 `doc_id` 에서 만든 해시로 정한다.
+
+    배치는 그래프가 바뀔 때만 다시 만든다 — 매번 계산하면 고정이라는 말이 무의미하다.
+    """
+    js = (gui_server.STATIC_DIR / "app.js").read_text("utf-8")
+
+    assert "Math.random" not in js                       # 그림 어디에도 무작위가 없다
+    assert "function graphSeed(text)" in js
+    assert "if (graphLayout && graphLayout.key === key) return graphLayout;" in js
+    # 워크스페이스를 바꾸거나 새 그래프를 받으면 지도를 다시 만든다.
+    assert js.count("graphLayout = null;") >= 2
+    # 모션을 줄이도록 설정한 환경에서는 카메라를 애니메이션 없이 옮긴다.
+    assert '"(prefers-reduced-motion: reduce)"' in js
 
 
 def test_scan_options_are_restored_into_the_form() -> None:
@@ -1818,15 +1839,18 @@ def test_graph_zooms_without_recomputing_the_layout() -> None:
     assert "휠로 확대·축소" in html
 
 
-def test_graph_labels_fold_when_the_circle_gets_small() -> None:
-    """노드 간격이 글자 높이보다 좁아지면 라벨을 접고 고른 문서만 남긴다.
+def test_graph_labels_fold_when_they_would_overlap() -> None:
+    """라벨은 **겹치면 접는다.** 읽히지 않는 글자 더미보다 몇 개를 접는 편이 낫다.
 
-    라벨을 노드 바로 위에 중앙 정렬로 놓던 종전 방식은 원이 작아질수록 이웃 글자와
-    겹쳤다. 이제 원 **바깥**으로 밀어 좌·우 정렬하고, 그래도 좁으면 접는다.
+    라벨을 노드 바로 위에 중앙 정렬로 놓던 종전 방식은 그림이 작아질수록 이웃 글자와
+    겹쳤다. 고리 간격으로 일괄 판정하던 방식도 고정 배치에는 맞지 않는다(고리가 없다).
+    이제 **자리를 실제로 겹쳐 보고** 정하며, 고른 문서와 그 이웃이 먼저 자리를 잡는다.
+    고른 문서의 라벨은 겹쳐도 접지 않는다 — 그 화면의 목적이기 때문이다.
     """
     js = (gui_server.STATIC_DIR / "app.js").read_text("utf-8")
 
-    assert "var showLabels = gap >=" in js
+    assert "if (hidden && !focused) return;" in js
+    assert "taken.push(box)" in js
     assert "function ellipsize(" in js
 
 
@@ -1913,3 +1937,141 @@ def test_doctor_block_does_not_repeat_the_model_names() -> None:
     js = (gui_server.STATIC_DIR / "app.js").read_text("utf-8")
 
     assert "점검한 모델:" not in js
+
+
+def test_workspace_button_opens_a_menu_and_is_never_dead() -> None:
+    """사이드바 워크스페이스 버튼은 **약속한 대로 메뉴를 연다.**
+
+    화살표와 `aria-haspopup` 이 「팝업이 열린다」고 알리는데(스크린리더도 그렇게 읽는다)
+    실제로는 설정 화면으로 점프하고 있었다. 스펙 §4.8 도 사이드바 구성을 「워크스페이스
+    **선택** → 메뉴 3개 → 하단 설정」으로 적는다.
+
+    함께 고정하는 것:
+
+    - **워크스페이스가 하나뿐이어도 버튼이 살아 있다.** 예전에는 2개 미만이면 `disabled`
+      였다 — 사이드바에서 가장 눈에 띄는 컨트롤이 죽어 있었고, 새 워크스페이스를 만들려면
+      그 길이 설정 화면에 있다는 것을 사용자가 스스로 알아내야 했다.
+    - **여닫기는 「?」 도움말과 같은 관용구**다 — 바깥 클릭·Esc 로 닫힌다.
+    """
+    html = (gui_server.STATIC_DIR / "index.html").read_text("utf-8")
+    js = (gui_server.STATIC_DIR / "app.js").read_text("utf-8")
+
+    assert 'id="wsPop"' in html and 'aria-controls="wsPop"' in html
+    assert 'aria-haspopup="menu"' in html
+    # 「눌러도 설정으로 갈 뿐」이던 옛 배선이 남아 있지 않다.
+    assert '$("#wsBtn").addEventListener("click", function () { show("settings"); });' not in js
+    assert "toggleWorkspaceMenu()" in js
+    # 목록이 비거나 하나뿐이라고 버튼을 잠그지 않는다.
+    assert '$("#wsBtn").disabled' not in js
+    assert 'if ($("#wsPop").hidden) return;' in js   # Esc
+
+
+def test_workspace_menu_switches_and_leads_to_management_in_one_line() -> None:
+    """드롭다운은 **전환만** 하고, 맨 아래 한 줄이 관리 화면으로 데려간다.
+
+    설정 화면의 추가 폼이 워크스페이스 카드 안에 함께 있어 「관리」와 「추가」의 목적지가
+    같으므로 두 줄로 나누지 않는다. 목록이 비었을 때만 글자를 「추가」로 바꾼다 — 관리할
+    것이 없는데 「관리」라고 적지 않는다.
+
+    고르는 자리가 둘이 되지 않도록 설정 화면의 「열기」 버튼은 뗐다. 그 화면은 어느 것이
+    활성인지 읽기 전용으로만 보여 준다.
+    """
+    js = (gui_server.STATIC_DIR / "app.js").read_text("utf-8")
+
+    assert '"워크스페이스 관리…" : "워크스페이스 추가…"' in js
+    # 고르면 그 워크스페이스로 갈아타고 대시보드로 간다.
+    assert "useWorkspace(ws);" in js and 'show("dash");' in js
+    # 설정 화면에는 전환 버튼이 없다 — 「활성」 표시만 남는다.
+    assert 'el("button", { class: "btn" }, "열기")' not in js
+    assert '"ws-active" }, "활성"' in js
+
+
+def test_workspace_lists_do_not_grow_without_bound() -> None:
+    """워크스페이스가 늘어도 목록이 화면을 밀어내지 않는다.
+
+    사이드바 드롭다운과 설정 카드 **둘 다** 상한이 없어, 워크스페이스 수만큼 세로로
+    끝없이 늘어나는 구조였다. 스크롤은 **목록에만** 걸고, 드롭다운의 「관리…」 줄은
+    그 밖에 두어 몇 개가 등록돼 있든 늘 보이게 한다.
+    """
+    css = (gui_server.STATIC_DIR / "app.css").read_text("utf-8")
+    js = (gui_server.STATIC_DIR / "app.js").read_text("utf-8")
+
+    assert ".wsmenu-list{max-height:" in css and "overflow-y:auto" in css
+    assert ".wslist{max-height:" in css
+    # 항목은 스크롤 상자 안에, 구분선과 「관리…」 줄은 그 밖에 붙는다.
+    assert "list.appendChild(item);" in js
+    assert 'pop.appendChild(el("div", { class: "wsmenu-sep" }));' in js
+
+
+def test_add_workspace_form_is_visibly_separate_from_the_list() -> None:
+    """설정의 「새 워크스페이스 추가」가 목록의 **다음 행처럼 보이지 않는다.**
+
+    예전에는 `border-top` 실선 한 줄로만 나뉘어 있었는데, `.wsrow` 의 행 구분선과 굵기·
+    색이 같아 경계가 읽히지 않았다. 바탕색이 다른 상자(`--surface-2`)와 소제목으로 가른다.
+    """
+    css = (gui_server.STATIC_DIR / "app.css").read_text("utf-8")
+    html = (gui_server.STATIC_DIR / "index.html").read_text("utf-8")
+
+    assert 'class="wsadd"' in html
+    assert '<h3 class="sub-h">새 워크스페이스 추가</h3>' in html
+    assert ".wsadd{" in css and "background:var(--surface-2)" in css.split(".wsadd{")[1]
+    # 실선 한 줄로만 나누던 인라인 style 은 남아 있지 않다.
+    assert 'style="border-top:1px solid var(--line)' not in html
+
+
+
+def test_add_workspace_labels_sit_beside_their_inputs() -> None:
+    """이름표가 입력칸 **왼쪽에 세로 가운데**로 놓이고, 입력칸은 상자 끝까지 닿는다.
+
+    이름표 폭을 고정해야 세 줄의 입력칸이 같은 자리에서 시작한다. 폭은 `width:100%` 만으로는
+    늘어나지 않는다 — flex 줄에서는 `flex:1 1 auto` 로 늘리고 `min-width:0` 으로 입력
+    요소의 기본 최소 폭을 풀어야 한다. 경로 줄에서는 「찾아보기」를 뺀 나머지가 입력칸이다.
+    """
+    css = (gui_server.STATIC_DIR / "app.css").read_text("utf-8")
+
+    assert ".frow{display:flex;align-items:center" in css
+    assert ".frow>.f{flex:none;width:96px;margin-bottom:0" in css
+    assert ".frow>.in,.frow>.frow-in{flex:1 1 auto;min-width:0}" in css
+    assert ".frow-in .in{flex:1 1 auto;min-width:0}" in css
+
+
+def test_folder_inputs_do_not_say_absolute_path() -> None:
+    """폴더 입력칸이 「절대경로」라고 적지 않는다.
+
+    화면 문구는 프로그래머가 아닌 사용자를 기준으로 쓴다. 「절대경로」는 무엇을 적어야
+    하는지 알려 주지 않으므로, 바로 옆에 있는 **할 수 있는 일**(「찾아보기」)로 안내한다.
+    """
+    html = (gui_server.STATIC_DIR / "index.html").read_text("utf-8")
+
+    assert "절대경로" not in html
+    assert html.count('placeholder="폴더를 선택하세요"') == 2
+
+
+def test_sidebar_menu_starts_with_the_dashboard() -> None:
+    """사이드바 차례는 **대시보드 → 탐색 → 스캔** 이다.
+
+    첫 화면이 대시보드(`show(list.length ? "dash" : "settings")`)이므로 강조 표시도 거기
+    붙는다 — 워크스페이스 목록을 받아오기 전까지 엉뚱한 항목이 켜져 보이지 않게 한다.
+    """
+    html = (gui_server.STATIC_DIR / "index.html").read_text("utf-8")
+    nav = html.split("<nav aria-label=")[1].split("</nav>")[0]
+    order = [chunk.split('"')[0] for chunk in nav.split('data-view="')[1:]]
+
+    assert order == ["dash", "explore", "scan"]
+    assert 'data-view="dash" aria-current="page"' in html
+
+
+def test_related_items_keep_their_bullet_marker() -> None:
+    """「관련 문서」도 「핵심 포인트」와 같은 목록 점을 갖는다.
+
+    한 줄 유지를 위해 `li` 에 `overflow:hidden` 을 걸었더니 **목록 점이 사라졌다** —
+    마커는 `li` 상자 **밖**에 그려지므로 함께 잘린다. 줄임은 안쪽 상자(`.rline`)로 옮기고
+    `li` 는 기본 마커를 그대로 쓴다.
+    """
+    css = (gui_server.STATIC_DIR / "app.css").read_text("utf-8")
+
+    assert ".rel li{font-size:12.5px}" in css          # `li` 에 overflow 를 걸지 않는다
+    line = css.split(".rel .rline{")[1].split("}")[0]
+    assert "overflow:hidden" in line and "text-overflow:ellipsis" in line
+    # 목록 점은 「핵심 포인트」와 같은 규칙에서 온다 — 따로 끄지 않는다.
+    assert "list-style" not in css.split(".rel li{")[1].split("}")[0]

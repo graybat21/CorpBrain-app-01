@@ -15,23 +15,30 @@
   <aside class="side">
     <div class="brand"><span class="dot"></span>CorpBrain</div>
 
-    <button class="ws" id="wsBtn" aria-haspopup="true">
-      <span><span class="cap">워크스페이스</span><span id="wsName">불러오는 중</span></span>
-      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
-    </button>
+    <!-- 화살표와 `aria-haspopup` 이 「메뉴가 열린다」고 약속하므로 실제로 메뉴를 연다.
+         고르면 그 워크스페이스로 갈아타고 대시보드로 간다(스펙 §4.8 「워크스페이스 선택」).
+         목록이 비거나 하나뿐이어도 버튼은 살아 있다 — 그때가 「추가」로 가는 길이 가장
+         필요한 순간이다. -->
+    <div class="wsmenu">
+      <button class="ws" id="wsBtn" aria-haspopup="menu" aria-expanded="false" aria-controls="wsPop">
+        <span><span class="cap">워크스페이스</span><span id="wsName">불러오는 중</span></span>
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+      </button>
+      <div class="wsmenu-pop" id="wsPop" role="menu" aria-labelledby="wsBtn" hidden></div>
+    </div>
 
     <nav aria-label="주요 화면">
-      <button class="nav-item" data-view="explore" aria-current="page">
+      <button class="nav-item" data-view="dash" aria-current="page">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>
+        대시보드
+      </button>
+      <button class="nav-item" data-view="explore">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
         탐색
       </button>
       <button class="nav-item" data-view="scan">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 7h7l2 2h9v10H3z"/><path d="M12 12v4M10 14h4"/></svg>
         스캔
-      </button>
-      <button class="nav-item" data-view="dash">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>
-        대시보드
       </button>
     </nav>
 
@@ -248,23 +255,27 @@
 
         <div class="card">
           <h2 class="sec-h">워크스페이스</h2>
-          <div id="wsList"></div>
-          <div style="border-top:1px solid var(--line);margin-top:12px;padding-top:12px">
-            <div style="margin-bottom:8px">
+          <div class="wslist" id="wsList"></div>
+          <!-- 등록된 목록과 **새로 만드는 자리**는 하는 일이 다르다. 실선 한 줄로만 나누면
+               행 사이 구분선과 굵기·색이 같아 추가 폼이 다음 행처럼 읽힌다 — 바탕색을
+               달리한 상자와 제목으로 가른다. -->
+          <div class="wsadd">
+            <h3 class="sub-h">새 워크스페이스 추가</h3>
+            <div class="frow">
               <label class="f" for="newName">이름</label>
               <input class="in" id="newName" placeholder="예: 인사자료">
             </div>
-            <div style="margin-bottom:8px">
+            <div class="frow">
               <label class="f" for="newSource">스캔 대상 폴더</label>
-              <div style="display:flex;gap:8px">
-                <input class="in mono" id="newSource" placeholder="절대경로">
+              <div class="frow-in">
+                <input class="in mono" id="newSource" placeholder="폴더를 선택하세요">
                 <button class="btn" id="browseSource">찾아보기</button>
               </div>
             </div>
-            <div style="margin-bottom:10px">
+            <div class="frow">
               <label class="f" for="newOut">위키 출력 폴더</label>
-              <div style="display:flex;gap:8px">
-                <input class="in mono" id="newOut" placeholder="절대경로">
+              <div class="frow-in">
+                <input class="in mono" id="newOut" placeholder="폴더를 선택하세요">
                 <button class="btn" id="browseOut">찾아보기</button>
               </div>
             </div>

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "corpbrain"
-version = "0.9.2+polling"
+version = "0.9.3+polling"
 description = "기본 로컬 + 클라우드 옵트인 AI 지식 관리 — 로컬 스캔→요약→마크다운 위키 (v0.5: 클라우드 옵트인·PII 마스킹)"
 requires-python = ">=3.12,<3.13"
 dependencies = [
